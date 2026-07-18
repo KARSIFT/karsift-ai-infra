@@ -1,0 +1,9 @@
+# Logical role -> real model. Edit this one file to change models everywhere.
+# "codex" and "claude-verifier" must stay different model vendors - that
+# cross-model independence is a hard requirement in vocanova-platform's
+# CLAUDE.md and DOC-18 (Phase 4/7A), not a style preference.
+# Leave codex empty to use codex-action/codex CLI's own current default model -
+# check https://developers.openai.com/codex for the current default before pinning
+# a specific version here.
+codex: ""
+claude-verifier: claude-opus-4-8

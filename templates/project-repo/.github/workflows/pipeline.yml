@@ -1,0 +1,87 @@
+name: pipeline
+
+# Thin file. All real logic lives in KARSIFT/vocanova-ai-infra's reusable
+# workflows - this just wires triggers to them. Runs alongside (not instead
+# of) this repo's own governance-policy.yml / repository-governance.yml.
+#
+# There is deliberately no "plan" job here yet: turning a founder request into
+# an approved VOC-### change package is still a human+chat-session process
+# (DOC-18 Phase 3, Change Contract automation, isn't built). What's automated
+# starts one step later: an already-adopted package's task gets implemented,
+# checked, and independently verified - a human still opens the implementation
+# issue and still triggers codex-implement by hand via workflow_dispatch.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      voc_id:
+        description: 'Adopted package to implement from, e.g. "VOC-007"'
+        required: true
+        type: string
+      package_path:
+        description: 'Path under specs/changes/, e.g. "specs/changes/VOC-007-some-slug"'
+        required: true
+        type: string
+      task_id:
+        description: "Task ID from the package's tasks.md"
+        required: true
+        type: string
+      issue_number:
+        description: "GitHub issue carrying implementation authority"
+        required: true
+        type: string
+      attempt:
+        description: "1 or 2"
+        required: false
+        type: string
+        default: "1"
+
+jobs:
+  codex-implement:
+    if: github.event_name == 'workflow_dispatch'
+    uses: KARSIFT/vocanova-ai-infra/.github/workflows/codex-implement.yml@main
+    with:
+      voc_id: ${{ inputs.voc_id }}
+      package_path: ${{ inputs.package_path }}
+      task_id: ${{ inputs.task_id }}
+      issue_number: ${{ inputs.issue_number }}
+      attempt: ${{ inputs.attempt }}
+    secrets: inherit
+
+  ci:
+    if: github.event_name == 'pull_request'
+    uses: KARSIFT/vocanova-ai-infra/.github/workflows/ci.yml@main
+
+  extract-package-path:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      package_path: ${{ steps.extract.outputs.package_path }}
+    steps:
+      - name: Parse package path from PR body
+        id: extract
+        run: |
+          path=$(echo "${{ github.event.pull_request.body }}" | grep -oP '(?<=Package path: `)[^`]+')
+          if [ -z "$path" ]; then
+            echo "No 'Package path: \`...\`' line found in the PR body - claude-verify cannot run without it." >&2
+            exit 1
+          fi
+          echo "package_path=$path" >> "$GITHUB_OUTPUT"
+
+  claude-verify:
+    needs: [ci, extract-package-path]
+    if: github.event_name == 'pull_request'
+    uses: KARSIFT/vocanova-ai-infra/.github/workflows/claude-verify.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      package_path: ${{ needs.extract-package-path.outputs.package_path }}
+    secrets: inherit
+
+  merge-gate:
+    if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
+    uses: KARSIFT/vocanova-ai-infra/.github/workflows/merge-gate.yml@main
+    secrets: inherit
