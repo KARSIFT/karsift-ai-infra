@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: "1"
+      integration_branch:
+        description: 'The calling project''s integration branch to base the work off - "develop" for a develop/main split, "main" for GitHub-flow-only projects.'
+        required: false
+        type: string
+        default: "develop"
     secrets:
       OPENAI_API_KEY:
         required: true
@@ -42,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: develop
+          ref: ${{ inputs.integration_branch }}
 
       - name: Checkout karsift-ai-infra
         uses: actions/checkout@v4
@@ -156,7 +161,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh pr create \
-            --base develop \
+            --base "${{ inputs.integration_branch }}" \
             --head "${{ steps.branch.outputs.branch }}" \
             --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
             --body "$(cat <<EOF

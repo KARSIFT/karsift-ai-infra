@@ -14,6 +14,9 @@ name: pipeline
 # Copy this file into a project repo and fill in:
 #   - founder_username below (whose "approved" comment is a valid merge decision)
 #   - auto_merge_enabled, only once you have real evidence for this project's loop
+#   - integration_branch below - "develop" if this project splits develop/main,
+#     "main" if it's GitHub-flow-only (a single long-lived branch). Get this
+#     wrong and the very first checkout step fails outright.
 #   - your project's own PR-body convention for "Risk classification: R#" and
 #     "Package path: `...`" if it differs from the defaults this template assumes
 
@@ -56,6 +59,7 @@ jobs:
       task_id: ${{ inputs.task_id }}
       issue_number: ${{ inputs.issue_number }}
       attempt: ${{ inputs.attempt }}
+      integration_branch: "develop"   # "main" for a GitHub-flow-only project
     secrets: inherit
 
   ci:
@@ -85,6 +89,7 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number }}
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
+      integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
   merge-gate:

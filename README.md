@@ -43,6 +43,10 @@ fail-closed merge gate) and deliberately no opinion about *policy* (what counts 
 founder is, what a project's change-package format looks like). Each calling project supplies that
 through its own governance documents and through inputs to `merge-gate.yml`:
 
+- **Branch model**: `implement.yml` and `review.yml` both take an `integration_branch` input
+  (default `"develop"`, for projects that split `develop`/`main`). Set it to `"main"` for a
+  GitHub-flow-only project with a single long-lived branch - get this wrong and the very first
+  checkout step fails outright, with a git error that doesn't obviously say "wrong branch name."
 - **Implementation authority**: `implement.yml` refuses to run unless the calling project's own
   `change.yaml`-equivalent shows the package as adopted and authorized. A chat prompt or bare issue is
   never sufficient - only an approved package is.
