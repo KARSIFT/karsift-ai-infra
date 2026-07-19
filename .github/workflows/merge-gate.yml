@@ -1,37 +1,66 @@
 name: merge-gate (reusable)
 
-# SHADOW_MODE is the one switch that matters in this file. It is true for every
-# risk class right now because nothing in this loop has been proven yet - see
-# DOC-18 Phase 9's own rollout ("Shadow mode -> Enable R0 -> Enable R1 -> ...").
-# Flipping it to "false" is a deliberate future edit, made only after real
-# evidence the loop is reliable - not a default.
+# Risk-aware, fail-closed by design. This mirrors the real activation model
+# used across KARSIFT projects (see e.g. vocanova-platform's
+# docs/governance/amendments/A-003 and its a003-transition-state.yaml):
+# governance PERMISSION and technical ACTIVATION are separate states, R0-R3
+# can in principle earn autonomous merge once proven, and R4 always requires
+# a human decision-maker regardless of any switch. This workflow does not
+# invent a project's risk policy - it only reads a risk declaration the PR
+# already carries and enforces the gate proportionate to it.
+#
+# auto_merge_enabled defaults to "false" because that is the real, current,
+# evidenced activation state in every KARSIFT project this has been checked
+# against as of this writing - not a cautious guess. Flipping it to "true" is
+# a deliberate future edit made after real evidence the loop is reliable for
+# the risk classes it will actually cover, never a default.
 
 on:
   workflow_call:
     inputs:
-      shadow_mode:
+      auto_merge_enabled:
+        description: 'Master switch for automatic merge at R0-R3. R4 never auto-merges regardless of this value.'
         required: false
         type: string
-        default: "true"
+        default: "false"
+      founder_username:
+        description: 'GitHub login whose literal "approved" comment is a valid human merge decision.'
+        required: true
+        type: string
 
 jobs:
-  # Path 1: on every PR update, report what the gate *would* do. Never merges.
-  report-shadow-status:
+  # Path 1: on every PR update, report risk class, check status, and what the
+  # gate would do. Never merges by itself.
+  report-status:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: read
+    outputs:
+      risk: ${{ steps.status.outputs.risk }}
+      checks_ok: ${{ steps.status.outputs.checks_ok }}
+      verdict: ${{ steps.status.outputs.verdict }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Determine risk class and verification status
+      - name: Determine risk class, checks, and verification status
         id: status
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           pr_number=${{ github.event.pull_request.number }}
+
+          # Fail closed: no parseable declaration means "unknown", and unknown
+          # is never auto-mergeable, at any value of auto_merge_enabled.
+          body=$(gh pr view "$pr_number" --json body -q .body)
+          risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
+            | grep -oP 'R[0-4]' | head -1 || true)
+          if [ -z "$risk" ]; then
+            risk="unknown"
+          fi
+          echo "risk=$risk" >> "$GITHUB_OUTPUT"
 
           checks_ok=$(gh pr checks "$pr_number" --json state -q \
             '[.[].state] | all(. == "SUCCESS" or . == "SKIPPED")' || echo "false")
@@ -49,22 +78,38 @@ jobs:
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post shadow-mode status
-        if: inputs.shadow_mode == 'true'
+      - name: Post status
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           pr_number=${{ github.event.pull_request.number }}
-          if [ "${{ steps.status.outputs.checks_ok }}" = "true" ] && [ "${{ steps.status.outputs.verdict }}" != "FAIL" ] && [ "${{ steps.status.outputs.verdict }}" != "PENDING" ]; then
-            decision="WOULD AUTO-MERGE (shadow mode - not actually merging)"
-          else
-            decision="would NOT merge yet (checks_ok=${{ steps.status.outputs.checks_ok }}, verdict=${{ steps.status.outputs.verdict }})"
-          fi
-          gh pr comment "$pr_number" --body "**merge-gate (shadow mode):** $decision. Reply \`approved\` to actually merge - shadow mode does not auto-merge at any risk class yet."
+          risk="${{ steps.status.outputs.risk }}"
+          checks_ok="${{ steps.status.outputs.checks_ok }}"
+          verdict="${{ steps.status.outputs.verdict }}"
 
-  # Path 2: the founder replies "approved". Verifies CI is green and a PASS
-  # verdict exists, then merges. This is the only real merge path today,
-  # regardless of risk class or shadow_mode.
+          gates_pass=false
+          if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "PENDING" ]; then
+            gates_pass=true
+          fi
+
+          if [ "$risk" = "R4" ]; then
+            decision="requires founder approval - R4 never auto-merges, regardless of auto_merge_enabled"
+          elif [ "$risk" = "unknown" ]; then
+            decision="requires founder approval - no parseable 'Risk classification: R#' line found in the PR body, failing closed"
+          elif [ "$gates_pass" = "true" ] && [ "${{ inputs.auto_merge_enabled }}" = "true" ]; then
+            decision="WOULD AUTO-MERGE ($risk, auto_merge_enabled=true)"
+          elif [ "$gates_pass" = "true" ]; then
+            decision="gates pass for $risk but auto_merge_enabled=false - requires founder approval"
+          else
+            decision="would NOT merge yet (risk=$risk, checks_ok=$checks_ok, verdict=$verdict)"
+          fi
+
+          gh pr comment "$pr_number" --body "**merge-gate:** $decision. Reply \`approved\` (as the configured founder identity) to merge regardless of automation state - that is always a valid human decision at any risk class."
+
+  # Path 2: a human (the configured founder identity) replies "approved".
+  # Verifies CI is green and a passing verdict exists, then merges. This
+  # remains valid for every risk class, including R4 and "unknown" - a
+  # human approval is a human approval.
   approve-and-merge:
     if: github.event_name == 'issue_comment' && github.event.issue.pull_request != null
     runs-on: ubuntu-latest
@@ -79,11 +124,9 @@ jobs:
 
       - name: Check approval signal
         id: check
-        env:
-          FOUNDER_USERNAME: m-e-h-r-d-a-a-d
         run: |
           if [ "${{ github.event.comment.body }}" = "approved" ] && \
-             [ "${{ github.event.comment.user.login }}" = "$FOUNDER_USERNAME" ]; then
+             [ "${{ github.event.comment.user.login }}" = "${{ inputs.founder_username }}" ]; then
             echo "approved"
           else
             echo "not approved (author=${{ github.event.comment.user.login }}, body='${{ github.event.comment.body }}')"
@@ -117,3 +160,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr merge ${{ github.event.issue.number }} --squash
+
+  # Path 3: auto_merge_enabled=true and the report-status job already found
+  # gates_pass for a risk class below R4. This only runs anything once a
+  # project deliberately flips the switch - it is inert while the switch is
+  # false, which is the default and the current real state everywhere.
+  auto-merge:
+    needs: report-status
+    if: |
+      github.event_name == 'pull_request' &&
+      inputs.auto_merge_enabled == 'true' &&
+      needs.report-status.outputs.risk != 'R4' &&
+      needs.report-status.outputs.risk != 'unknown' &&
+      needs.report-status.outputs.checks_ok == 'true' &&
+      needs.report-status.outputs.verdict != 'FAIL' &&
+      needs.report-status.outputs.verdict != 'PENDING'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Merge automatically
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge ${{ github.event.pull_request.number }} --squash

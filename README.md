@@ -1,87 +1,99 @@
-# vocanova-ai-infra
+# karsift-ai-infra
 
-Reusable automation implementing the near-term slice of
-[vocanova-platform's autonomous-development roadmap (DOC-18)](https://github.com/KARSIFT/vocanova-platform/blob/develop/docs/planning/18-autonomous-development-implementation-roadmap.md):
-Codex implements an approved `VOC-###` task, deterministic CI checks it, Claude Code
-independently verifies it, and a human (the founder) is the only merge authority —
-for every risk class, until the loop has earned more autonomy.
+Reusable GitHub Actions automation for the loop: **implement an approved change → deterministic CI
+checks it → an independent reviewer verifies it → a human (or, once earned, a proven automated gate)
+merges it.** Formerly `vocanova-ai-infra` - renamed because the pipeline itself was never
+Vocanova-specific; only the project wiring was. Any KARSIFT project can call these workflows.
 
-This is deliberately **not** the full Control Plane DOC-18 describes (no Postgres,
-no durable work queue, no ChatGPT founder interface, no AI Budget Governor). It is
-the smallest slice DOC-18 itself recommends building first: a working, evidenced,
-human-gated loop from an approved change package to a verified PR. Everything past
-that — the queue, the budget governor, RL1/RL2 production autonomy — is real future
-work, not simulated here.
+## Roles are technology-agnostic
 
-## Why this exists as a separate repo
+Every AI step in this pipeline is a **role**, not a vendor commitment:
 
-Same reasoning as [KARSIFT/ai-infra](https://github.com/KARSIFT/ai-infra): reusable
-GitHub Actions workflows belong in one place editable independent of any project
-repo. `vocanova-platform` gets a thin `pipeline.yml` that calls into this repo -
-nothing project-specific lives outside `vocanova-platform`'s own `registry`-equivalent
-config (see `config/roles.yml` for the model mapping).
-
-## Governance is not optional here
-
-Everything in this repo exists to satisfy constraints already ratified in
-`vocanova-platform`'s own governance documents - it does not invent new rules:
-
-- **`AGENTS.md`** (vocanova-platform): meaningful implementation requires an approved
-  `VOC-###` change package with stable requirements and acceptance criteria. A chat
-  prompt or bare issue is not implementation authority. This repo's `codex-implement.yml`
-  refuses to run without a `voc_id` pointing at an adopted package.
-- **`CLAUDE.md`** (vocanova-platform): Claude Code is the independent verifier only -
-  it cannot approve its own correction, self-approve, merge, or hold repository-write,
-  deployment, secret, founder, or technical-steward authority. `claude-verify.yml`
-  runs Claude in a **read-only** tool configuration for exactly this reason - it can
-  read the diff and the package, and it can post a comment, and that is all.
-  Independent findings are Critical / High / Medium / Low; open Critical or High
-  findings block; the verdict is one of `PASS`, `PASS WITH NON-BLOCKING FINDINGS`,
-  or `FAIL`, bound to the exact reviewed commit SHA.
-- **`docs/governance/approval-matrix.md`** and **`change-risk-classification.md`**:
-  R0-R4 risk classes, and under active A-003, routine R3 doesn't get standing
-  founder/steward approval just for being R3 - but **automation permission is
-  separately gated: "only where separately implemented and proven."** Nothing here
-  has been proven yet. `merge-gate.yml` therefore never auto-merges anything, at any
-  risk class, by default - it posts what it *would* do (`WOULD AUTO-MERGE (shadow
-  mode)`) and waits for the founder's literal `approved` reply, same mechanism as
-  every other project on this account. Flipping shadow mode off - and note it's an
-  all-or-nothing switch today, not per risk class - is the `shadow_mode` input on
-  `merge-gate.yml`, changed deliberately once there's real evidence the loop is
-  reliable, not a default.
-
-## Roles, mapped to DOC-16's table
-
-| DOC-16 role | Who/what | Authority here |
+| Role | What it does | Current occupant |
 |---|---|---|
-| Codex | `openai/codex-action` (metered `OPENAI_API_KEY`) | Implements an approved task on a branch. No merge authority, no production access. |
-| Claude Code | `claude` CLI, read-only tools | Independent verification only. Posts findings; never edits, merges, or approves. |
-| GitHub Actions | This repo's workflows | Deterministic checks, gating, evidence - no product/business decisions. |
-| Founder | `@m-e-h-r-d-a-a-d` (from `vocanova-platform`'s `approval-matrix.md`) | The only merge authority, for every risk class, until shadow mode is explicitly disabled for a proven class. |
+| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | `openai/codex-action` |
+| `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. | Claude Code CLI |
+
+**The only file that names a specific model or vendor is `config/roles.yml`.** Swapping either role
+to a different model/provider means editing that one file (and, for the reviewer's execution step
+specifically, `review.yml`'s install/run step - see the note in that file about the limit of today's
+decoupling). Nothing else in this repo, and nothing in a calling project's own workflow, should need
+to change. The two roles must stay different vendors - independent review that shares a vendor with
+the implementer isn't independent.
+
+## What this is not
+
+Not a full Control Plane, not a durable work queue, not an AI Budget Governor, not a founder-facing
+chat interface. It's the smallest reusable slice that makes "implement → verify → merge" real and
+auditable: a working, evidenced loop from an approved change package to a reviewed PR. A durable
+queue, staged production rollout, and anything past PR-merge is real future work for whichever
+calling project needs it, not simulated here.
+
+## Why this is a separate repo
+
+Reusable GitHub Actions workflows belong in one place, editable independent of any project repo. A
+calling project gets a thin `pipeline.yml` (see `templates/project-repo/`) that wires its triggers
+into this repo's reusable workflows - nothing project-specific belongs here, and nothing about this
+repo's internals should require touching a calling project's copy.
+
+## Governance: this repo enforces gates, it does not set policy
+
+This repo has an opinion about *mechanism* (approved package required, independent read-only review,
+fail-closed merge gate) and deliberately no opinion about *policy* (what counts as R0 vs. R4, who the
+founder is, what a project's change-package format looks like). Each calling project supplies that
+through its own governance documents and through inputs to `merge-gate.yml`:
+
+- **Implementation authority**: `implement.yml` refuses to run unless the calling project's own
+  `change.yaml`-equivalent shows the package as adopted and authorized. A chat prompt or bare issue is
+  never sufficient - only an approved package is.
+- **Independent review**: `review.yml` runs the reviewer role with **read-only** tools only. It can
+  read the diff and the package and post one comment - nothing else. Findings are Critical / High /
+  Medium / Low; the verdict is one of `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or `FAIL`, bound to
+  the exact reviewed commit SHA.
+- **Merge authority**: `merge-gate.yml` is risk-aware and **fails closed**. It reads a
+  `Risk classification: R#` line from the PR body (any project can use a different risk scheme, but
+  this is the convention the gate parses today); a PR with no parseable risk declaration, or declared
+  `R4`, never auto-merges regardless of any switch - both require a human's literal `approved`
+  comment from the project's configured founder identity. R0-R3 can auto-merge only when
+  `auto_merge_enabled: "true"` is explicitly passed by the calling project **and** CI is green **and**
+  the reviewer's verdict passed. `auto_merge_enabled` defaults to `"false"` - this is the real,
+  current, evidenced activation state in every KARSIFT project checked against this repo as of this
+  writing, not a cautious guess. Flipping it is a deliberate future edit made after real evidence the
+  loop is reliable, never a default.
+
+This mirrors a real pattern already adopted and active in at least one calling project
+(`vocanova-platform`'s governance amendments): **governance permission and technical activation are
+separate states.** A project can formally decide that R0-R2 releases may eventually auto-merge
+without becoming true the moment that decision is written down - it becomes true only when this
+gate's `auto_merge_enabled` is actually flipped for that project, with evidence. Don't represent a
+capability as active just because policy permits it.
 
 ## What's deliberately not built yet
 
-- Automatic merge at any risk class (shadow mode only)
-- Writing verification verdicts back into a package's `change.yaml` (Claude has no
-  write authority; a human or a later deterministic step does this today)
-- The Control Plane, durable queue, AI Budget Governor, provider-health/fallback
-  logic, staging/production deploy, and everything in DOC-18 Phase 10 onward
+- A run-time-swappable reviewer *execution step* (today, swapping the model is config-driven;
+  swapping the reviewer to a non-Claude-Code CLI/action is a workflow edit, not just a config edit)
+- Per-project custom risk-classification schemes beyond the `Risk classification: R#` convention
+  `merge-gate.yml` parses
+- Writing verification verdicts back into a package's own machine-readable status (the reviewer has
+  no write authority; a human or a later deterministic step does this today)
+- A durable work queue, staged/production deployment, or anything past PR-merge into a project's
+  integration branch
 
 ## Layout
 
 ```
-vocanova-ai-infra/
+karsift-ai-infra/
   config/
-    roles.yml            # codex / claude model defaults, per DOC-18 §7 policy-baseline intent
+    roles.yml             # the only file naming a specific model/vendor
     resolve-model.sh
   prompts/
-    codex-implement.md   # builder instructions - scope discipline, no self-approval
-    claude-verify.md      # mirrors vocanova-platform's CLAUDE.md review process exactly
+    implement.md           # implementer role instructions - scope discipline, no self-approval
+    review.md              # reviewer role instructions - read-only, structured verdict
   .github/workflows/
-    ci.yml                # generic pnpm checks, once the app foundation adds them
-    codex-implement.yml
-    claude-verify.yml
-    merge-gate.yml         # shadow mode by default
+    ci.yml                 # generic pnpm checks, once a project's app foundation adds them
+    implement.yml
+    review.yml
+    merge-gate.yml          # risk-aware, fails closed, auto_merge_enabled defaults false
   templates/project-repo/
-    .github/workflows/pipeline.yml   # thin caller template
+    .github/workflows/pipeline.yml   # thin caller template - copy into a project repo
 ```

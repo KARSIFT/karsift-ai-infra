@@ -1,4 +1,15 @@
-name: claude-verify (reusable)
+name: review (reusable)
+
+# Runs the "reviewer" role: independent, read-only verification of an
+# implementation PR against its approved change package. Which model fills
+# this role is resolved from THIS repo's own config/roles.yml.
+#
+# Known limitation: the *model* is config-driven (roles.yml), but the
+# *execution step* below is still Claude Code CLI-specific (its own install
+# step, its own --allowedTools flag). Swapping the reviewer role to a
+# different vendor's CLI/action means editing the "Run independent
+# verification" step itself, not just roles.yml - full run-time provider
+# abstraction isn't built yet. Don't claim more decoupling than exists.
 
 on:
   workflow_call:
@@ -7,7 +18,7 @@ on:
         required: true
         type: string
       package_path:
-        description: 'Path to the change package under specs/changes/, e.g. "specs/changes/VOC-007-some-slug"'
+        description: 'Path to the change package directory, e.g. "specs/changes/VOC-007-some-slug"'
         required: true
         type: string
     secrets:
@@ -15,7 +26,7 @@ on:
         required: true
 
 jobs:
-  claude-verify:
+  review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,16 +36,16 @@ jobs:
         with:
           ref: develop
 
-      - name: Checkout vocanova-ai-infra
+      - name: Checkout karsift-ai-infra
         uses: actions/checkout@v4
         with:
-          repository: KARSIFT/vocanova-ai-infra
-          path: vocanova-ai-infra
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
 
-      - name: Resolve Claude verifier model
+      - name: Resolve reviewer model
         id: model
         run: |
-          MODEL=$(bash vocanova-ai-infra/config/resolve-model.sh claude-verifier vocanova-ai-infra/config/roles.yml)
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh reviewer karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Fetch PR diff, metadata, and exact SHA
@@ -49,7 +60,7 @@ jobs:
       - name: Build prompt
         run: |
           {
-            cat vocanova-ai-infra/prompts/claude-verify.md
+            cat karsift-ai-infra/prompts/review.md
             echo
             echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
             echo
@@ -72,14 +83,14 @@ jobs:
             echo
             echo "## Diff"
             cat /tmp/pr.diff
-          } > /tmp/verify-prompt.txt
+          } > /tmp/review-prompt.txt
 
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      # Read-only tools only, no --dangerously-skip-permissions: Claude Code
-      # has no repository-write authority here, by CLAUDE.md's own rule, not
-      # just as an implementation convenience.
+      # Read-only tools only, no --dangerously-skip-permissions: the reviewer
+      # role has no repository-write authority here, by design, not just as
+      # an implementation convenience.
       - name: Run independent verification
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -87,7 +98,7 @@ jobs:
           set -euo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
             --allowedTools "Read,Grep,Glob" \
-            -p "$(cat /tmp/verify-prompt.txt)" > /tmp/verdict.md
+            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict.md
           cat /tmp/verdict.md
 
       - name: Post verification comment

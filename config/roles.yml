@@ -1,9 +1,15 @@
-# Logical role -> real model. Edit this one file to change models everywhere.
-# "codex" and "claude-verifier" must stay different model vendors - that
-# cross-model independence is a hard requirement in vocanova-platform's
-# CLAUDE.md and DOC-18 (Phase 4/7A), not a style preference.
-# Leave codex empty to use codex-action/codex CLI's own current default model -
-# check https://developers.openai.com/codex for the current default before pinning
-# a specific version here.
-codex: ""
-claude-verifier: claude-opus-4-8
+# Role -> current model. This is the ONLY file that names a specific AI vendor
+# or model anywhere in this repo. Every workflow reads a *role* name
+# ("implementer", "reviewer") and resolves it here - swap who occupies a role
+# by editing this one file, not by touching workflow logic.
+#
+# "implementer" and "reviewer" must stay different model vendors/providers.
+# Cross-model independent review (one vendor can't mark its own homework) is
+# a correctness property this pipeline depends on, not a style preference -
+# keep it true across any future swap.
+#
+# Leave a value empty to use that provider's own action/CLI current default
+# model instead of pinning a version here.
+
+implementer: ""                 # currently: openai/codex-action (see prompts/implement.md)
+reviewer: claude-opus-4-8        # currently: Claude Code CLI (see prompts/review.md)

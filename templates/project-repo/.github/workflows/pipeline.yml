@@ -1,15 +1,21 @@
 name: pipeline
 
-# Thin file. All real logic lives in KARSIFT/vocanova-ai-infra's reusable
+# Thin file. All real logic lives in KARSIFT/karsift-ai-infra's reusable
 # workflows - this just wires triggers to them. Runs alongside (not instead
-# of) this repo's own governance-policy.yml / repository-governance.yml.
+# of) this repo's own governance/risk-classification workflows, if any.
 #
-# There is deliberately no "plan" job here yet: turning a founder request into
-# an approved VOC-### change package is still a human+chat-session process
-# (DOC-18 Phase 3, Change Contract automation, isn't built). What's automated
-# starts one step later: an already-adopted package's task gets implemented,
-# checked, and independently verified - a human still opens the implementation
-# issue and still triggers codex-implement by hand via workflow_dispatch.
+# There is deliberately no "plan" job here yet: turning a request into an
+# approved, implementation-ready change package is still a human+chat-session
+# process in most projects today. What's automated starts one step later: an
+# already-adopted package's task gets implemented, checked, and independently
+# reviewed - a human still opens the implementation issue and still triggers
+# `implement` by hand via workflow_dispatch.
+#
+# Copy this file into a project repo and fill in:
+#   - founder_username below (whose "approved" comment is a valid merge decision)
+#   - auto_merge_enabled, only once you have real evidence for this project's loop
+#   - your project's own PR-body convention for "Risk classification: R#" and
+#     "Package path: `...`" if it differs from the defaults this template assumes
 
 on:
   pull_request:
@@ -18,16 +24,16 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      voc_id:
+      change_id:
         description: 'Adopted package to implement from, e.g. "VOC-007"'
         required: true
         type: string
       package_path:
-        description: 'Path under specs/changes/, e.g. "specs/changes/VOC-007-some-slug"'
+        description: 'Path to the package directory, e.g. "specs/changes/VOC-007-some-slug"'
         required: true
         type: string
       task_id:
-        description: "Task ID from the package's tasks.md"
+        description: "Task ID from the package's task list"
         required: true
         type: string
       issue_number:
@@ -41,11 +47,11 @@ on:
         default: "1"
 
 jobs:
-  codex-implement:
+  implement:
     if: github.event_name == 'workflow_dispatch'
-    uses: KARSIFT/vocanova-ai-infra/.github/workflows/codex-implement.yml@main
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
     with:
-      voc_id: ${{ inputs.voc_id }}
+      change_id: ${{ inputs.change_id }}
       package_path: ${{ inputs.package_path }}
       task_id: ${{ inputs.task_id }}
       issue_number: ${{ inputs.issue_number }}
@@ -54,7 +60,7 @@ jobs:
 
   ci:
     if: github.event_name == 'pull_request'
-    uses: KARSIFT/vocanova-ai-infra/.github/workflows/ci.yml@main
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
   extract-package-path:
     if: github.event_name == 'pull_request'
@@ -67,15 +73,15 @@ jobs:
         run: |
           path=$(echo "${{ github.event.pull_request.body }}" | grep -oP '(?<=Package path: `)[^`]+')
           if [ -z "$path" ]; then
-            echo "No 'Package path: \`...\`' line found in the PR body - claude-verify cannot run without it." >&2
+            echo "No 'Package path: \`...\`' line found in the PR body - review cannot run without it." >&2
             exit 1
           fi
           echo "package_path=$path" >> "$GITHUB_OUTPUT"
 
-  claude-verify:
+  review:
     needs: [ci, extract-package-path]
     if: github.event_name == 'pull_request'
-    uses: KARSIFT/vocanova-ai-infra/.github/workflows/claude-verify.yml@main
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/review.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
@@ -83,5 +89,8 @@ jobs:
 
   merge-gate:
     if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
-    uses: KARSIFT/vocanova-ai-infra/.github/workflows/merge-gate.yml@main
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
+    with:
+      founder_username: "CHANGE-ME"   # the GitHub login whose "approved" comment is a valid merge decision
+      auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
     secrets: inherit

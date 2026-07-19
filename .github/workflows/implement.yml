@@ -1,18 +1,22 @@
-name: codex-implement (reusable)
+name: implement (reusable)
+
+# Runs the "implementer" role against one task from an approved change package.
+# Which model fills that role is resolved from THIS repo's own config/roles.yml,
+# so swapping models never touches a calling project's own workflow.
 
 on:
   workflow_call:
     inputs:
-      voc_id:
+      change_id:
         description: 'The adopted change package to implement from, e.g. "VOC-007"'
         required: true
         type: string
       package_path:
-        description: 'Path to the package under specs/changes/, e.g. "specs/changes/VOC-007-some-slug"'
+        description: 'Path to the package directory, e.g. "specs/changes/VOC-007-some-slug"'
         required: true
         type: string
       task_id:
-        description: "The specific task ID from the package's tasks.md being implemented this run"
+        description: "The specific task ID from the package's task list being implemented this run"
         required: true
         type: string
       issue_number:
@@ -29,7 +33,7 @@ on:
         required: true
 
 jobs:
-  codex-implement:
+  implement:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -40,11 +44,11 @@ jobs:
         with:
           ref: develop
 
-      - name: Checkout vocanova-ai-infra
+      - name: Checkout karsift-ai-infra
         uses: actions/checkout@v4
         with:
-          repository: KARSIFT/vocanova-ai-infra
-          path: vocanova-ai-infra
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
 
       - name: Refuse to run without an adopted, authorized package
         run: |
@@ -78,24 +82,24 @@ jobs:
         run: |
           set -euo pipefail
           slug=$(echo "${{ inputs.task_id }}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
-          voc_lower=$(echo "${{ inputs.voc_id }}" | tr '[:upper:]' '[:lower:]')
-          branch="agent/${voc_lower}-${slug}"
+          change_lower=$(echo "${{ inputs.change_id }}" | tr '[:upper:]' '[:lower:]')
+          branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
-      - name: Resolve Codex model
+      - name: Resolve implementer model
         id: model
         run: |
-          MODEL=$(bash vocanova-ai-infra/config/resolve-model.sh codex vocanova-ai-infra/config/roles.yml)
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh implementer karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
         id: prompt
         run: |
           {
-            cat vocanova-ai-infra/prompts/codex-implement.md
+            cat karsift-ai-infra/prompts/implement.md
             echo
-            echo "## Package: ${{ inputs.voc_id }}"
+            echo "## Package: ${{ inputs.change_id }}"
             echo
             echo "### specification.md"
             cat "${{ inputs.package_path }}/specification.md" 2>/dev/null || echo "(missing)"
@@ -112,33 +116,36 @@ jobs:
             echo "## Task to implement now"
             echo "Task ID: ${{ inputs.task_id }}"
             echo "This is attempt ${{ inputs.attempt }} of 2."
-          } > /tmp/codex-prompt.txt
+          } > /tmp/implement-prompt.txt
 
       # codex-action only runs `codex exec` in a sandbox - it never touches git.
       # Committing, pushing, and opening the PR are deterministic steps below.
-      - name: Implement with Codex
-        id: codex
+      # Swapping the implementer to a different provider/action means changing
+      # this one step - the rest of the job (branch, commit, PR, escalation)
+      # doesn't know or care which model produced the diff.
+      - name: Run implementer
+        id: implementer
         uses: openai/codex-action@v1
         continue-on-error: true
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: /tmp/codex-prompt.txt
+          prompt-file: /tmp/implement-prompt.txt
           permission-profile: ":workspace"
           model: ${{ steps.model.outputs.model }}
 
       - name: Commit and push
         id: commit
-        if: steps.codex.outcome == 'success'
+        if: steps.implementer.outcome == 'success'
         run: |
           set -euo pipefail
-          git config user.name "vocanova-ai-infra-bot"
+          git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Codex made no changes - nothing to commit."
+            echo "Implementer made no changes - nothing to commit."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "${{ inputs.voc_id }}: ${{ inputs.task_id }}"
+            git commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }}"
             git push -u origin "${{ steps.branch.outputs.branch }}"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
@@ -151,28 +158,29 @@ jobs:
           gh pr create \
             --base develop \
             --head "${{ steps.branch.outputs.branch }}" \
-            --title "${{ inputs.voc_id }}: ${{ inputs.task_id }}" \
+            --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
             --body "$(cat <<EOF
-          Implements task \`${{ inputs.task_id }}\` from \`${{ inputs.voc_id }}\` (\`${{ inputs.package_path }}\`).
+          Implements task \`${{ inputs.task_id }}\` from \`${{ inputs.change_id }}\` (\`${{ inputs.package_path }}\`).
 
           Closes #${{ inputs.issue_number }}.
 
-          Implemented by Codex (attempt ${{ inputs.attempt }} of 2). Independent
-          verification by Claude Code and required human approval are still pending -
-          this PR is not authorized to merge on its own.
+          Implemented by the implementer role (attempt ${{ inputs.attempt }} of 2,
+          model resolved from karsift-ai-infra/config/roles.yml). Independent review
+          and required human approval are still pending - this PR is not authorized
+          to merge on its own.
 
           Package path: \`${{ inputs.package_path }}\`
           EOF
           )"
 
       - name: Escalate on final failed attempt
-        if: (steps.codex.outcome == 'failure' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
+        if: (steps.implementer.outcome == 'failure' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue comment ${{ inputs.issue_number }} --body \
-            "Codex failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.voc_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
+            "The implementer failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
 
-      - name: Fail job if Codex step failed
-        if: steps.codex.outcome == 'failure'
+      - name: Fail job if implementer step failed
+        if: steps.implementer.outcome == 'failure'
         run: exit 1
