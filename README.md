@@ -11,15 +11,23 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does | Current occupant |
 |---|---|---|
-| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | `openai/codex-action` |
+| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | Claude Code CLI (was `openai/codex-action` - see compromise note below) |
 | `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. | Claude Code CLI |
 
 **The only file that names a specific model or vendor is `config/roles.yml`.** Swapping either role
-to a different model/provider means editing that one file (and, for the reviewer's execution step
-specifically, `review.yml`'s install/run step - see the note in that file about the limit of today's
-decoupling). Nothing else in this repo, and nothing in a calling project's own workflow, should need
-to change. The two roles must stay different vendors - independent review that shares a vendor with
-the implementer isn't independent.
+to a different model/provider means editing that one file plus the relevant workflow's execution
+step (`implement.yml`'s "Run implementer" step, or `review.yml`'s install/run step). Nothing else in
+this repo, and nothing in a calling project's own workflow, should need to change.
+
+**The two roles are supposed to stay different vendors** - independent review that shares a vendor
+with the implementer isn't independent, it's self-review. **That principle is currently violated,
+on purpose and temporarily**, not silently: `openai/codex-action` requires a metered, billed OpenAI
+API key with no subscription-auth equivalent to Claude Code's `setup-token`, and that billing isn't
+set up. Until it is, both roles run on Claude Code - different models (`claude-sonnet-5` implementing,
+`claude-opus-4-8` reviewing) as a partial mitigation, not a substitute for real cross-vendor
+independence. `implement.yml`'s header comment has the exact revert steps once Codex billing is
+available. Don't treat a `PASS` verdict from this configuration as equivalent to a genuinely
+independent review - it isn't one yet.
 
 ## What this is not
 

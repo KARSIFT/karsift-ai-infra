@@ -3,13 +3,23 @@
 # ("implementer", "reviewer") and resolves it here - swap who occupies a role
 # by editing this one file, not by touching workflow logic.
 #
-# "implementer" and "reviewer" must stay different model vendors/providers.
-# Cross-model independent review (one vendor can't mark its own homework) is
-# a correctness property this pipeline depends on, not a style preference -
-# keep it true across any future swap.
+# KNOWN COMPROMISE, not a redesign: "implementer" and "reviewer" are supposed
+# to stay different model vendors - same-vendor review isn't independent
+# review, it's self-review. That's still the correct target. Right now both
+# roles run on Claude Code because openai/codex-action requires a metered,
+# billed OpenAI API key with no subscription-auth path, and that billing
+# isn't set up. This is a deliberate, temporary, and DOCUMENTED exception,
+# not a silent drop of the cross-vendor rule - see implement.yml's header
+# comment for what it takes to swap the implementer back to Codex (or to any
+# other vendor) once that's unblocked.
+#
+# Using two different Claude models (not the same one) for the two roles is
+# a partial mitigation, not a substitute for real cross-vendor independence -
+# don't treat a PASS from this configuration as equivalent to a genuinely
+# independent review.
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
 
-implementer: ""                 # currently: openai/codex-action (see prompts/implement.md)
+implementer: claude-sonnet-5     # currently: Claude Code CLI (see prompts/implement.md) - was openai/codex-action, see note above
 reviewer: claude-opus-4-8        # currently: Claude Code CLI (see prompts/review.md)
