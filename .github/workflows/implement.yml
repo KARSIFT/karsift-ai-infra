@@ -69,13 +69,14 @@ jobs:
           path: karsift-ai-infra
 
       - name: Refuse to run without an adopted, authorized package
+        id: package
         run: |
           pip install --quiet pyyaml
-          python3 - "${{ inputs.package_path }}" "${{ inputs.issue_number }}" <<'PYEOF'
+          python3 - "${{ inputs.package_path }}" "${{ inputs.issue_number }}" "$GITHUB_OUTPUT" <<'PYEOF'
           import sys
           import yaml
 
-          package_path, expected_issue = sys.argv[1:3]
+          package_path, expected_issue, github_output = sys.argv[1:4]
           data = yaml.safe_load(open(f"{package_path}/change.yaml"))
 
           if data.get("status") not in ("implementing", "adopted", "implementation-ready"):
@@ -92,7 +93,15 @@ jobs:
                   f"the issue this run was dispatched for ({expected_issue})."
               )
 
-          print("Package is adopted and authorized - proceeding.")
+          # Surface the package's own declared risk so "Open PR" can put a
+          # real "Risk classification: R#" line in the PR body automatically -
+          # merge-gate.yml fails closed (requires founder approval) without
+          # one, so leaving this to be added by hand is a gap, not a feature.
+          risk = str(data.get("risk", "")).upper()
+          with open(github_output, "a") as f:
+              f.write(f"risk={risk}\n")
+
+          print(f"Package is adopted and authorized (declared risk: {risk or 'none declared'}) - proceeding.")
           PYEOF
 
       - name: Create implementation branch
@@ -226,6 +235,8 @@ jobs:
           model resolved from karsift-ai-infra/config/roles.yml). Independent review
           and required human approval are still pending - this PR is not authorized
           to merge on its own.
+
+          Risk classification: ${{ steps.package.outputs.risk }}
 
           Package path: \`${{ inputs.package_path }}\`
           EOF
