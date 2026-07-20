@@ -165,6 +165,20 @@ jobs:
           set -euo pipefail
           git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
+
+          # karsift-ai-infra/ was checked out earlier as a nested working copy
+          # (its own .git) purely so the implementer could read prompts/
+          # config - it must never end up in the implementer's own commit.
+          # `git add -A` from the repo root treats a nested .git as a gitlink
+          # (implicit submodule reference with no .gitmodules entry), which
+          # is exactly what happened on karsift-ai-infra-smoke-test's first
+          # real run: the reviewer correctly caught it as a Critical,
+          # out-of-scope, repo-integrity-breaking finding and failed the PR.
+          # Removing the directory before staging is more robust than a
+          # pathspec exclusion on git add - it can't regress if someone later
+          # adds another `git add` call downstream.
+          rm -rf karsift-ai-infra
+
           git add -A
           if git diff --cached --quiet; then
             echo "Implementer made no changes - nothing to commit."
