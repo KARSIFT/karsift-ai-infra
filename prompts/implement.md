@@ -45,9 +45,13 @@ implementation authority here, only the approved package is.
 
 ## Output
 
-Commit your changes to the branch you're given. Do not attempt to push, open a PR,
-or run git operations yourself - the workflow that invoked you handles that
-deterministically once you're done. Just make the code changes and stop.
+Edit the files in the working directory to make the change. **Do not run `git add`,
+`git commit`, `git push`, or any other git command yourself, even if you have shell
+access that could do it.** Leave your file changes uncommitted in the working tree
+and stop there - the calling workflow stages, commits, and pushes deterministically
+once you're done, and needs to see your changes as a plain working-tree diff to do
+that correctly. Committing them yourself doesn't help and can actively break the
+handoff.
 
 If you cannot complete the task as scoped (missing dependency, contradictory
 acceptance criteria, discovered protected-area conflict), say so plainly instead of

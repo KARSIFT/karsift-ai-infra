@@ -103,6 +103,7 @@ jobs:
           change_lower=$(echo "${{ inputs.change_id }}" | tr '[:upper:]' '[:lower:]')
           branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
       - name: Resolve implementer model
@@ -165,6 +166,24 @@ jobs:
           set -euo pipefail
           git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
+
+          # The implementer role's prompt says "commit your changes to the
+          # branch" (wording that made sense for Codex, which never touches
+          # git at all) but a Claude Code implementer has real Bash access
+          # and can - and on karsift-ai-infra-smoke-test's second run, did -
+          # take that literally and run `git commit` itself. That left
+          # nothing staged for this step to find, so "no changes" was
+          # reported and the PR silently never got opened despite the
+          # implementer succeeding. `git reset --soft` to the branch's
+          # starting commit un-does any commit(s) the model made without
+          # discarding the file changes, so the diff below is correct
+          # whether the model committed, didn't, or committed multiple
+          # times - this step remains the single source of truth for what
+          # actually gets pushed, regardless of model behavior. (The prompt
+          # itself is also being fixed to stop suggesting this - see
+          # prompts/implement.md - but relying on prompt compliance alone
+          # for something this consequential isn't good enough on its own.)
+          git reset --soft "${{ steps.branch.outputs.base_sha }}"
 
           # karsift-ai-infra/ was checked out earlier as a nested working copy
           # (its own .git) purely so the implementer could read prompts/
