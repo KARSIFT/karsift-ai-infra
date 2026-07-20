@@ -122,14 +122,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # COMMENT_BODY and COMMENT_AUTHOR go through env:, never interpolated
+      # directly into the script via ${{ }} - a comment body is arbitrary
+      # attacker-controlled text (anyone who can comment on the PR writes
+      # it), and this job has contents:write + pull-requests:write. Direct
+      # ${{ github.event.comment.body }} interpolation would splice that raw
+      # text into the bash source before bash parses it - a single comment
+      # containing a backtick or `"; <anything>; "` is a script-injection RCE
+      # in a privileged workflow, not a hypothetical. env: variable expansion
+      # does not get re-parsed for further substitution, so this is safe.
       - name: Check approval signal
         id: check
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          FOUNDER_USERNAME: ${{ inputs.founder_username }}
         run: |
-          if [ "${{ github.event.comment.body }}" = "approved" ] && \
-             [ "${{ github.event.comment.user.login }}" = "${{ inputs.founder_username }}" ]; then
+          if [ "$COMMENT_BODY" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
             echo "approved"
           else
-            echo "not approved (author=${{ github.event.comment.user.login }}, body='${{ github.event.comment.body }}')"
+            echo "not approved (author=$COMMENT_AUTHOR, body='$COMMENT_BODY')"
             exit 1
           fi
 

@@ -72,10 +72,16 @@ jobs:
     outputs:
       package_path: ${{ steps.extract.outputs.package_path }}
     steps:
+      # PR_BODY goes through env:, never ${{ }}-interpolated directly into
+      # the script - a PR body is text anyone who can open a PR controls,
+      # and splicing it raw into a bash source before bash parses it is a
+      # script-injection vector (a body containing a backtick is enough).
       - name: Parse package path from PR body
         id: extract
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          path=$(echo "${{ github.event.pull_request.body }}" | grep -oP '(?<=Package path: `)[^`]+')
+          path=$(echo "$PR_BODY" | grep -oP '(?<=Package path: `)[^`]+')
           if [ -z "$path" ]; then
             echo "No 'Package path: \`...\`' line found in the PR body - review cannot run without it." >&2
             exit 1
