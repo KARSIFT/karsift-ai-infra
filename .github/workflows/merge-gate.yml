@@ -37,6 +37,19 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # `gh pr checks` reads statusCheckRollup via GraphQL, which needs
+      # this scope. Without it the call fails outright ("GraphQL: Resource
+      # not accessible by integration"), the `|| echo "false"` fallback in
+      # the step below swallows that error silently, and checks_ok is
+      # unconditionally "false" regardless of what CI actually did - not a
+      # race, not a self-reference issue (an earlier commit on this same
+      # file guessed wrong and added an unrelated check-name filter to
+      # "fix" a race that was never the real cause; that filter is
+      # harmless and left in place, but this permission was the actual
+      # bug). Found on VOC-012's first real auto-merge attempt: report-
+      # status printed checks_ok="false" on every single evaluation, no
+      # matter how long CI/review had already been green.
+      checks: read
     outputs:
       risk: ${{ steps.status.outputs.risk }}
       checks_ok: ${{ steps.status.outputs.checks_ok }}
