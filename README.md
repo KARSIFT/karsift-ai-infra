@@ -58,6 +58,14 @@ through its own governance documents and through inputs to `merge-gate.yml`:
 - **Implementation authority**: `implement.yml` refuses to run unless the calling project's own
   `change.yaml`-equivalent shows the package as adopted and authorized. A chat prompt or bare issue is
   never sufficient - only an approved package is.
+- **PR-creation identity (optional but recommended)**: by default, `implement.yml` opens its PR using
+  the workflow's default `GITHUB_TOKEN`. GitHub requires a manual "Approve workflows to run" click on
+  every resulting PR when it detects `GITHUB_TOKEN` created or updated it - same-repo or not, this is
+  GitHub's own security behavior, not a bug here. Set `KARSIFT_BOT_APP_ID` and
+  `KARSIFT_BOT_PRIVATE_KEY` (a GitHub App installed on the calling project, `contents`/`issues`/
+  `pull-requests: read & write`) to remove that friction - `implement.yml` mints a short-lived
+  installation token and uses it instead, automatically, whenever those two secrets are present.
+  Without them, behavior is unchanged from before.
 - **Independent review**: `review.yml` runs the reviewer role with **read-only** tools only. It can
   read the diff and the package and post one comment - nothing else. Findings are Critical / High /
   Medium / Low; the verdict is one of `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or `FAIL`, bound to

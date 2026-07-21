@@ -49,6 +49,19 @@ on:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
+      KARSIFT_BOT_APP_ID:
+        description: >
+          Optional. GitHub App ID for minting the PR-creation token. Without
+          it, PR creation falls back to the default GITHUB_TOKEN, and GitHub
+          will require a manual "Approve workflows to run" click on every
+          resulting PR (a security behavior GitHub applies to any PR that
+          GITHUB_TOKEN creates or updates, same-repo or not - not a bug in
+          this workflow). Set this and KARSIFT_BOT_PRIVATE_KEY once a project
+          has a GitHub App installed for it to remove that friction.
+        required: false
+      KARSIFT_BOT_PRIVATE_KEY:
+        description: "Optional, paired with KARSIFT_BOT_APP_ID - see that input's description."
+        required: false
 
 jobs:
   implement:
@@ -217,10 +230,26 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # PRs created with the default GITHUB_TOKEN land their own resulting
+      # pull_request-triggered workflow runs in "action_required" - GitHub
+      # requires a manual "Approve workflows to run" click every time,
+      # regardless of same-repo or fork (see this file's secrets: block
+      # above for why). Minting a short-lived GitHub App installation token
+      # instead avoids that entirely. Optional and backward-compatible: a
+      # project with no App configured falls straight through to
+      # github.token, unchanged from before.
+      - name: Mint App installation token for PR creation
+        id: app-token
+        if: steps.commit.outputs.has_changes == 'true' && secrets.KARSIFT_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
       - name: Open PR
         if: steps.commit.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           gh pr create \
             --base "${{ inputs.integration_branch }}" \
