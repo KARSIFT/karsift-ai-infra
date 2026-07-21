@@ -265,6 +265,17 @@ jobs:
             # force-updating replaces the previous (reviewed, failed)
             # revision with the corrected one instead of trying to merge
             # them, which is the outcome we actually want.
+            #
+            # --force-with-lease refuses to push unless the local repo's
+            # own record of the remote branch's tip matches reality - and
+            # this checkout never fetched that branch (it started fresh
+            # from integration_branch), so on vocanova-platform-sandbox's
+            # first live remediation attempt that record didn't exist at
+            # all and the push was rejected outright as "stale info," even
+            # though the implementer itself had succeeded. Fetching the
+            # branch first (a no-op, exit-0 on attempt 1 when it doesn't
+            # exist yet) gives the lease a real baseline to compare against.
+            git fetch origin "${{ steps.branch.outputs.branch }}" 2>/dev/null || true
             git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi

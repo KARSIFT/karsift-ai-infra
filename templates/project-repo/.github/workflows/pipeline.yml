@@ -19,6 +19,17 @@ name: pipeline
 #     wrong and the very first checkout step fails outright.
 #   - your project's own PR-body convention for "Risk classification: R#" and
 #     "Package path: `...`" if it differs from the defaults this template assumes
+#
+# PRIVATE REPO + GitHub Free org plan: org-level secrets (CLAUDE_CODE_OAUTH_TOKEN
+# etc.) silently do NOT reach private repos on a Free org plan, even when the
+# secret's visibility is set to "All repositories" and the GitHub API reports it
+# as configured for this repo - jobs just see an empty value with no error at
+# workflow-definition time, only a runtime "Secret X is required, but not
+# provided" failure. Confirmed on vocanova-platform-sandbox's first real run.
+# If this repo is private and org secrets aren't reaching it, set the same
+# secret again at the repo level (`gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo
+# OWNER/REPO`) rather than assuming the org-level one will work. Public repos
+# and Team/Enterprise-plan orgs are unaffected.
 
 on:
   pull_request:
