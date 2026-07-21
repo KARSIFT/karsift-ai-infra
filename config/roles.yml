@@ -23,13 +23,3 @@
 
 implementer: claude-sonnet-5     # currently: Claude Code CLI (see prompts/implement.md) - was openai/codex-action, see note above
 reviewer: claude-opus-4-8        # currently: Claude Code CLI (see prompts/review.md)
-
-# Remediation (fixing a task after the reviewer returns FAIL) is a distinct
-# role from implementer, resolved independently here so it can be pointed
-# at a different model/vendor without touching remediate.yml or
-# implement.yml. Defaults to the stronger of the two configured models
-# rather than blindly re-running whichever model produced the failing
-# revision in the first place - a fresh perspective on a known-bad attempt
-# is a reasonable default, not just implementer-again. implement.yml falls
-# back to the `implementer` value above if `remediator` is unset here.
-remediator: claude-opus-4-8      # currently: Claude Code CLI (see prompts/implement.md, same prompt as implementer)

@@ -131,10 +131,4 @@ jobs:
       issue_number: ${{ needs.decide.outputs.issue_number }}
       attempt: ${{ needs.decide.outputs.next_attempt }}
       integration_branch: ${{ inputs.integration_branch }}
-      # Distinct, independently swappable role from the original attempt's
-      # "implementer" - see config/roles.yml. A remediation attempt is fixing
-      # a known-bad revision with the reviewer's findings in hand, which is a
-      # different job than the original blind implementation and doesn't have
-      # to run on the same model.
-      role: remediator
     secrets: inherit

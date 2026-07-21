@@ -46,16 +46,6 @@ on:
         required: false
         type: string
         default: "develop"
-      role:
-        description: >
-          Which config/roles.yml role to resolve the model from. Defaults to
-          "implementer" for a normal first attempt. remediate.yml's retry
-          passes "remediator" instead, so a reviewer-FAIL fix can run on a
-          different, independently configured model without any workflow
-          change - just a config/roles.yml edit.
-        required: false
-        type: string
-        default: "implementer"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -138,10 +128,10 @@ jobs:
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
-      - name: Resolve model for this role
+      - name: Resolve implementer model
         id: model
         run: |
-          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh "${{ inputs.role }}" karsift-ai-infra/config/roles.yml)
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh implementer karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       # On a remediation attempt (attempt > 1), the branch/PR from the
