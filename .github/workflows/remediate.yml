@@ -56,9 +56,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
+          # `gh pr view` / `gh issue comment` are porcelain commands that
+          # normally infer the target repo from a local git remote - this
+          # job never checks one out, so without GH_REPO set explicitly
+          # (env var `gh` respects for exactly this case) they fail with
+          # "not a git repository", not an auth or permissions error. Found
+          # via karsift-ai-infra-smoke-test PR #7: a genuine PASS verdict
+          # should have been a silent no-op here and instead errored the job.
           body=$(gh pr view "$PR_NUMBER" --json body -q .body)
 
           verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
