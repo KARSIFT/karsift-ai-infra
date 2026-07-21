@@ -68,11 +68,21 @@ jobs:
 
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
             --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
-          if echo "$verdict" | grep -q '^FAIL'; then
+
+          # A prior '^FAIL' anchor here missed "## Verdict: **FAIL**" - a
+          # markdown heading with the bold token on the same line, not
+          # alone at line-start (vocanova-platform-sandbox VOC-013-T00's
+          # first real FAIL run, discovered the same day remediate.yml hit
+          # the identical bug independently). prompts/review.md now
+          # requires an exact, undecorated "VERDICT: ..." anchor as the
+          # reviewer's literal last line - match that instead of guessing
+          # at markdown formatting. Order matters: FAIL is checked before
+          # either PASS form so a FAIL can never be misread as a pass.
+          if echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*FAIL[[:space:]]*$'; then
             echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -qi 'PASS WITH NON-BLOCKING FINDINGS'; then
+          elif echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS[[:space:]]*$'; then
             echo "verdict=PASS_WITH_FINDINGS" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -q 'PASS'; then
+          elif echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*PASS[[:space:]]*$'; then
             echo "verdict=PASS" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
@@ -162,7 +172,16 @@ jobs:
 
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
             --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
-          if echo "$verdict" | grep -q '^FAIL' || [ -z "$verdict" ]; then
+
+          # Previously fail-open: only refused on a literal '^FAIL' match or
+          # an empty string, so any verdict text that wasn't recognized -
+          # including a real FAIL formatted as "## Verdict: **FAIL**" -
+          # fell through and merged anyway on a human "approved" comment.
+          # That's the opposite of this file's documented fail-closed
+          # design. Require positive proof of PASS instead of absence of a
+          # recognized FAIL - same "VERDICT: ..." anchor as report-status,
+          # per prompts/review.md.
+          if ! echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*PASS([[:space:]]*|[[:space:]]+WITH NON-BLOCKING FINDINGS[[:space:]]*)$'; then
             echo "No passing independent verification found - not merging."
             exit 1
           fi

@@ -81,18 +81,22 @@ jobs:
           echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
 
-          # CLAUDE.md tells the reviewer to report one of PASS, PASS WITH
-          # NON-BLOCKING FINDINGS, or FAIL, but doesn't dictate markdown
-          # formatting - in practice the model renders the verdict as its
-          # own line, often bolded ("**FAIL**"). A bare '^FAIL' anchor found
-          # on karsift-ai-infra-smoke-test's first real FAIL run - the model
-          # wrote "**FAIL**", which never matches a line starting with the
-          # literal characters "FAIL", so should_retry stayed false and the
-          # retry silently never fired despite a real, correctly-detected
-          # FAIL verdict. Matching FAIL as a standalone line, with optional
-          # bold markers and surrounding whitespace, covers both forms without
-          # accidentally matching FAIL as a substring inside unrelated prose.
-          if ! echo "$verdict" | grep -qE '^[[:space:]]*\*{0,2}FAIL\*{0,2}[[:space:]]*$'; then
+          # Two rounds of free-form-markdown guessing already failed here:
+          # first a bare '^FAIL' anchor missed the model's bolded "**FAIL**"
+          # (karsift-ai-infra-smoke-test's first real FAIL run), then the
+          # bold-tolerant fix that replaced it missed "## Verdict: **FAIL**"
+          # - a markdown heading with the bold token on the same line, not
+          # alone on its own line (vocanova-platform-sandbox VOC-013-T00's
+          # first real remediation-path run: a genuine FAIL verdict was
+          # posted, should_retry stayed false, and the retry silently never
+          # fired - again). Rather than adding a third regex variant for a
+          # third formatting shape, prompts/review.md now requires the
+          # reviewer's literal last line to be exactly "VERDICT: FAIL" (or
+          # PASS / PASS WITH NON-BLOCKING FINDINGS), with no markdown
+          # decoration - this checks for that exact anchor instead of
+          # pattern-matching whatever prose/heading style the model chose
+          # this time.
+          if ! echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*FAIL[[:space:]]*$'; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "No FAIL verdict present - nothing to remediate."

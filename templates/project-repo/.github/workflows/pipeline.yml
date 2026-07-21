@@ -123,8 +123,27 @@ jobs:
       integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
+  # `needs: review` + the `always()` guard below fixes a real race: on a
+  # plain `pull_request` event this job used to run with no dependency on
+  # `review` at all, so it evaluated in parallel with (not after) review -
+  # and since `ci` finishes faster than a full independent-review pass,
+  # merge-gate's report-status routinely captured verdict=PENDING before
+  # review had posted anything, then never got another chance to look
+  # again (no further `pull_request` event fires unless something pushes a
+  # new commit). Auto-merge was structurally unable to fire on a normal
+  # single-commit PR - discovered on vocanova-platform-sandbox's first real
+  # attempt to exercise `auto_merge_enabled`. `always()` is required
+  # because a job depending on a *skipped* job is by default also skipped -
+  # and `review` is deliberately skipped on `issue_comment` events (the
+  # human-"approved" merge path), which must still reach merge-gate.
   merge-gate:
-    if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
+    needs: review
+    if: |
+      always() &&
+      (
+        github.event_name == 'issue_comment' ||
+        (github.event_name == 'pull_request' && needs.review.result == 'success')
+      )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
       founder_username: "CHANGE-ME"   # the GitHub login whose "approved" comment is a valid merge decision

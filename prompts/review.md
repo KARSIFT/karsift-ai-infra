@@ -45,7 +45,24 @@ Open Critical and High findings block. Report exactly one of:
 - `PASS WITH NON-BLOCKING FINDINGS`
 - `FAIL`
 
-with exact file/line evidence for each finding, which commands or evidence you
+Automation downstream of this review (remediate.yml, merge-gate.yml) parses your
+verdict out of this comment with a plain-text anchor, not an LLM - so the exact
+literal form of that line matters as much as the finding content. The **very
+last line of your entire response**, and nothing else on that line, must be
+exactly one of:
+
+```
+VERDICT: PASS
+VERDICT: PASS WITH NON-BLOCKING FINDINGS
+VERDICT: FAIL
+```
+
+No markdown heading markers, no bold markers, no surrounding prose on that line.
+Put your full narrative verdict discussion above it as normal - this final line
+is purely a machine-readable anchor, in addition to (not instead of) whatever
+prose verdict statement reads naturally in context.
+
+Report, with exact file/line evidence for each finding, which commands or evidence you
 inspected, any limitation in what you could verify, and which approvals are still
 required beyond your own (this is verification, not approval - founder or another
 required human authority is separate and you cannot substitute for it).
