@@ -45,11 +45,20 @@ jobs:
       # race, not a self-reference issue (an earlier commit on this same
       # file guessed wrong and added an unrelated check-name filter to
       # "fix" a race that was never the real cause; that filter is
-      # harmless and left in place, but this permission was the actual
-      # bug). Found on VOC-012's first real auto-merge attempt: report-
-      # status printed checks_ok="false" on every single evaluation, no
-      # matter how long CI/review had already been green.
+      # harmless and left in place, but this permission was necessary, and
+      # turned out not sufficient by itself). Found on VOC-012's first real
+      # auto-merge attempt: report-status printed checks_ok="false" on
+      # every single evaluation, no matter how long CI/review had already
+      # been green.
       checks: read
+      # `checks: read` alone still wasn't enough: `gh pr checks`'s GraphQL
+      # query also resolves each check's `checkSuite.workflowRun`, which is
+      # a separate resource needing `actions: read` - without it the same
+      # "Resource not accessible by integration" error recurs, just on a
+      # narrower field path. Confirmed by re-running VOC-012's PR after
+      # adding `checks: read` alone and seeing the identical checks_ok=false
+      # outcome with a fully green PR, one permission short.
+      actions: read
     outputs:
       risk: ${{ steps.status.outputs.risk }}
       checks_ok: ${{ steps.status.outputs.checks_ok }}
