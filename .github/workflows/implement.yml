@@ -230,6 +230,16 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # `secrets` isn't a recognized context inside a step-level `if:` here
+      # (GitHub Actions rejects it outright: "Unrecognized named-value:
+      # 'secrets'") - route the presence check through a plain env var and
+      # a shell step's output instead, which is the reliable pattern.
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
       # PRs created with the default GITHUB_TOKEN land their own resulting
       # pull_request-triggered workflow runs in "action_required" - GitHub
       # requires a manual "Approve workflows to run" click every time,
@@ -240,7 +250,7 @@ jobs:
       # github.token, unchanged from before.
       - name: Mint App installation token for PR creation
         id: app-token
-        if: steps.commit.outputs.has_changes == 'true' && secrets.KARSIFT_BOT_APP_ID != ''
+        if: steps.commit.outputs.has_changes == 'true' && steps.has-app.outputs.configured == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
