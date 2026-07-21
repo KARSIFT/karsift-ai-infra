@@ -88,6 +88,19 @@ without becoming true the moment that decision is written down - it becomes true
 gate's `auto_merge_enabled` is actually flipped for that project, with evidence. Don't represent a
 capability as active just because policy permits it.
 
+## Automated remediation
+
+When the reviewer returns `FAIL`, `remediate.yml` (wired into the caller template right after
+`review`) automatically re-dispatches the implementer once, with the reviewer's exact findings
+included in the prompt as required reading - not a blind second guess. It force-updates the same
+PR rather than opening a new one. If that retry also fails review, it stops and escalates to the
+authority issue instead of trying a third time - the same two-attempt cap `implement.yml` already
+enforced for its own internal failures, now closing the gap where an implementer *success* followed
+by a reviewer *FAIL* previously went nowhere until a human happened to notice.
+
+A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet are all no-ops - this only ever acts
+on an explicit `FAIL`.
+
 ## What's deliberately not built yet
 
 - A run-time-swappable reviewer *execution step* (today, swapping the model is config-driven;
@@ -113,6 +126,7 @@ karsift-ai-infra/
     ci.yml                 # generic pnpm checks, once a project's app foundation adds them
     implement.yml
     review.yml
+    remediate.yml           # re-dispatches implement.yml once on a FAIL verdict, then escalates
     merge-gate.yml          # risk-aware, fails closed, auto_merge_enabled defaults false
   templates/project-repo/
     .github/workflows/pipeline.yml   # thin caller template - copy into a project repo

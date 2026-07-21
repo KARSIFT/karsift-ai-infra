@@ -134,6 +134,26 @@ jobs:
           MODEL=$(bash karsift-ai-infra/config/resolve-model.sh implementer karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
+      # On a remediation attempt (attempt > 1), the branch/PR from the
+      # previous attempt already exists - fetch its most recent review
+      # verdict and hand it to the implementer as required reading. Without
+      # this, "attempt 2" would just be a second blind guess instead of an
+      # actual fix for what the reviewer flagged.
+      - name: Fetch prior review findings, if this is a retry
+        id: prior-review
+        if: inputs.attempt != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
+            gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
+              --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""' \
+              > /tmp/prior-review.txt 2>/dev/null || true
+          fi
+          touch /tmp/prior-review.txt
+
       - name: Build prompt
         id: prompt
         run: |
@@ -157,6 +177,17 @@ jobs:
             echo "## Task to implement now"
             echo "Task ID: ${{ inputs.task_id }}"
             echo "This is attempt ${{ inputs.attempt }} of 2."
+            if [ "${{ inputs.attempt }}" != "1" ] && [ -s /tmp/prior-review.txt ]; then
+              echo
+              echo "## The previous attempt was reviewed and did not pass"
+              echo
+              echo "This is a remediation attempt. The independent reviewer found the"
+              echo "problems below in the previous revision on this same branch. Fix"
+              echo "every blocking (Critical/High) finding. Do not just acknowledge them -"
+              echo "make the actual code/content change each one requires."
+              echo
+              cat /tmp/prior-review.txt
+            fi
           } > /tmp/implement-prompt.txt
 
       - name: Install Claude Code
@@ -225,8 +256,16 @@ jobs:
             echo "Implementer made no changes - nothing to commit."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            git commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }}"
-            git push -u origin "${{ steps.branch.outputs.branch }}"
+            git commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} (attempt ${{ inputs.attempt }})"
+            # --force-with-lease: on attempt 1 the remote branch doesn't
+            # exist yet, so this behaves like a normal push. On a
+            # remediation attempt (attempt > 1), the branch already exists
+            # from the previous try and this run started from a fresh
+            # checkout of integration_branch rather than that old branch -
+            # force-updating replaces the previous (reviewed, failed)
+            # revision with the corrected one instead of trying to merge
+            # them, which is the outcome we actually want.
+            git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -256,11 +295,23 @@ jobs:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
 
-      - name: Open PR
+      # On a remediation attempt, the force-push above already updated the
+      # existing PR (pushing new commits to a PR's head branch updates it
+      # automatically - GitHub doesn't need a second `gh pr create` call,
+      # and that call would just fail with "already exists"). Check first
+      # and only create when there's genuinely no PR yet.
+      - name: Open or update PR
         if: steps.commit.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
+          set -euo pipefail
+          existing=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for what changed in response to the previous review."
+            exit 0
+          fi
+
           gh pr create \
             --base "${{ inputs.integration_branch }}" \
             --head "${{ steps.branch.outputs.branch }}" \

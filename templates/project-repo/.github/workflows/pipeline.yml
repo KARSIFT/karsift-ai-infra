@@ -98,6 +98,20 @@ jobs:
       integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
+  # Runs after every review. A no-op unless the verdict is FAIL - then it
+  # either re-dispatches the implementer once (with the findings attached)
+  # or, if that retry already happened, escalates to the authority issue
+  # instead of trying a third time. See remediate.yml for the exact rule.
+  remediate:
+    needs: [review, extract-package-path]
+    if: github.event_name == 'pull_request'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/remediate.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      package_path: ${{ needs.extract-package-path.outputs.package_path }}
+      integration_branch: "develop"   # match the value used for implement, above
+    secrets: inherit
+
   merge-gate:
     if: github.event_name == 'issue_comment' || github.event_name == 'pull_request'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main

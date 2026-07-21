@@ -1,0 +1,115 @@
+name: remediate (reusable)
+
+# Closes the loop that used to require a human to notice: when the reviewer
+# returns FAIL, this automatically re-dispatches the implementer once, with
+# the reviewer's findings included as required reading, then - if that
+# retry also fails review - stops and escalates to the authority issue
+# instead of trying a third time. Two attempts total, same cap implement.yml
+# already enforced for its own internal failures; this just closes the gap
+# where an implementer *success* followed by a reviewer *FAIL* previously
+# went nowhere until a human happened to check.
+#
+# A PASS, PASS WITH NON-BLOCKING FINDINGS, or no verdict yet (review hasn't
+# posted) are all no-ops here - this only ever acts on an explicit FAIL.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      package_path:
+        description: 'Path to the change package directory, e.g. "specs/changes/VOC-007-some-slug"'
+        required: true
+        type: string
+      integration_branch:
+        required: false
+        type: string
+        default: "develop"
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      KARSIFT_BOT_APP_ID:
+        required: false
+      KARSIFT_BOT_PRIVATE_KEY:
+        required: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: write
+    outputs:
+      should_retry: ${{ steps.parse.outputs.should_retry }}
+      change_id: ${{ steps.parse.outputs.change_id }}
+      task_id: ${{ steps.parse.outputs.task_id }}
+      issue_number: ${{ steps.parse.outputs.issue_number }}
+      next_attempt: ${{ steps.parse.outputs.next_attempt }}
+    steps:
+      # The PR body's exact wording is implement.yml's own template (see
+      # "Open PR" there) - this parses it back out. Both files must stay in
+      # sync; this is the one place outside implement.yml that depends on
+      # that exact format.
+      - name: Parse verdict, attempt, and package identity from the PR
+        id: parse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          body=$(gh pr view "$PR_NUMBER" --json body -q .body)
+
+          verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+
+          task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
+          change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
+          issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || echo "")
+          attempt=$(echo "$body" | grep -oP '(?<=attempt )[0-9]+(?= of 2)' | head -1 || echo "1")
+
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+
+          if ! echo "$verdict" | grep -q '^FAIL'; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "No FAIL verdict present - nothing to remediate."
+            exit 0
+          fi
+
+          if [ -z "$task_id" ] || [ -z "$change_id" ] || [ -z "$issue_number" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "FAIL verdict present but could not parse task_id/change_id/issue_number from the PR body - refusing to guess, leaving this for a human." >&2
+            exit 0
+          fi
+
+          next_attempt=$((attempt + 1))
+
+          if [ "$next_attempt" -gt 2 ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            gh issue comment "$issue_number" --body \
+              "Attempt $attempt of 2 was reviewed and failed. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
+            exit 0
+          fi
+
+          echo "should_retry=true" >> "$GITHUB_OUTPUT"
+          echo "next_attempt=$next_attempt" >> "$GITHUB_OUTPUT"
+          echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
+
+  retry:
+    needs: decide
+    if: needs.decide.outputs.should_retry == 'true'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
+    with:
+      change_id: ${{ needs.decide.outputs.change_id }}
+      package_path: ${{ inputs.package_path }}
+      task_id: ${{ needs.decide.outputs.task_id }}
+      issue_number: ${{ needs.decide.outputs.issue_number }}
+      attempt: ${{ needs.decide.outputs.next_attempt }}
+      integration_branch: ${{ inputs.integration_branch }}
+    secrets: inherit
