@@ -62,8 +62,25 @@ jobs:
           fi
           echo "risk=$risk" >> "$GITHUB_OUTPUT"
 
-          checks_ok=$(gh pr checks "$pr_number" --json state -q \
-            '[.[].state] | all(. == "SUCCESS" or . == "SKIPPED")' || echo "false")
+          # Excludes this pipeline's own governance checks ("merge-gate / *",
+          # "remediate / *") from the checks_ok computation - not just the
+          # code checks (ci, review, etc.). This job's own check-run (and,
+          # on the auto-merge path, its still-queued downstream siblings
+          # merge-gate/auto-merge and remediate/decide+retry, which wait on
+          # this job via `needs`) are necessarily non-terminal while this
+          # step is running, so including them made checks_ok evaluate to
+          # false almost every time on a PR with multiple concurrent
+          # merge-gate/remediate jobs in flight - discovered on
+          # vocanova-platform-sandbox's first real VOC-012 auto-merge
+          # attempt: ci and review had both genuinely passed, but checks_ok
+          # was false anyway because this job's own in-progress check (and
+          # its queued dependents) were included in the "all checks green"
+          # count. The single-job "approved"-comment path mostly avoided
+          # this by luck (fewer concurrent jobs, less chance of catching one
+          # mid-flight), not by design - it has the identical bug below.
+          checks_ok=$(gh pr checks "$pr_number" --json name,state -q \
+            '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
+            || echo "false")
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
@@ -163,8 +180,12 @@ jobs:
           set -euo pipefail
           pr_number=${{ github.event.issue.number }}
 
-          checks_ok=$(gh pr checks "$pr_number" --json state -q \
-            '[.[].state] | all(. == "SUCCESS" or . == "SKIPPED")' || echo "false")
+          # Same self-reference fix as report-status above: exclude this
+          # pipeline's own governance checks so this job's own in-progress
+          # check-run doesn't count against itself.
+          checks_ok=$(gh pr checks "$pr_number" --json name,state -q \
+            '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
+            || echo "false")
           if [ "$checks_ok" != "true" ]; then
             echo "CI is not green yet - not merging."
             exit 1
