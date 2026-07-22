@@ -184,7 +184,22 @@ jobs:
       # alone, even though the prompt tells it not to touch them - same
       # "deterministic step is the real enforcement, the prompt is not
       # enough on its own" pattern implement.yml already uses for git safety.
-      - name: Force draft/unauthorized fields in change.yaml
+      #
+      # Forces exactly the two fields implement.yml's own "Refuse to run
+      # without an adopted, authorized package" check actually reads (see
+      # that file): top-level `status` (must not be in
+      # implementing/adopted/implementation-ready) and the *nested*
+      # `implementation.authorized` boolean - not a flat
+      # `implementation_authorized`/`approval_status`/`automatic_merge_allowed`
+      # top-level field, which specs/templates/change-package/change.yaml's
+      # own placeholder uses but real adopted packages (and implement.yml's
+      # actual check) do not. Confirmed against a real adopted package
+      # (vocanova-platform's VOC-006 change.yaml) and this smoke-test repo's
+      # own TEST-003 change.yaml - both use the nested form; the flat-field
+      # template is not what's actually enforced. Only touches these two
+      # keys, leaving whatever other schema a project's own template defines
+      # untouched.
+      - name: Force draft status and unauthorized implementation in change.yaml
         if: steps.planner.outcome == 'success'
         run: |
           set -euo pipefail
@@ -201,9 +216,9 @@ jobs:
               sys.exit(f"Planner did not create {path} - refusing to proceed.")
 
           data["status"] = "draft"
-          data["approval_status"] = "not-approved"
-          data["implementation_authorized"] = False
-          data["automatic_merge_allowed"] = False
+          implementation = data.get("implementation") or {}
+          implementation["authorized"] = False
+          data["implementation"] = implementation
 
           with open(path, "w") as f:
               yaml.safe_dump(data, f, sort_keys=False)
