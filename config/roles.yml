@@ -23,3 +23,10 @@
 
 implementer: claude-sonnet-5     # currently: Claude Code CLI (see prompts/implement.md) - was openai/codex-action, see note above
 reviewer: claude-opus-4-8        # currently: Claude Code CLI (see prompts/review.md)
+
+# planner has no cross-vendor independence requirement the way implementer/reviewer
+# do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
+# never something an independent AI verifier checks the way review.yml checks
+# implementer output. Picked opus over sonnet here because this runs once per change
+# package (not once per task), so drafting quality matters more than per-run cost.
+planner: claude-opus-4-8         # currently: Claude Code CLI (see prompts/plan.md)

@@ -4,12 +4,10 @@ name: pipeline
 # workflows - this just wires triggers to them. Runs alongside (not instead
 # of) this repo's own governance/risk-classification workflows, if any.
 #
-# There is deliberately no "plan" job here yet: turning a request into an
-# approved, implementation-ready change package is still a human+chat-session
-# process in most projects today. What's automated starts one step later: an
-# already-adopted package's task gets implemented, checked, and independently
-# reviewed - a human still opens the implementation issue and still triggers
-# `implement` by hand via workflow_dispatch.
+# `plan` turns a free-text request into a DRAFT change package (planner role,
+# see plan.yml) - it never adopts, authorizes, or implements anything, a human
+# still does that by hand. Once a package is adopted, `implement` (dispatched
+# per task, same as before) carries on from there.
 #
 # Copy this file into a project repo and fill in:
 #   - founder_username below (whose "approved" comment is a valid merge decision)
@@ -17,6 +15,7 @@ name: pipeline
 #   - integration_branch below - "develop" if this project splits develop/main,
 #     "main" if it's GitHub-flow-only (a single long-lived branch). Get this
 #     wrong and the very first checkout step fails outright.
+#   - id_prefix below (the planner's package-ID prefix, e.g. "VOC")
 #   - your project's own PR-body convention for "Risk classification: R#" and
 #     "Package path: `...`" if it differs from the defaults this template assumes
 #
@@ -38,31 +37,46 @@ on:
     types: [created]
   workflow_dispatch:
     inputs:
-      change_id:
-        description: 'Adopted package to implement from, e.g. "VOC-007"'
+      action:
+        description: "Which reusable workflow to run"
         required: true
+        type: choice
+        options: [implement, plan]
+        default: implement
+      change_id:
+        description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
+        required: false
         type: string
       package_path:
-        description: 'Path to the package directory, e.g. "specs/changes/VOC-007-some-slug"'
-        required: true
+        description: 'implement only: path to the package directory, e.g. "specs/changes/VOC-007-some-slug"'
+        required: false
         type: string
       task_id:
-        description: "Task ID from the package's task list"
-        required: true
+        description: "implement only: task ID from the package's task list"
+        required: false
         type: string
       issue_number:
-        description: "GitHub issue carrying implementation authority"
-        required: true
+        description: "implement only: GitHub issue carrying implementation authority"
+        required: false
         type: string
       attempt:
-        description: "1 or 2"
+        description: "implement only: 1 or 2"
         required: false
         type: string
         default: "1"
+      request:
+        description: "plan only: free-text description of the change package to draft"
+        required: false
+        type: string
+      id_prefix:
+        description: 'plan only: package ID prefix, e.g. "VOC"'
+        required: false
+        type: string
+        default: "VOC"
 
 jobs:
   implement:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'implement'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
     with:
       change_id: ${{ inputs.change_id }}
@@ -73,12 +87,30 @@ jobs:
       integration_branch: "develop"   # "main" for a GitHub-flow-only project
     secrets: inherit
 
+  plan:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'plan'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/plan.yml@main
+    with:
+      request: ${{ inputs.request }}
+      id_prefix: ${{ inputs.id_prefix }}
+      integration_branch: "develop"   # match the value used for implement, above
+    secrets: inherit
+
   ci:
     if: github.event_name == 'pull_request'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
+  # Planning PRs (head branch prefixed "plan/" by plan.yml) create a package
+  # rather than implementing one, so they never carry the "Package path:"
+  # line this job requires - the startsWith guard below skips this (and
+  # review/remediate, which depend on it) for those PRs instead of failing a
+  # check that would otherwise block even the human "approved"-comment merge
+  # path in merge-gate.yml. merge-gate.yml itself needs no such guard: a
+  # planning PR never declares a "Risk classification: R#" either, so it
+  # already falls into the existing fail-closed "requires founder approval"
+  # path on its own.
   extract-package-path:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
     runs-on: ubuntu-latest
     outputs:
       package_path: ${{ steps.extract.outputs.package_path }}
@@ -101,7 +133,7 @@ jobs:
 
   review:
     needs: [ci, extract-package-path]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/review.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -115,7 +147,7 @@ jobs:
   # instead of trying a third time. See remediate.yml for the exact rule.
   remediate:
     needs: [review, extract-package-path]
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/remediate.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}

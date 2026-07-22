@@ -11,6 +11,7 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does | Current occupant |
 |---|---|---|
+| `planner` | Turns a free-text request into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | Claude Code CLI |
 | `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | Claude Code CLI (was `openai/codex-action` - see compromise note below) |
 | `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. | Claude Code CLI |
 
@@ -81,6 +82,19 @@ through its own governance documents and through inputs to `merge-gate.yml`:
   writing, not a cautious guess. Flipping it is a deliberate future edit made after real evidence the
   loop is reliable, never a default.
 
+**Planner output is a draft, never an authoritative risk signal.** `plan.yml` lets
+the planner role propose a `risk:` value in the change package it drafts, but that
+proposal is exactly as authoritative as a human's first guess would be - nothing
+more. The actual gate is unchanged: a human reviews and adopts (or rejects) the
+draft, and once any task from it is implemented, this repo's own `merge-gate.yml`
+still fails closed on any unparseable or under-declared risk, and the calling
+project's own deterministic path-based classifier (if it has one, e.g.
+vocanova-platform's `scripts/governance/classify-change-risk.sh`) still runs against
+the real diff, same as for a human-drafted package. A planner-drafted `risk:` value
+must never be treated as the ground truth on its own - that's the entire point of
+keeping a path-based floor independent of anything an LLM declares about its own
+proposal.
+
 This mirrors a real pattern already adopted and active in at least one calling project
 (`vocanova-platform`'s governance amendments): **governance permission and technical activation are
 separate states.** A project can formally decide that R0-R2 releases may eventually auto-merge
@@ -111,6 +125,11 @@ on an explicit `FAIL`.
   no write authority; a human or a later deterministic step does this today)
 - A durable work queue, staged/production deployment, or anything past PR-merge into a project's
   integration branch
+- Any chat/webhook front-end in front of `plan.yml` - a human (or a future thin layer) still
+  triggers it by hand via `workflow_dispatch`, same as `implement.yml`
+- A release gate above the per-task loop (e.g. one human approval per completed change package,
+  gating an integration branch's promotion to a production branch) - each task from an adopted
+  package still merges independently today
 
 ## Layout
 
@@ -120,10 +139,12 @@ karsift-ai-infra/
     roles.yml             # the only file naming a specific model/vendor
     resolve-model.sh
   prompts/
+    plan.md                # planner role instructions - draft only, never adopts/authorizes
     implement.md           # implementer role instructions - scope discipline, no self-approval
     review.md              # reviewer role instructions - read-only, structured verdict
   .github/workflows/
     ci.yml                 # generic pnpm checks, once a project's app foundation adds them
+    plan.yml                # drafts a change package from a free-text request, opens one issue per task
     implement.yml
     review.yml
     remediate.yml           # re-dispatches implement.yml once on a FAIL verdict, then escalates

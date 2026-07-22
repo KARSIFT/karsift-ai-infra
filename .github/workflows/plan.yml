@@ -1,0 +1,334 @@
+name: plan (reusable)
+
+# Runs the "planner" role: turns a free-text request into a full DRAFT change
+# package in the calling project's own package format (read from
+# package_template_path), then deterministically opens one GitHub issue per
+# parsed task. Never adopts, authorizes, implements, or merges anything - a
+# human still has to flip the resulting change.yaml to adopted, exactly as
+# with a human-drafted package today. Which model fills the "planner" role is
+# resolved from THIS repo's own config/roles.yml, same convention as
+# implement.yml/review.yml.
+#
+# Opens branches under a "plan/" prefix (not implement.yml's "agent/" prefix)
+# on purpose - the calling project's pipeline.yml uses that prefix to skip
+# extract-package-path/review/remediate for planning PRs. Those jobs assume a
+# PR that IMPLEMENTS an existing package (with a "Package path:" line in its
+# body); a planning PR CREATES a package instead and has no such line. Left
+# unguarded, extract-package-path's unconditional `exit 1` on a missing
+# "Package path:" line would fail a check on the PR and - because
+# merge-gate.yml's approve-and-merge path requires all checks green - would
+# block even the human "approved"-comment merge path. merge-gate.yml itself
+# needs no changes: a planning PR never carries a "Risk classification: R#"
+# line, so it already falls into the existing fail-closed "requires founder
+# approval" path without any special-casing.
+
+on:
+  workflow_call:
+    inputs:
+      request:
+        description: "Free-text description of what this change package should cover."
+        required: true
+        type: string
+      id_prefix:
+        description: 'Project-specific package ID prefix, e.g. "VOC". Stays an input because package ID format is project policy, not something this repo opines on.'
+        required: true
+        type: string
+      package_template_path:
+        description: "Path to the calling project's own unapproved change-package template."
+        required: false
+        type: string
+        default: "specs/templates/change-package"
+      integration_branch:
+        description: 'The calling project''s integration branch to base the draft off - "develop" for a develop/main split, "main" for GitHub-flow-only projects.'
+        required: false
+        type: string
+        default: "develop"
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      KARSIFT_BOT_APP_ID:
+        description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
+        required: false
+      KARSIFT_BOT_PRIVATE_KEY:
+        description: "Optional, paired with KARSIFT_BOT_APP_ID."
+        required: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.integration_branch }}
+
+      - name: Checkout karsift-ai-infra
+        uses: actions/checkout@v4
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
+
+      # Deterministic, not model-chosen: scan existing package directories for
+      # the highest numeric suffix after id_prefix and increment. Mirrors
+      # implement.yml's philosophy that anything mechanical (branch names,
+      # commits, IDs) stays out of the model's hands.
+      - name: Allocate next package ID
+        id: id
+        run: |
+          set -euo pipefail
+          prefix="${{ inputs.id_prefix }}"
+          highest=0
+          if [ -d "specs/changes" ]; then
+            while IFS= read -r dir; do
+              n=$(echo "$dir" | grep -oP "(?<=^${prefix}-)[0-9]+" || echo "")
+              if [ -n "$n" ] && [ "$((10#$n))" -gt "$highest" ]; then
+                highest=$((10#$n))
+              fi
+            done < <(find specs/changes -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null || true)
+          fi
+          next=$((highest + 1))
+          padded=$(printf "%03d" "$next")
+          echo "id=${prefix}-${padded}" >> "$GITHUB_OUTPUT"
+
+      # Deterministic slug from the request text, not model output - same
+      # rationale as above. Lowercase, non-alphanumeric runs collapsed to a
+      # single hyphen, trimmed, capped so branch names stay sane.
+      - name: Derive slug and branch name
+        id: branch
+        run: |
+          set -euo pipefail
+          slug=$(echo "${{ inputs.request }}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-50)
+          branch="plan/$(echo "${{ steps.id.outputs.id }}" | tr '[:upper:]' '[:lower:]')-${slug}"
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "package_path=specs/changes/${{ steps.id.outputs.id }}-${slug}" >> "$GITHUB_OUTPUT"
+          git checkout -b "$branch"
+
+      - name: Resolve planner model
+        id: model
+        run: |
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh planner karsift-ai-infra/config/roles.yml)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt
+        run: |
+          {
+            cat karsift-ai-infra/prompts/plan.md
+            echo
+            echo "## Request"
+            echo "${{ inputs.request }}"
+            echo
+            echo "## New package identity"
+            echo "Package ID: ${{ steps.id.outputs.id }}"
+            echo "Package path: ${{ steps.branch.outputs.package_path }}"
+            echo "(Create this directory. Do not write anywhere else.)"
+            echo
+            echo "## Package template to mirror (${{ inputs.package_template_path }})"
+            for f in "${{ inputs.package_template_path }}"/*; do
+              echo
+              echo "### $(basename "$f")"
+              cat "$f" 2>/dev/null || echo "(unreadable)"
+            done
+            echo
+            echo "## Recent packages, for house style"
+            ls -1dt specs/changes/*/ 2>/dev/null | head -3 | while read -r d; do
+              echo
+              echo "### $d"
+              ls "$d"
+            done
+            echo
+            echo "## Governance documents, if present"
+            for f in AGENTS.md CLAUDE.md; do
+              if [ -f "$f" ]; then
+                echo
+                echo "### $f"
+                cat "$f"
+              fi
+            done
+          } > /tmp/plan-prompt.txt
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run planner
+        id: planner
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          claude --model "${{ steps.model.outputs.model }}" \
+            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
+            -p "$(cat /tmp/plan-prompt.txt)"
+
+      # Fail loud, not silent: a planner that wrote outside its own package
+      # directory is a scope violation, not a judgment call worth a warning.
+      - name: Verify scope discipline
+        if: steps.planner.outcome == 'success'
+        run: |
+          set -euo pipefail
+          package_path="${{ steps.branch.outputs.package_path }}"
+          changed=$(git status --porcelain | awk '{print $2}')
+          bad=$(echo "$changed" | grep -v "^karsift-ai-infra/" | grep -v "^${package_path}/" || true)
+          if [ -n "$bad" ]; then
+            echo "Planner wrote outside its own package directory ($package_path):" >&2
+            echo "$bad" >&2
+            exit 1
+          fi
+
+      # Don't trust the model to have left change.yaml's adoption fields
+      # alone, even though the prompt tells it not to touch them - same
+      # "deterministic step is the real enforcement, the prompt is not
+      # enough on its own" pattern implement.yml already uses for git safety.
+      - name: Force draft/unauthorized fields in change.yaml
+        if: steps.planner.outcome == 'success'
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml
+          python3 - "${{ steps.branch.outputs.package_path }}/change.yaml" <<'PYEOF'
+          import sys
+          import yaml
+
+          path = sys.argv[1]
+          try:
+              with open(path) as f:
+                  data = yaml.safe_load(f) or {}
+          except FileNotFoundError:
+              sys.exit(f"Planner did not create {path} - refusing to proceed.")
+
+          data["status"] = "draft"
+          data["approval_status"] = "not-approved"
+          data["implementation_authorized"] = False
+          data["automatic_merge_allowed"] = False
+
+          with open(path, "w") as f:
+              yaml.safe_dump(data, f, sort_keys=False)
+          PYEOF
+
+      - name: Commit and push
+        id: commit
+        if: steps.planner.outcome == 'success'
+        run: |
+          set -euo pipefail
+          git config user.name "karsift-ai-infra-bot"
+          git config user.email "actions@users.noreply.github.com"
+
+          # Same rationale as implement.yml: undo any commit(s) the model may
+          # have made itself without discarding the file changes, so this
+          # step is the single source of truth for what gets pushed.
+          git reset --soft "${{ steps.branch.outputs.base_sha }}"
+
+          # karsift-ai-infra/ was checked out only so the planner could read
+          # prompts/config - must never end up in its own commit (nested .git
+          # would be staged as a gitlink otherwise). See implement.yml for
+          # the exact incident this guards against.
+          rm -rf karsift-ai-infra
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Planner made no changes - nothing to commit."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Plan: ${{ steps.id.outputs.id }} - ${{ steps.branch.outputs.slug }}"
+            git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App installation token
+        id: app-token
+        if: steps.commit.outputs.has_changes == 'true' && steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      # Deliberately no "Risk classification: R#" or "Package path: `...`"
+      # line in this PR body - see this file's header comment for why that
+      # absence is what keeps extract-package-path/review/remediate/
+      # merge-gate behaving correctly for a planning PR without any
+      # special-casing in merge-gate.yml itself.
+      - name: Open PR
+        id: pr
+        if: steps.commit.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          url=$(gh pr create \
+            --base "${{ inputs.integration_branch }}" \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "Plan: ${{ steps.id.outputs.id }} - ${{ steps.branch.outputs.slug }}" \
+            --body "$(cat <<EOF
+          Draft change package proposed by the planner role (model resolved from
+          karsift-ai-infra/config/roles.yml) in response to a request:
+
+          > ${{ inputs.request }}
+
+          **This is a draft, not an approved or authorized package.** Nothing in
+          this PR grants implementation authority - a human reviews it and, if
+          adopted, flips \`change.yaml\`'s status/authorization fields by hand.
+          Once that happens, dispatch \`implement.yml\` per task as usual.
+
+          Package path: \`${{ steps.branch.outputs.package_path }}\`
+          EOF
+          )")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      # Deterministic, not model-driven: parse the task headings the planner
+      # just wrote and open one issue per task. Fails loud if none parse -
+      # a package with zero recognizable tasks is a format mismatch to fix,
+      # not something to silently swallow into "0 issues opened."
+      - name: Open one issue per task
+        if: steps.commit.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          tasks_file="${{ steps.branch.outputs.package_path }}/tasks.md"
+          if [ ! -f "$tasks_file" ]; then
+            echo "No tasks.md found at $tasks_file - cannot open task issues." >&2
+            exit 1
+          fi
+
+          count=0
+          while IFS= read -r line; do
+            task_id=$(echo "$line" | grep -oP '(?<=^## )\S+' || true)
+            title=$(echo "$line" | sed -E 's/^## \S+ *—? *//; s/^## \S+ *-? *//')
+            if [ -z "$task_id" ]; then
+              continue
+            fi
+            count=$((count + 1))
+            gh issue create \
+              --title "${{ steps.id.outputs.id }}: $task_id - $title" \
+              --body "$(cat <<EOF
+          Task \`$task_id\` from draft package \`${{ steps.id.outputs.id }}\` (\`${{ steps.branch.outputs.package_path }}\`), proposed in ${{ steps.pr.outputs.url }}.
+
+          **Not implementation-ready yet.** \`implement.yml\` will refuse to run until a human adopts and authorizes this package. Once adopted, dispatch \`implement.yml\` with:
+
+          - change_id: \`${{ steps.id.outputs.id }}\`
+          - package_path: \`${{ steps.branch.outputs.package_path }}\`
+          - task_id: \`$task_id\`
+          - issue_number: this issue's number
+          EOF
+          )"
+          done < <(grep -E '^## ' "$tasks_file")
+
+          if [ "$count" -eq 0 ]; then
+            echo "Parsed zero tasks from $tasks_file - refusing to silently open nothing. Check the planner's task-heading format against this step's parser (expects '## <TASK-ID> ...')." >&2
+            exit 1
+          fi
+          echo "Opened $count task issue(s)."
+
+      - name: Fail job if planner step failed
+        if: steps.planner.outcome == 'failure'
+        run: exit 1
