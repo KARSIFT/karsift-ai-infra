@@ -318,16 +318,8 @@ jobs:
         run: |
           set -euo pipefail
           existing=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
-          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for what changed in response to the previous review."
-            exit 0
-          fi
 
-          gh pr create \
-            --base "${{ inputs.integration_branch }}" \
-            --head "${{ steps.branch.outputs.branch }}" \
-            --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
-            --body "$(cat <<EOF
+          body="$(cat <<EOF
           Implements task \`${{ inputs.task_id }}\` from \`${{ inputs.change_id }}\` (\`${{ inputs.package_path }}\`).
 
           Closes #${{ inputs.issue_number }}.
@@ -342,6 +334,31 @@ jobs:
           Package path: \`${{ inputs.package_path }}\`
           EOF
           )"
+
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            # The body's "attempt N of 2" text is remediate.yml's only
+            # source for the current attempt number - a comment-only update
+            # left it permanently reading "attempt 1 of 2" from PR
+            # creation, forever. remediate.yml then always recomputed
+            # next_attempt as 1+1=2, no matter how many retries had
+            # actually happened: the two-attempt cap was never real, and a
+            # PR whose review kept failing for reasons unrelated to content
+            # (e.g. a scope mismatch between the PR's stated task and what
+            # attempt 2 actually delivered) could retry indefinitely.
+            # Discovered on VOC-013-T00's real remediation run: a second
+            # retry fired after the cap should have been hit. Editing the
+            # body on every update, not just commenting, keeps this the
+            # single source of truth remediate.yml already trusts it to be.
+            gh pr edit "$existing" --body "$body"
+            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for what changed in response to the previous review."
+            exit 0
+          fi
+
+          gh pr create \
+            --base "${{ inputs.integration_branch }}" \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
+            --body "$body"
 
       - name: Escalate on final failed attempt
         if: (steps.implementer.outcome == 'failure' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
