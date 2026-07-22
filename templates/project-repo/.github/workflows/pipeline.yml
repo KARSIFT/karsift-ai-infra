@@ -166,15 +166,19 @@ jobs:
   # single-commit PR - discovered on vocanova-platform-sandbox's first real
   # attempt to exercise `auto_merge_enabled`. `always()` is required
   # because a job depending on a *skipped* job is by default also skipped -
-  # and `review` is deliberately skipped on `issue_comment` events (the
-  # human-"approved" merge path), which must still reach merge-gate.
+  # and `review` is deliberately skipped both on `issue_comment` events (the
+  # human-"approved" merge path) and on planning PRs (`plan/`-prefixed head
+  # branch, no package for the reviewer to check yet) - both cases must
+  # still reach merge-gate so its status comment actually posts, rather than
+  # requiring review's specific 'success' result which a planning PR's
+  # deliberately-skipped review can never produce.
   merge-gate:
     needs: review
     if: |
       always() &&
       (
         github.event_name == 'issue_comment' ||
-        (github.event_name == 'pull_request' && needs.review.result == 'success')
+        (github.event_name == 'pull_request' && (needs.review.result == 'success' || needs.review.result == 'skipped'))
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
