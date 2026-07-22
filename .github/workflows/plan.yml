@@ -1,13 +1,41 @@
 name: plan (reusable)
 
-# Runs the "planner" role: turns a free-text request into a full DRAFT change
-# package in the calling project's own package format (read from
-# package_template_path), then deterministically opens one GitHub issue per
-# parsed task. Never adopts, authorizes, implements, or merges anything - a
-# human still has to flip the resulting change.yaml to adopted, exactly as
-# with a human-drafted package today. Which model fills the "planner" role is
+# Runs the "planner" role: turns a request into a full DRAFT change package in
+# the calling project's own package format (read from package_template_path).
+# Never adopts, authorizes, implements, or merges anything - a human still has
+# to review and adopt the resulting change.yaml, exactly as with a
+# human-drafted package today. Which model fills the "planner" role is
 # resolved from THIS repo's own config/roles.yml, same convention as
 # implement.yml/review.yml.
+#
+# The request can come from three places, mutually exclusive per run:
+#   - `request`: free text, written directly for this dispatch.
+#   - `source_document_path`: an existing document already in the repo.
+#   - `source_issue_number`: a GitHub issue - its full thread (body + every
+#     comment so far) is fetched and given to the planner as the request,
+#     whoever or whatever opened it. This is what makes "anyone (or any other
+#     agent) opens an issue" a valid way into the system without also making
+#     a bare issue implementation authority - see below.
+#
+# Deliberately does NOT open the per-task tracking issues that used to live
+# here - that now happens in adopt.yml, triggered only once a human has
+# actually adopted the draft (merged the PR with change.yaml's status flipped
+# out of "draft"). Opening real, numbered issues at DRAFT time meant issues
+# existed for proposals nobody had agreed to yet; moving issue-creation to
+# adoption time means the only issues that ever carry implementation
+# authority are ones a human has already signed off on the package behind.
+#
+# If the planner doesn't have enough to draft confidently - most likely for a
+# source_issue_number run, where "anyone can open an issue" also means "the
+# issue might just say 'this is broken' with no repro" - it writes a
+# clarifying question instead of a package (see prompts/plan.md). This job
+# posts that question as a comment on the originating issue and stops, no PR
+# opened. A reply to that comment (from a human OR another agent - the
+# calling project's pipeline.yml routes it back here the same way) re-runs
+# this workflow with the updated thread. The one thing that must never
+# happen: a bare issue directly becoming implementation authority without a
+# human adopting a real package first - this workflow only ever produces a
+# DRAFT, however it was triggered.
 #
 # Opens branches under a "plan/" prefix (not implement.yml's "agent/" prefix)
 # on purpose - the calling project's pipeline.yml uses that prefix to skip
@@ -26,9 +54,20 @@ on:
   workflow_call:
     inputs:
       request:
-        description: "Free-text description of what this change package should cover."
-        required: true
+        description: "Free-text description of what this change package should cover. Optional if source_document_path or source_issue_number is given."
+        required: false
         type: string
+        default: ""
+      source_document_path:
+        description: "Path to an existing document in the repo to draft the package from, instead of/alongside free text."
+        required: false
+        type: string
+        default: ""
+      source_issue_number:
+        description: "GitHub issue number whose full thread (body + comments) is the request. When set, a needs-info outcome comments back on this issue instead of failing."
+        required: false
+        type: string
+        default: ""
       id_prefix:
         description: 'Project-specific package ID prefix, e.g. "VOC". Stays an input because package ID format is project policy, not something this repo opines on.'
         required: true
@@ -71,6 +110,57 @@ jobs:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
 
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Mint App installation token
+        id: app-token
+        if: steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      # Fetches the whole thread, not just the issue body - a follow-up
+      # comment (from a human answering the planner's own clarifying
+      # question, or from another agent adding a log excerpt after its
+      # original terse issue) is often where the actually-useful content
+      # lives. Also captures the issue title, used below for the slug/branch
+      # name when no free-text request was given to derive one from.
+      - name: Fetch source issue thread
+        id: issue
+        if: inputs.source_issue_number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          n="${{ inputs.source_issue_number }}"
+          title=$(gh issue view "$n" --json title -q .title)
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          {
+            echo "Issue #$n: $title"
+            echo
+            gh issue view "$n" --json body -q .body
+            echo
+            gh api "repos/${{ github.repository }}/issues/$n/comments" \
+              --jq '.[] | "--- comment by \(.user.login) at \(.created_at) ---\n\(.body)\n"'
+          } > /tmp/issue-thread.txt
+
+      - name: Ensure karsift labels exist
+        if: inputs.source_issue_number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          gh label create "karsift:needs-info" --color "B60205" \
+            --description "Planner needs more information before it can draft a package - reply on this issue to continue" \
+            --force
+          gh label create "karsift:planned" --color "0E8A16" \
+            --description "A draft change package has been proposed from this issue" \
+            --force
+
       # Deterministic, not model-chosen: scan existing package directories for
       # the highest numeric suffix after id_prefix and increment. Mirrors
       # implement.yml's philosophy that anything mechanical (branch names,
@@ -93,14 +183,23 @@ jobs:
           padded=$(printf "%03d" "$next")
           echo "id=${prefix}-${padded}" >> "$GITHUB_OUTPUT"
 
-      # Deterministic slug from the request text, not model output - same
-      # rationale as above. Lowercase, non-alphanumeric runs collapsed to a
-      # single hyphen, trimmed, capped so branch names stay sane.
+      # Deterministic slug, not model output - same rationale as above. The
+      # title source is whichever of these is present, in order: free-text
+      # request, source document's basename, source issue's title. Lowercase,
+      # non-alphanumeric runs collapsed to a single hyphen, trimmed, capped so
+      # branch names stay sane.
       - name: Derive slug and branch name
         id: branch
         run: |
           set -euo pipefail
-          slug=$(echo "${{ inputs.request }}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-50)
+          title_source="${{ inputs.request }}"
+          if [ -z "$title_source" ] && [ -n "${{ inputs.source_document_path }}" ]; then
+            title_source=$(basename "${{ inputs.source_document_path }}")
+          fi
+          if [ -z "$title_source" ] && [ -n "${{ steps.issue.outputs.title }}" ]; then
+            title_source="${{ steps.issue.outputs.title }}"
+          fi
+          slug=$(echo "$title_source" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-50)
           branch="plan/$(echo "${{ steps.id.outputs.id }}" | tr '[:upper:]' '[:lower:]')-${slug}"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
@@ -118,14 +217,28 @@ jobs:
         run: |
           {
             cat karsift-ai-infra/prompts/plan.md
-            echo
-            echo "## Request"
-            echo "${{ inputs.request }}"
+            if [ -n "${{ inputs.request }}" ]; then
+              echo
+              echo "## Request (free text)"
+              echo "${{ inputs.request }}"
+            fi
+            if [ -n "${{ inputs.source_document_path }}" ]; then
+              echo
+              echo "## Request (source document: ${{ inputs.source_document_path }})"
+              cat "${{ inputs.source_document_path }}" 2>/dev/null || echo "(unreadable)"
+            fi
+            if [ -n "${{ inputs.source_issue_number }}" ]; then
+              echo
+              echo "## Request (source issue thread)"
+              cat /tmp/issue-thread.txt
+            fi
             echo
             echo "## New package identity"
             echo "Package ID: ${{ steps.id.outputs.id }}"
             echo "Package path: ${{ steps.branch.outputs.package_path }}"
-            echo "(Create this directory. Do not write anywhere else.)"
+            echo "(Create this directory. Do not write anywhere else, except"
+            echo " .karsift-plan-needs-info.md at the repo root if you need to ask a"
+            echo " clarifying question instead - see this prompt's instructions above.)"
             echo
             echo "## Package template to mirror (${{ inputs.package_template_path }})"
             for f in "${{ inputs.package_template_path }}"/*; do
@@ -165,10 +278,56 @@ jobs:
             --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
             -p "$(cat /tmp/plan-prompt.txt)"
 
+      # Branches the whole rest of the job. If the planner asked a question
+      # instead of drafting, every downstream package-handling step below is
+      # skipped via this output - there is no partial/half-drafted state.
+      - name: Check for a needs-info outcome
+        id: needs-info
+        if: steps.planner.outcome == 'success'
+        run: |
+          set -euo pipefail
+          if [ -f ".karsift-plan-needs-info.md" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Only reachable with source_issue_number set (see prompts/plan.md: the
+      # needs-info escape hatch exists specifically for issue-triggered runs,
+      # where "anyone can open an issue" means the initial content may
+      # genuinely be too thin to draft from). No PR is opened this run - the
+      # branch is discarded unpushed. Labeling `karsift:needs-info` (and the
+      # calling project's pipeline.yml routing further comments on a
+      # so-labeled issue back into this same workflow) is what lets the reply
+      # - from a human OR another agent - resume planning without a human
+      # having to manually re-dispatch anything.
+      - name: Post clarifying question and stop
+        if: steps.needs-info.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.source_issue_number }}" ]; then
+            echo "Planner needs more information but no source_issue_number was given to reply on:" >&2
+            cat ".karsift-plan-needs-info.md" >&2
+            exit 1
+          fi
+          n="${{ inputs.source_issue_number }}"
+          gh issue comment "$n" --body "$(cat <<EOF
+          **Planner needs more information before it can draft a package for this issue.**
+
+          $(cat .karsift-plan-needs-info.md)
+
+          Reply on this issue with the missing information to continue - no need to re-dispatch anything by hand.
+          EOF
+          )"
+          gh issue edit "$n" --add-label "karsift:needs-info" --remove-label "karsift:planned" 2>/dev/null || \
+            gh issue edit "$n" --add-label "karsift:needs-info"
+
       # Fail loud, not silent: a planner that wrote outside its own package
       # directory is a scope violation, not a judgment call worth a warning.
       - name: Verify scope discipline
-        if: steps.planner.outcome == 'success'
+        if: steps.planner.outcome == 'success' && steps.needs-info.outputs.needed != 'true'
         run: |
           set -euo pipefail
           package_path="${{ steps.branch.outputs.package_path }}"
@@ -200,7 +359,7 @@ jobs:
       # keys, leaving whatever other schema a project's own template defines
       # untouched.
       - name: Force draft status and unauthorized implementation in change.yaml
-        if: steps.planner.outcome == 'success'
+        if: steps.planner.outcome == 'success' && steps.needs-info.outputs.needed != 'true'
         run: |
           set -euo pipefail
           pip install --quiet pyyaml
@@ -226,7 +385,7 @@ jobs:
 
       - name: Commit and push
         id: commit
-        if: steps.planner.outcome == 'success'
+        if: steps.planner.outcome == 'success' && steps.needs-info.outputs.needed != 'true'
         run: |
           set -euo pipefail
           git config user.name "karsift-ai-infra-bot"
@@ -253,20 +412,6 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check for GitHub App credentials
-        id: has-app
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
-      - name: Mint App installation token
-        id: app-token
-        if: steps.commit.outputs.has_changes == 'true' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-
       # Deliberately no "Risk classification: R#" or "Package path: `...`"
       # line (that literal wording) in this PR body - see this file's header
       # comment for why that absence is what keeps extract-package-path/
@@ -281,119 +426,46 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
+          {
+            echo "Draft change package proposed by the planner role (model resolved from"
+            echo "karsift-ai-infra/config/roles.yml)."
+            echo
+            if [ -n "${{ inputs.source_issue_number }}" ]; then
+              echo "In response to issue #${{ inputs.source_issue_number }}."
+            fi
+            if [ -n "${{ inputs.source_document_path }}" ]; then
+              echo "Drafted from \`${{ inputs.source_document_path }}\`."
+            fi
+            if [ -n "${{ inputs.request }}" ]; then
+              echo
+              echo "> ${{ inputs.request }}"
+            fi
+            echo
+            echo "**This is a draft, not an approved or authorized package.** Nothing in"
+            echo "this PR grants implementation authority - a human reviews it and, if"
+            echo "adopted, flips \`change.yaml\`'s status/authorization fields by hand."
+            echo "Per-task tracking issues are opened automatically on adoption (once this"
+            echo "PR merges with an adopted change.yaml), not before."
+            echo
+            echo "New package directory: \`${{ steps.branch.outputs.package_path }}\`"
+          } > /tmp/pr-body.txt
           url=$(gh pr create \
             --base "${{ inputs.integration_branch }}" \
             --head "${{ steps.branch.outputs.branch }}" \
             --title "Plan: ${{ steps.id.outputs.id }} - ${{ steps.branch.outputs.slug }}" \
-            --body "$(cat <<EOF
-          Draft change package proposed by the planner role (model resolved from
-          karsift-ai-infra/config/roles.yml) in response to a request:
-
-          > ${{ inputs.request }}
-
-          **This is a draft, not an approved or authorized package.** Nothing in
-          this PR grants implementation authority - a human reviews it and, if
-          adopted, flips \`change.yaml\`'s status/authorization fields by hand.
-          Once that happens, dispatch \`implement.yml\` per task as usual.
-
-          New package directory: \`${{ steps.branch.outputs.package_path }}\`
-          EOF
-          )")
+            --body-file /tmp/pr-body.txt)
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      # Deterministic, not model-driven: parse task IDs out of tasks.md and
-      # open one issue per task. Fails loud if none parse - a package with
-      # zero recognizable tasks is a format mismatch to fix, not something
-      # to silently swallow into "0 issues opened."
-      #
-      # Matches the task-ID token itself (e.g. "TEST-004-T01",
-      # "VOC-006-T01") wherever it appears on its own line, rather than
-      # assuming any particular heading/list markup around it - confirmed
-      # against two real, different house styles that both use this same ID
-      # shape: vocanova-platform's "## <ID> — <title>" one-heading-per-task
-      # convention, and karsift-ai-infra-smoke-test's single "## Tasks"
-      # heading followed by a "- [ ] <ID> <description>" checkbox list. A
-      # single hardcoded heading-level regex (an earlier version of this
-      # step) matched the first but silently mis-parsed the second - package
-      # format is project policy this repo has no opinion on, so the parser
-      # has to tolerate more than one house style, not assume vocanova's.
-      - name: Open one issue per task
-        if: steps.commit.outputs.has_changes == 'true'
+      - name: Link source issue to the draft PR
+        if: steps.commit.outputs.has_changes == 'true' && inputs.source_issue_number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          tasks_file="${{ steps.branch.outputs.package_path }}/tasks.md"
-          if [ ! -f "$tasks_file" ]; then
-            echo "No tasks.md found at $tasks_file - cannot open task issues." >&2
-            exit 1
-          fi
-
-          python3 - "$tasks_file" "${{ inputs.id_prefix }}" <<'PYEOF' > /tmp/tasks.tsv
-          import re
-          import sys
-
-          tasks_file, id_prefix = sys.argv[1:3]
-          pattern = re.compile(rf'{re.escape(id_prefix)}-\d+-T\d+')
-          seen = set()
-          with open(tasks_file) as f:
-              for line in f:
-                  m = pattern.search(line)
-                  if not m or m.group(0) in seen:
-                      continue
-                  seen.add(m.group(0))
-                  title = line[m.end():].strip()
-                  title = re.sub(r'^[\s\-–—:.]+', '', title) or m.group(0)
-                  print(f"{m.group(0)}\t{title[:100]}")
-          PYEOF
-
-          count=0
-          echo "[" > /tmp/roster.json
-          while IFS=$'\t' read -r task_id title; do
-            [ -z "$task_id" ] && continue
-            count=$((count + 1))
-            issue_url=$(gh issue create \
-              --title "${{ steps.id.outputs.id }}: $task_id - $title" \
-              --body "$(cat <<EOF
-          Task \`$task_id\` from draft package \`${{ steps.id.outputs.id }}\` (\`${{ steps.branch.outputs.package_path }}\`), proposed in ${{ steps.pr.outputs.url }}.
-
-          **Not implementation-ready yet.** \`implement.yml\` will refuse to run until a human adopts and authorizes this package. Once adopted, dispatch \`implement.yml\` with:
-
-          - change_id: \`${{ steps.id.outputs.id }}\`
-          - package_path: \`${{ steps.branch.outputs.package_path }}\`
-          - task_id: \`$task_id\`
-          - issue_number: this issue's number
-          EOF
-          )")
-            issue_number=$(basename "$issue_url")
-            [ "$count" -gt 1 ] && echo "," >> /tmp/roster.json
-            printf '{"task_id": %s, "issue": %s}' "$(jq -Rn --arg v "$task_id" '$v')" "$issue_number" >> /tmp/roster.json
-          done < /tmp/tasks.tsv
-          echo "]" >> /tmp/roster.json
-
-          if [ "$count" -eq 0 ]; then
-            echo "Parsed zero tasks from $tasks_file - refusing to silently open nothing. Check the planner's task-ID format ('${{ inputs.id_prefix }}-<n>-T<n>') against this step's parser." >&2
-            exit 1
-          fi
-          echo "Opened $count task issue(s)."
-          jq . /tmp/roster.json
-
-      # release.yml's fixed roster of record: exactly which issue tracks which
-      # task, so release-gate completion checks never have to re-parse a
-      # project's own tasks.md prose (see this file's earlier task-parser
-      # fix for why that's fragile - two different real house styles already
-      # broke a single hardcoded regex once this session). Written only after
-      # issue numbers exist, so it needs its own commit/push on top of the
-      # one that opened the PR.
-      - name: Commit task roster
-        if: steps.commit.outputs.has_changes == 'true'
-        run: |
-          set -euo pipefail
-          mkdir -p "${{ steps.branch.outputs.package_path }}/.karsift"
-          cp /tmp/roster.json "${{ steps.branch.outputs.package_path }}/.karsift/tasks.json"
-          git add "${{ steps.branch.outputs.package_path }}/.karsift/tasks.json"
-          git commit -m "${{ steps.id.outputs.id }}: record task-issue roster"
-          git push origin "${{ steps.branch.outputs.branch }}"
+          n="${{ inputs.source_issue_number }}"
+          gh issue comment "$n" --body "Draft change package proposed: ${{ steps.pr.outputs.url }}"
+          gh issue edit "$n" --add-label "karsift:planned" --remove-label "karsift:needs-info" 2>/dev/null || \
+            gh issue edit "$n" --add-label "karsift:planned"
 
       - name: Fail job if planner step failed
         if: steps.planner.outcome == 'failure'

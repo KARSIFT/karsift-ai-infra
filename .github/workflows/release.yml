@@ -120,8 +120,18 @@ jobs:
 
           roster_summary=$(jq -r '.[] | "- `\(.task_id)` (issue #\(.issue))"' "$package_path/.karsift/tasks.json")
 
+          # Labeled at creation so plan.yml's issue-triggered planning never
+          # mistakes this system-generated approval gate for a genuine new
+          # request to plan - see templates/project-repo/.github/workflows/
+          # pipeline.yml's plan-from-issue job, which only fires for issues
+          # with no karsift:* label at all.
+          gh label create "karsift:release" --color "5319E7" \
+            --description "System-generated release-approval gate - not a planning request" \
+            --force
+
           gh issue create \
             --title "$title" \
+            --label "karsift:release" \
             --body "$(cat <<EOF
           Every task in \`$change_id\`'s roster is now closed:
 

@@ -11,7 +11,7 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does | Current occupant |
 |---|---|---|
-| `planner` | Turns a free-text request into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | Claude Code CLI |
+| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | Claude Code CLI |
 | `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | Claude Code CLI (was `openai/codex-action` - see compromise note below) |
 | `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. | Claude Code CLI |
 
@@ -115,6 +115,27 @@ by a reviewer *FAIL* previously went nowhere until a human happened to notice.
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet are all no-ops - this only ever acts
 on an explicit `FAIL`.
 
+## Drafting and issue-creation are two separate steps
+
+`plan.yml` only ever drafts a package and opens a PR for it - it does not open any tracking issues.
+Those come from `adopt.yml`, which fires only once a `plan/`-branch PR actually merges with
+`change.yaml` no longer showing `draft` status. This means a proposal nobody has agreed to yet never
+has a real, numbered issue attached to it - issues only ever exist for packages a human has already
+adopted. In between drafting and adoption, the draft PR's own review comments are the communication
+channel - a human (or the planner, re-run with updated context) revises the draft there, same as any
+other PR review, before anyone decides whether to merge it.
+
+**Anyone - a human, or another agent - can start this by opening an issue,** not just by dispatching
+`plan.yml` by hand. The calling project's `pipeline.yml` routes any newly-opened issue with no
+`karsift:*` label into `plan.yml` with that issue's number; the planner drafts from the issue's full
+thread (body plus every comment so far). If that's not enough to draft from - a bare "this is broken"
+with no repro, say, whether from a human or from an automated log-reading agent that noticed
+something wrong - the planner posts a clarifying question back on the issue instead of guessing, and
+labels it `karsift:needs-info`. A reply (from whoever or whatever opened the issue) re-triggers
+planning with the updated thread - no manual re-dispatch needed either way. The one thing this never
+does is skip adoption: however planning started, the resulting package is still only ever a draft
+until a human reviews and merges it.
+
 ## Release gate: one human approval per completed change package
 
 `merge-gate.yml` gates each *task*; `release.yml` gates the layer above it - promoting a project's
@@ -122,11 +143,12 @@ integration branch (e.g. `develop`) to its production branch (e.g. `main`) once 
 is done. Exactly one human approval per completed package, never per task and never an arbitrary
 batch count.
 
-A package's task roster is fixed once, at planning time: `plan.yml` writes
-`<package_path>/.karsift/tasks.json` (`[{"task_id": ..., "issue": <number>}, ...]`) alongside the
-package it drafts. `release.yml` never re-parses a project's own `tasks.md` prose to determine
+A package's task roster is fixed once, at adoption time: `adopt.yml` writes
+`<package_path>/.karsift/tasks.json` (`[{"task_id": ..., "issue": <number>}, ...]`) once it opens the
+per-task issues. `release.yml` never re-parses a project's own `tasks.md` prose to determine
 completion - that was tried for issue-opening itself and broke against a real house-style mismatch
-(see `plan.yml`'s task-parser comments); the roster file is the sole source of truth instead. Each
+(see `adopt.yml`'s task-parser comments, carried over from where this logic used to live in
+`plan.yml`); the roster file is the sole source of truth instead. Each
 task's tracking issue is explicitly closed by `merge-gate.yml` when that task's PR merges (not left
 to GitHub's native "Closes #N" auto-close, which has been observed live not to fire reliably on a
 squash merge). The moment every issue in a package's roster is closed, `release.yml` opens a
@@ -151,8 +173,9 @@ planner-authored) aren't covered - the release gate only applies going forward.
   no write authority; a human or a later deterministic step does this today)
 - A durable work queue, staged/production deployment, or anything past PR-merge into a project's
   integration branch
-- Any chat/webhook front-end in front of `plan.yml` - a human (or a future thin layer) still
-  triggers it by hand via `workflow_dispatch`, same as `implement.yml`
+- A real-time/synchronous chat interface - "anyone can open an issue and reply to the planner's
+  questions" (see above) covers the same ground asynchronously, through GitHub's own issue/comment
+  events, but there is no live conversational session
 - Any deploy trigger after a `release.yml` promotion merges - `main` gets updated, nothing hosted
   does
 
@@ -169,7 +192,8 @@ karsift-ai-infra/
     review.md              # reviewer role instructions - read-only, structured verdict
   .github/workflows/
     ci.yml                 # generic pnpm checks, once a project's app foundation adds them
-    plan.yml                # drafts a change package from a free-text request, opens one issue per task
+    plan.yml                # drafts a DRAFT package from free text, a document, or an issue thread
+    adopt.yml                # opens per-task issues only once a plan/ PR is actually adopted+merged
     implement.yml
     review.yml
     remediate.yml           # re-dispatches implement.yml once on a FAIL verdict, then escalates

@@ -4,10 +4,19 @@ name: pipeline
 # workflows - this just wires triggers to them. Runs alongside (not instead
 # of) this repo's own governance/risk-classification workflows, if any.
 #
-# `plan` turns a free-text request into a DRAFT change package (planner role,
-# see plan.yml) - it never adopts, authorizes, or implements anything, a human
-# still does that by hand. Once a package is adopted, `implement` (dispatched
-# per task, same as before) carries on from there.
+# `plan` turns a request (free text, an existing document, or a GitHub issue's
+# whole thread) into a DRAFT change package (planner role, see plan.yml) - it
+# never adopts, authorizes, or implements anything, a human still does that by
+# hand, by reviewing and merging the draft PR. `adopt` then opens the real
+# per-task tracking issues, but only once that merge has happened - not at
+# draft time. `plan-from-issue` is what makes "anyone (a human, or another
+# agent - e.g. one that reads application logs and notices a bug) just opens
+# an issue" a valid way in: it auto-drafts a package from that issue, asking a
+# clarifying question back on the issue itself if there isn't enough to go on
+# yet, but a bare issue never becomes implementation authority on its own -
+# adoption is still the one required human decision point. Once a package is
+# adopted, `implement` (dispatched per task, same as before) carries on from
+# there.
 #
 # Copy this file into a project repo and fill in:
 #   - founder_username below (whose "approved" comment is a valid merge decision)
@@ -15,7 +24,8 @@ name: pipeline
 #   - integration_branch below - "develop" if this project splits develop/main,
 #     "main" if it's GitHub-flow-only (a single long-lived branch). Get this
 #     wrong and the very first checkout step fails outright.
-#   - id_prefix below (the planner's package-ID prefix, e.g. "VOC")
+#   - id_prefix - appears TWICE (the workflow_dispatch default, and
+#     plan-from-issue's hardcoded value) - keep both in sync, e.g. "VOC"
 #   - your project's own PR-body convention for "Risk classification: R#" and
 #     "Package path: `...`" if it differs from the defaults this template assumes
 #
@@ -32,11 +42,11 @@ name: pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, closed]
   issue_comment:
     types: [created]
   issues:
-    types: [closed]
+    types: [opened, closed]
   workflow_dispatch:
     inputs:
       action:
@@ -70,6 +80,10 @@ on:
         description: "plan only: free-text description of the change package to draft"
         required: false
         type: string
+      source_document_path:
+        description: "plan only: path to an existing document in the repo to draft from, instead of/alongside request"
+        required: false
+        type: string
       id_prefix:
         description: 'plan only: package ID prefix, e.g. "VOC"'
         required: false
@@ -94,12 +108,53 @@ jobs:
     uses: KARSIFT/karsift-ai-infra/.github/workflows/plan.yml@main
     with:
       request: ${{ inputs.request }}
+      source_document_path: ${{ inputs.source_document_path }}
       id_prefix: ${{ inputs.id_prefix }}
       integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
+  # Lets ANYONE (or any other agent, authenticated however it authenticates)
+  # kick off planning just by opening an issue - no manual workflow_dispatch
+  # needed. Gated on the issue carrying NO karsift:* label at open time,
+  # since this system's own issue-creation (adopt.yml's task issues,
+  # release.yml's release-approval issues) always labels what it opens - see
+  # those files' own comments. An unlabeled issue is, by construction,
+  # something this system didn't create itself.
+  #
+  # Also fires on a later comment, but only if the issue is currently labeled
+  # `karsift:needs-info` (the planner asked a clarifying question and is
+  # waiting - see plan.yml) AND the comment isn't from a bot account, so the
+  # planner's own posted question doesn't re-trigger itself in a loop. This
+  # is deliberately NOT restricted to human commenters specifically - a
+  # human replying and another agent (e.g. one that read a log and is
+  # supplying the detail the planner asked for) replying both work exactly
+  # the same way, through the same issue thread.
+  plan-from-issue:
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'opened' && toJSON(github.event.issue.labels) == '[]') ||
+      (github.event_name == 'issue_comment' && contains(github.event.issue.labels.*.name, 'karsift:needs-info') && github.event.comment.user.type != 'Bot')
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/plan.yml@main
+    with:
+      source_issue_number: ${{ github.event.issue.number }}
+      id_prefix: "VOC"   # match the value used for the workflow_dispatch plan job, above
+      integration_branch: "develop"   # match the value used for implement, above
+    secrets: inherit
+
+  # The other half of plan.yml's split: opens the real per-task tracking
+  # issues (and, if this package traces back to an originating issue, closes
+  # the loop on it) only once a "plan/"-branch PR actually merges - i.e. only
+  # once a human has adopted the draft. See adopt.yml's header comment for
+  # why this is a separate step from drafting rather than happening at PR-open
+  # time.
+  adopt:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'plan/')
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/adopt.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
   ci:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
   # Planning PRs (head branch prefixed "plan/" by plan.yml) create a package
@@ -112,7 +167,7 @@ jobs:
   # already falls into the existing fail-closed "requires founder approval"
   # path on its own.
   extract-package-path:
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
     runs-on: ubuntu-latest
     outputs:
       package_path: ${{ steps.extract.outputs.package_path }}
@@ -135,7 +190,7 @@ jobs:
 
   review:
     needs: [ci, extract-package-path]
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/review.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -149,7 +204,7 @@ jobs:
   # instead of trying a third time. See remediate.yml for the exact rule.
   remediate:
     needs: [review, extract-package-path]
-    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'agent/')
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/remediate.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -180,7 +235,7 @@ jobs:
       always() &&
       (
         github.event_name == 'issue_comment' ||
-        (github.event_name == 'pull_request' && (needs.review.result == 'success' || needs.review.result == 'skipped'))
+        (github.event_name == 'pull_request' && github.event.action != 'closed' && (needs.review.result == 'success' || needs.review.result == 'skipped'))
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
@@ -197,7 +252,7 @@ jobs:
   # title the same way merge-gate.yml's own jobs do. Deploy is out of scope -
   # see release.yml's header comment.
   release:
-    if: github.event_name == 'issues' || github.event_name == 'issue_comment'
+    if: (github.event_name == 'issues' && github.event.action == 'closed') || github.event_name == 'issue_comment'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/release.yml@main
     with:
       founder_username: "CHANGE-ME"   # same identity as merge-gate's founder_username, above
