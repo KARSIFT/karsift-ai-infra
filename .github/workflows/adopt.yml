@@ -18,6 +18,23 @@ name: adopt (reusable)
 # that issue gets a closing comment pointing at the real task issue(s), so
 # anyone following the thread - human or another agent - can see where the
 # work actually landed.
+#
+# Also rewrites change.yaml's implementation.authority_issue to match the
+# task issue(s) just opened, for exactly one reason: at adoption time (when a
+# human hand-edits change.yaml to authorize the package) no task issue exists
+# yet - this workflow is what creates it - so whatever authority_issue a
+# human writes at that point can only be a guess or a leftover from the
+# package's requirement_source. implement.yml's own authority_issue check
+# only rejects a MISMATCH (an explicit wrong value), not an absent one, so a
+# stale guess (e.g. the originating issue number, correct in the old
+# single-issue-does-everything flow this replaced) fails every dispatch
+# against the real task issue with "authority_issue (N) does not match the
+# issue this run was dispatched for (M)" - found live adopting VOC-015, the
+# first package run through the new split flow end to end. For a
+# single-task package this sets authority_issue to that one issue number
+# directly; for a multi-task package there is no single authority issue by
+# construction, so it's cleared to null (implement.yml already treats an
+# explicit null the same as an absent key - see its own comment on `or ""`).
 
 on:
   workflow_call:
@@ -221,10 +238,28 @@ jobs:
           package_path="${{ steps.locate.outputs.package_path }}"
           mkdir -p "$package_path/.karsift"
           cp /tmp/roster.json "$package_path/.karsift/tasks.json"
+
+          pip install --quiet pyyaml
+          python3 - "$package_path/change.yaml" /tmp/roster.json <<'PYEOF'
+          import sys
+          import json
+          import yaml
+
+          change_path, roster_path = sys.argv[1:3]
+          roster = json.load(open(roster_path))
+
+          data = yaml.safe_load(open(change_path))
+          impl = data.setdefault("implementation", {})
+          impl["authority_issue"] = roster[0]["issue"] if len(roster) == 1 else None
+
+          with open(change_path, "w") as f:
+              yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
+          PYEOF
+
           git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add "$package_path/.karsift/tasks.json"
-          git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster"
+          git add "$package_path/.karsift/tasks.json" "$package_path/change.yaml"
+          git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster and authority_issue"
           git push origin HEAD:${{ steps.target.outputs.branch }} || \
             (echo "Could not push directly to ${{ steps.target.outputs.branch }} - check branch protection allows this bot identity, or push manually." >&2; exit 1)
 
