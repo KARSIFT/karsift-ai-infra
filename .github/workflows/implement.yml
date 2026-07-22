@@ -99,7 +99,19 @@ jobs:
           if not impl.get("authorized"):
               sys.exit("Package implementation.authorized is not true - refusing to run.")
 
-          authority_issue = str(impl.get("authority_issue", ""))
+          # impl.get("authority_issue", "") only falls back to "" when the key
+          # is MISSING - a package that explicitly writes `authority_issue:
+          # null` (valid YAML for "not applicable", e.g. a multi-task package
+          # with no single authority issue) gets Python None back, and
+          # str(None) is the non-empty string "None", which then fails the
+          # match check below against every dispatched issue number. `or ""`
+          # additionally coerces None (and only None) to "" so an explicit
+          # null behaves the same as an absent key. Found live on
+          # karsift-ai-infra-smoke-test's TEST-005 (first real multi-task
+          # planner-drafted package): authority_issue: null incorrectly
+          # blocked implement.yml with "authority_issue (None) does not match
+          # the issue this run was dispatched for (7)."
+          authority_issue = str(impl.get("authority_issue") or "")
           if authority_issue and authority_issue != str(expected_issue):
               sys.exit(
                   f"Package authority_issue ({authority_issue}) does not match "
