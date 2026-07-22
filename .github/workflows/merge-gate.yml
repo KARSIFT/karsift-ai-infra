@@ -27,6 +27,21 @@ on:
         description: 'GitHub login whose literal "approved" comment is a valid human merge decision.'
         required: true
         type: string
+    secrets:
+      KARSIFT_BOT_APP_ID:
+        description: >
+          Optional. GitHub App ID used to close a merged PR's linked task
+          issue with an identity other than the default GITHUB_TOKEN. Required
+          for that close to actually propagate to release.yml's `issues:
+          closed` trigger - GitHub does not fire further workflow-triggering
+          events for actions performed by the default GITHUB_TOKEN (anti-
+          recursion protection; see "Close linked task issue" below for where
+          this was found live). Without it, the issue still closes, but
+          release.yml's package-completion check never sees it happen.
+        required: false
+      KARSIFT_BOT_PRIVATE_KEY:
+        description: "Optional, paired with KARSIFT_BOT_APP_ID - see that secret's description."
+        required: false
 
 jobs:
   # Path 1: on every PR update, report risk class, check status, and what the
@@ -235,19 +250,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr merge ${{ github.event.issue.number }} --squash
 
-      # Don't rely on GitHub's native "Closes #N" auto-close - confirmed live
-      # on karsift-ai-infra-smoke-test PR #5 that it does not reliably fire
-      # (a genuine "Closes #4" in the PR body, squash-merged into the
-      # repository's default branch, left issue #4 open). release.yml's
-      # package-completion check reads real issue state, so it needs this to
-      # actually happen deterministically rather than assuming a platform
-      # feature that's already been observed not firing. No-op if the PR
-      # body has no "Closes #N" (e.g. a manual doc-fix PR with no tracked
-      # task issue).
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # An app-minted token, not github.token: closing the issue below must
+      # be attributed to an identity other than the default GITHUB_TOKEN, or
+      # GitHub's anti-recursion protection silently drops the `issues:
+      # closed` event this close is supposed to produce - release.yml's
+      # completion check would never fire. Confirmed live: closing
+      # karsift-ai-infra-smoke-test#8 with github.token produced no `issues`
+      # workflow run at all, first time this step existed.
+      - name: Mint App installation token
+        id: app-token
+        if: steps.check.outcome == 'success' && steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      # Don't rely on GitHub's native "Closes #N" auto-close either -
+      # confirmed live on karsift-ai-infra-smoke-test PR #5 that it does not
+      # reliably fire (a genuine "Closes #4" in the PR body, squash-merged
+      # into the repository's default branch, left issue #4 open).
+      # release.yml's package-completion check reads real issue state, so it
+      # needs this to happen deterministically. No-op if the PR body has no
+      # "Closes #N" (e.g. a manual doc-fix PR with no tracked task issue), or
+      # if no App is configured (the close still happens via github.token in
+      # that case, just without triggering release.yml - see this job's
+      # secrets block).
       - name: Close linked task issue
         if: steps.check.outcome == 'success'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           body=$(gh pr view ${{ github.event.issue.number }} --json body -q .body)
@@ -282,6 +319,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr merge ${{ github.event.pull_request.number }} --squash
 
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Same app-token reasoning as approve-and-merge above: github.token
+      # would close the issue but silently never trigger release.yml.
+      - name: Mint App installation token
+        id: app-token
+        if: steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
       # Same explicit close as approve-and-merge above - see that step's
       # comment for why native "Closes #N" auto-close isn't trusted here.
       # PR_BODY goes through env:, never ${{ }}-interpolated directly into
@@ -290,7 +343,7 @@ jobs:
       # has contents:write).
       - name: Close linked task issue
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
