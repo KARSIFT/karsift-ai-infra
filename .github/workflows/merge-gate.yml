@@ -165,7 +165,7 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
-      issues: read
+      issues: write
       checks: read
       actions: read
     steps:
@@ -235,6 +235,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr merge ${{ github.event.issue.number }} --squash
 
+      # Don't rely on GitHub's native "Closes #N" auto-close - confirmed live
+      # on karsift-ai-infra-smoke-test PR #5 that it does not reliably fire
+      # (a genuine "Closes #4" in the PR body, squash-merged into the
+      # repository's default branch, left issue #4 open). release.yml's
+      # package-completion check reads real issue state, so it needs this to
+      # actually happen deterministically rather than assuming a platform
+      # feature that's already been observed not firing. No-op if the PR
+      # body has no "Closes #N" (e.g. a manual doc-fix PR with no tracked
+      # task issue).
+      - name: Close linked task issue
+        if: steps.check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          body=$(gh pr view ${{ github.event.issue.number }} --json body -q .body)
+          issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || true)
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" --comment "Closed by merge-gate after PR #${{ github.event.issue.number }} merged." || true
+          fi
+
   # Path 3: auto_merge_enabled=true and the report-status job already found
   # gates_pass for a risk class below R4. This only runs anything once a
   # project deliberately flips the switch - it is inert while the switch is
@@ -253,9 +274,27 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - name: Merge automatically
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr merge ${{ github.event.pull_request.number }} --squash
+
+      # Same explicit close as approve-and-merge above - see that step's
+      # comment for why native "Closes #N" auto-close isn't trusted here.
+      # PR_BODY goes through env:, never ${{ }}-interpolated directly into
+      # the script - same script-injection reasoning as the "Check approval
+      # signal" step above (a PR body is attacker-controlled text, this job
+      # has contents:write).
+      - name: Close linked task issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          issue_number=$(echo "$PR_BODY" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || true)
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" --comment "Closed by merge-gate after PR #${{ github.event.pull_request.number }} merged." || true
+          fi

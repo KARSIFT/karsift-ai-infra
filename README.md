@@ -115,6 +115,32 @@ by a reviewer *FAIL* previously went nowhere until a human happened to notice.
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet are all no-ops - this only ever acts
 on an explicit `FAIL`.
 
+## Release gate: one human approval per completed change package
+
+`merge-gate.yml` gates each *task*; `release.yml` gates the layer above it - promoting a project's
+integration branch (e.g. `develop`) to its production branch (e.g. `main`) once an entire *package*
+is done. Exactly one human approval per completed package, never per task and never an arbitrary
+batch count.
+
+A package's task roster is fixed once, at planning time: `plan.yml` writes
+`<package_path>/.karsift/tasks.json` (`[{"task_id": ..., "issue": <number>}, ...]`) alongside the
+package it drafts. `release.yml` never re-parses a project's own `tasks.md` prose to determine
+completion - that was tried for issue-opening itself and broke against a real house-style mismatch
+(see `plan.yml`'s task-parser comments); the roster file is the sole source of truth instead. Each
+task's tracking issue is explicitly closed by `merge-gate.yml` when that task's PR merges (not left
+to GitHub's native "Closes #N" auto-close, which has been observed live not to fire reliably on a
+squash merge). The moment every issue in a package's roster is closed, `release.yml` opens a
+`Release: <change_id>` issue; a founder's literal `approved` reply on that issue opens (or reuses)
+and merges a real `develop → main` pull request - never a direct ref update, since a project's own
+branch-protection intent (e.g. vocanova-platform's "release pull requests only, no direct or force
+pushes") depends on promotion staying a real, reviewable PR.
+
+**Deploy is explicitly out of scope.** The promotion PR's merge is the entire scope of `release.yml`
+- no hosted deployment is triggered by anything in this repo today.
+
+Packages that predate `.karsift/tasks.json` (planned before this feature existed, or never
+planner-authored) aren't covered - the release gate only applies going forward.
+
 ## What's deliberately not built yet
 
 - A run-time-swappable reviewer *execution step* (today, swapping the model is config-driven;
@@ -127,9 +153,8 @@ on an explicit `FAIL`.
   integration branch
 - Any chat/webhook front-end in front of `plan.yml` - a human (or a future thin layer) still
   triggers it by hand via `workflow_dispatch`, same as `implement.yml`
-- A release gate above the per-task loop (e.g. one human approval per completed change package,
-  gating an integration branch's promotion to a production branch) - each task from an adopted
-  package still merges independently today
+- Any deploy trigger after a `release.yml` promotion merges - `main` gets updated, nothing hosted
+  does
 
 ## Layout
 
@@ -149,6 +174,7 @@ karsift-ai-infra/
     review.yml
     remediate.yml           # re-dispatches implement.yml once on a FAIL verdict, then escalates
     merge-gate.yml          # risk-aware, fails closed, auto_merge_enabled defaults false
+    release.yml              # one human approval per completed package, gates develop -> main
   templates/project-repo/
     .github/workflows/pipeline.yml   # thin caller template - copy into a project repo
 ```

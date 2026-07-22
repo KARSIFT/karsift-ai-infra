@@ -35,6 +35,8 @@ on:
     types: [opened, synchronize, reopened]
   issue_comment:
     types: [created]
+  issues:
+    types: [closed]
   workflow_dispatch:
     inputs:
       action:
@@ -184,4 +186,21 @@ jobs:
     with:
       founder_username: "CHANGE-ME"   # the GitHub login whose "approved" comment is a valid merge decision
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
+    secrets: inherit
+
+  # The gate above the per-task loop: exactly one human approval per
+  # completed change package (its full task roster closed), not per task -
+  # gates promotion from integration_branch to production_branch. Routes
+  # both `issues: closed` (package-completion detection) and
+  # `issue_comment` (the founder's "approved" reply on a "Release: ..."
+  # issue) to release.yml, which internally filters by event/action/issue
+  # title the same way merge-gate.yml's own jobs do. Deploy is out of scope -
+  # see release.yml's header comment.
+  release:
+    if: github.event_name == 'issues' || github.event_name == 'issue_comment'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/release.yml@main
+    with:
+      founder_username: "CHANGE-ME"   # same identity as merge-gate's founder_username, above
+      integration_branch: "develop"   # match the value used elsewhere in this file
+      production_branch: "main"
     secrets: inherit

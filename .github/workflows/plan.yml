@@ -348,10 +348,11 @@ jobs:
           PYEOF
 
           count=0
+          echo "[" > /tmp/roster.json
           while IFS=$'\t' read -r task_id title; do
             [ -z "$task_id" ] && continue
             count=$((count + 1))
-            gh issue create \
+            issue_url=$(gh issue create \
               --title "${{ steps.id.outputs.id }}: $task_id - $title" \
               --body "$(cat <<EOF
           Task \`$task_id\` from draft package \`${{ steps.id.outputs.id }}\` (\`${{ steps.branch.outputs.package_path }}\`), proposed in ${{ steps.pr.outputs.url }}.
@@ -363,14 +364,36 @@ jobs:
           - task_id: \`$task_id\`
           - issue_number: this issue's number
           EOF
-          )"
+          )")
+            issue_number=$(basename "$issue_url")
+            [ "$count" -gt 1 ] && echo "," >> /tmp/roster.json
+            printf '{"task_id": %s, "issue": %s}' "$(jq -Rn --arg v "$task_id" '$v')" "$issue_number" >> /tmp/roster.json
           done < /tmp/tasks.tsv
+          echo "]" >> /tmp/roster.json
 
           if [ "$count" -eq 0 ]; then
             echo "Parsed zero tasks from $tasks_file - refusing to silently open nothing. Check the planner's task-ID format ('${{ inputs.id_prefix }}-<n>-T<n>') against this step's parser." >&2
             exit 1
           fi
           echo "Opened $count task issue(s)."
+          jq . /tmp/roster.json
+
+      # release.yml's fixed roster of record: exactly which issue tracks which
+      # task, so release-gate completion checks never have to re-parse a
+      # project's own tasks.md prose (see this file's earlier task-parser
+      # fix for why that's fragile - two different real house styles already
+      # broke a single hardcoded regex once this session). Written only after
+      # issue numbers exist, so it needs its own commit/push on top of the
+      # one that opened the PR.
+      - name: Commit task roster
+        if: steps.commit.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ steps.branch.outputs.package_path }}/.karsift"
+          cp /tmp/roster.json "${{ steps.branch.outputs.package_path }}/.karsift/tasks.json"
+          git add "${{ steps.branch.outputs.package_path }}/.karsift/tasks.json"
+          git commit -m "${{ steps.id.outputs.id }}: record task-issue roster"
+          git push origin "${{ steps.branch.outputs.branch }}"
 
       - name: Fail job if planner step failed
         if: steps.planner.outcome == 'failure'

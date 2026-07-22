@@ -1,0 +1,186 @@
+name: release (reusable)
+
+# The gate above the per-task loop: exactly one human approval per completed
+# change package, not per task and not an arbitrary batch count - gates
+# promotion from the integration branch to the production branch. Deploy is
+# explicitly out of scope; this workflow's entire job is that one promotion
+# PR's merge.
+#
+# A package's task roster is fixed once, at planning time, in
+# `<package_path>/.karsift/tasks.json` (written by plan.yml's "Commit task
+# roster" step: `[{"task_id": ..., "issue": <number>}, ...]`). This workflow
+# never re-parses a project's own tasks.md prose to figure out what "done"
+# means - that was tried for the per-task issue-opening step earlier and
+# broke against a real house-style mismatch (see plan.yml's task-parser
+# comment). The roster is the sole source of truth for package completion.
+# Packages that predate this file's existence (no .karsift/tasks.json) are
+# not covered - this only applies going forward.
+
+on:
+  workflow_call:
+    inputs:
+      founder_username:
+        description: 'GitHub login whose literal "approved" comment is a valid release decision.'
+        required: true
+        type: string
+      integration_branch:
+        description: 'Branch a completed package promotes FROM, e.g. "develop".'
+        required: false
+        type: string
+        default: "develop"
+      production_branch:
+        description: 'Branch a completed package promotes TO, e.g. "main".'
+        required: false
+        type: string
+        default: "main"
+
+jobs:
+  # Fires on every issue closing. Cheap to no-op: most closed issues aren't a
+  # tracked task at all (wrong title shape), and this exits immediately for
+  # those.
+  check-completion:
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.integration_branch }}
+
+      - name: Identify the package this issue belongs to, if any
+        id: identify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+          # plan.yml titles task issues "<change_id>: <task_id> - <title>" -
+          # match that prefix; anything else isn't a tracked task issue.
+          change_id=$(echo "$ISSUE_TITLE" | grep -oP '^[A-Za-z][A-Za-z0-9]*-\d+(?=:)' || true)
+          if [ -z "$change_id" ]; then
+            echo "Closed issue title doesn't match '<CHANGE-ID>: ...' - not a tracked task issue, nothing to do."
+            echo "is_task=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          package_path=$(find specs/changes -maxdepth 1 -mindepth 1 -type d -name "${change_id}-*" | head -1 || true)
+          if [ -z "$package_path" ]; then
+            echo "No package directory found for $change_id under specs/changes/ on ${{ inputs.integration_branch }} - nothing to do."
+            echo "is_task=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          roster="$package_path/.karsift/tasks.json"
+          if [ ! -f "$roster" ]; then
+            echo "$package_path has no .karsift/tasks.json - package predates the release gate, or wasn't planner-authored. Nothing to do."
+            echo "is_task=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "is_task=true" >> "$GITHUB_OUTPUT"
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether every roster issue is now closed
+        id: completion
+        if: steps.identify.outputs.is_task == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          roster="${{ steps.identify.outputs.package_path }}/.karsift/tasks.json"
+          all_closed=true
+          while IFS= read -r n; do
+            state=$(gh issue view "$n" --json state -q .state)
+            if [ "$state" != "CLOSED" ]; then
+              all_closed=false
+              break
+            fi
+          done < <(jq -r '.[].issue' "$roster")
+          echo "all_closed=$all_closed" >> "$GITHUB_OUTPUT"
+
+      - name: Open the release-approval issue, if complete and not already requested
+        if: steps.identify.outputs.is_task == 'true' && steps.completion.outputs.all_closed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          change_id="${{ steps.identify.outputs.change_id }}"
+          package_path="${{ steps.identify.outputs.package_path }}"
+          title="Release: $change_id"
+
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json title -q \
+            "[.[] | select(.title == \"$title\")] | length")
+          if [ "$existing" != "0" ]; then
+            echo "A '$title' issue is already open - not opening a second one."
+            exit 0
+          fi
+
+          roster_summary=$(jq -r '.[] | "- `\(.task_id)` (issue #\(.issue))"' "$package_path/.karsift/tasks.json")
+
+          gh issue create \
+            --title "$title" \
+            --body "$(cat <<EOF
+          Every task in \`$change_id\`'s roster is now closed:
+
+          $roster_summary
+
+          This package is complete. Promoting \`${{ inputs.integration_branch }}\` to
+          \`${{ inputs.production_branch }}\` requires exactly one human decision -
+          reply \`approved\` (as the configured founder identity) on this issue to
+          open and merge that promotion pull request.
+
+          **Deploy is out of scope here.** This only promotes the branch; any hosted
+          deployment is a separate, not-yet-built step.
+          EOF
+          )"
+
+  # Fires on the human "approved" comment. Same approval-signal pattern as
+  # merge-gate.yml's approve-and-merge - see that step for the injection-
+  # safety reasoning behind routing comment body/author through env:.
+  promote:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request == null &&
+      startsWith(github.event.issue.title, 'Release: ')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check approval signal
+        id: check
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          FOUNDER_USERNAME: ${{ inputs.founder_username }}
+        run: |
+          if [ "$COMMENT_BODY" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
+            echo "approved"
+          else
+            echo "not approved (author=$COMMENT_AUTHOR, body='$COMMENT_BODY')"
+            exit 1
+          fi
+
+      - name: Open or reuse the promotion PR, then merge it
+        if: steps.check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" --state open --json number -q '.[0].number' || true)
+          if [ -z "$existing" ] || [ "$existing" = "null" ]; then
+            existing=$(gh pr create \
+              --base "${{ inputs.production_branch }}" \
+              --head "${{ inputs.integration_branch }}" \
+              --title "Release: promote ${{ inputs.integration_branch }} to ${{ inputs.production_branch }}" \
+              --body "Promotion requested and approved via issue #${{ github.event.issue.number }} (\`${{ github.event.issue.title }}\`).")
+            existing=$(echo "$existing" | grep -oP '\d+$')
+          fi
+          gh pr merge "$existing" --merge
+          gh issue close ${{ github.event.issue.number }} --comment "Promoted via PR #$existing."
