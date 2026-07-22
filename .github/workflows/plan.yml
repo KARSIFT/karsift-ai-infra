@@ -268,10 +268,12 @@ jobs:
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
 
       # Deliberately no "Risk classification: R#" or "Package path: `...`"
-      # line in this PR body - see this file's header comment for why that
-      # absence is what keeps extract-package-path/review/remediate/
-      # merge-gate behaving correctly for a planning PR without any
-      # special-casing in merge-gate.yml itself.
+      # line (that literal wording) in this PR body - see this file's header
+      # comment for why that absence is what keeps extract-package-path/
+      # review/remediate/merge-gate behaving correctly for a planning PR
+      # without any special-casing in merge-gate.yml itself. The package's
+      # location is still stated below, just not under that exact literal
+      # label extract-package-path's regex looks for.
       - name: Open PR
         id: pr
         if: steps.commit.outputs.has_changes == 'true'
@@ -294,15 +296,27 @@ jobs:
           adopted, flips \`change.yaml\`'s status/authorization fields by hand.
           Once that happens, dispatch \`implement.yml\` per task as usual.
 
-          Package path: \`${{ steps.branch.outputs.package_path }}\`
+          New package directory: \`${{ steps.branch.outputs.package_path }}\`
           EOF
           )")
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-      # Deterministic, not model-driven: parse the task headings the planner
-      # just wrote and open one issue per task. Fails loud if none parse -
-      # a package with zero recognizable tasks is a format mismatch to fix,
-      # not something to silently swallow into "0 issues opened."
+      # Deterministic, not model-driven: parse task IDs out of tasks.md and
+      # open one issue per task. Fails loud if none parse - a package with
+      # zero recognizable tasks is a format mismatch to fix, not something
+      # to silently swallow into "0 issues opened."
+      #
+      # Matches the task-ID token itself (e.g. "TEST-004-T01",
+      # "VOC-006-T01") wherever it appears on its own line, rather than
+      # assuming any particular heading/list markup around it - confirmed
+      # against two real, different house styles that both use this same ID
+      # shape: vocanova-platform's "## <ID> — <title>" one-heading-per-task
+      # convention, and karsift-ai-infra-smoke-test's single "## Tasks"
+      # heading followed by a "- [ ] <ID> <description>" checkbox list. A
+      # single hardcoded heading-level regex (an earlier version of this
+      # step) matched the first but silently mis-parsed the second - package
+      # format is project policy this repo has no opinion on, so the parser
+      # has to tolerate more than one house style, not assume vocanova's.
       - name: Open one issue per task
         if: steps.commit.outputs.has_changes == 'true'
         env:
@@ -315,13 +329,27 @@ jobs:
             exit 1
           fi
 
+          python3 - "$tasks_file" "${{ inputs.id_prefix }}" <<'PYEOF' > /tmp/tasks.tsv
+          import re
+          import sys
+
+          tasks_file, id_prefix = sys.argv[1:3]
+          pattern = re.compile(rf'{re.escape(id_prefix)}-\d+-T\d+')
+          seen = set()
+          with open(tasks_file) as f:
+              for line in f:
+                  m = pattern.search(line)
+                  if not m or m.group(0) in seen:
+                      continue
+                  seen.add(m.group(0))
+                  title = line[m.end():].strip()
+                  title = re.sub(r'^[\s\-–—:.]+', '', title) or m.group(0)
+                  print(f"{m.group(0)}\t{title[:100]}")
+          PYEOF
+
           count=0
-          while IFS= read -r line; do
-            task_id=$(echo "$line" | grep -oP '(?<=^## )\S+' || true)
-            title=$(echo "$line" | sed -E 's/^## \S+ *—? *//; s/^## \S+ *-? *//')
-            if [ -z "$task_id" ]; then
-              continue
-            fi
+          while IFS=$'\t' read -r task_id title; do
+            [ -z "$task_id" ] && continue
             count=$((count + 1))
             gh issue create \
               --title "${{ steps.id.outputs.id }}: $task_id - $title" \
@@ -336,10 +364,10 @@ jobs:
           - issue_number: this issue's number
           EOF
           )"
-          done < <(grep -E '^## ' "$tasks_file")
+          done < /tmp/tasks.tsv
 
           if [ "$count" -eq 0 ]; then
-            echo "Parsed zero tasks from $tasks_file - refusing to silently open nothing. Check the planner's task-heading format against this step's parser (expects '## <TASK-ID> ...')." >&2
+            echo "Parsed zero tasks from $tasks_file - refusing to silently open nothing. Check the planner's task-ID format ('${{ inputs.id_prefix }}-<n>-T<n>') against this step's parser." >&2
             exit 1
           fi
           echo "Opened $count task issue(s)."
