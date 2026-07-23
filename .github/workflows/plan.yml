@@ -83,7 +83,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
+      ANTHROPIC_API_KEY:
         required: true
       KARSIFT_BOT_APP_ID:
         description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
@@ -301,7 +301,7 @@ jobs:
         id: planner
         continue-on-error: true
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           claude --model "${{ steps.model.outputs.model }}" \

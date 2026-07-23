@@ -27,8 +27,6 @@ on:
         type: string
         default: "develop"
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
-        required: true
       KARSIFT_BOT_APP_ID:
         required: false
       KARSIFT_BOT_PRIVATE_KEY:
