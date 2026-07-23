@@ -18,15 +18,33 @@
 # pick but broke immediately - it (and older Codex checkpoints) were
 # deprecated at the API level on/around 2026-07-23, confirmed live on
 # VOC-018-T02's implement run ("The model `gpt-5.2-codex` has been
-# deprecated"). gpt-5.3-codex is the current live replacement as of this
-# writing. This lineup moves fast - check OpenAI's actual deprecations page
+# deprecated"). gpt-5.3-codex was the live replacement at that time.
+#
+# Moved to gpt-5.6-terra (2026-07-24) once OpenAI's GPT-5.6 family (Sol /
+# Terra / Luna) rolled out into Codex: Terra is documented as "competitive
+# with GPT-5.5" at a lower cost than the Sol flagship ($2.50/$15 vs $5/$30
+# per 1M tokens), i.e. the cost-effective everyday-coding tier - not the
+# cheapest/weakest Luna tier, which risks repeating the gpt-5.1-codex-mini
+# "too weak" outcome. Reason for the move: gpt-5.3-codex's implement output
+# was passing FAIL-worthy work to the (paid, slower) independent-review step
+# more than desired (VOC-019-T00's first attempt), and a stronger-per-dollar
+# model was judged the better lever than just re-prompting - though note
+# most of that PR's FAIL findings were project-convention misses (unwired
+# Tailwind utility names, nested <main>) that a lint rule would also catch;
+# model quality alone won't close that gap. NOT yet exercised live - watch
+# the next real implement run to confirm gpt-5.6-terra actually works with
+# openai/codex-action (model string just swaps the same way gpt-5.2-codex ->
+# gpt-5.3-codex did) and that model_verbosity=medium (implement.yml) is still
+# the right override, not a gpt-5.2-codex-specific fix.
+#
+# This lineup moves fast - check OpenAI's actual deprecations page
 # (developers.openai.com/api/docs/deprecations) before assuming this exact
 # model string is still both current and the right cost/capability tradeoff.
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
 
-implementer: gpt-5.3-codex       # currently: openai/codex-action - full-size tier, see note above (was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
+implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effective GPT-5.6 tier, see note above (was gpt-5.3-codex; was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
 reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md)
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
