@@ -14,16 +14,19 @@
 # implementer is pinned to full-size Codex, not the mini tier - the mini tier
 # was tried first (2026-07-24) for cost, given the OpenAI account behind
 # OPENAI_API_KEY runs on a small prepaid credit balance, but was judged too
-# weak for real implementation work. gpt-5.2-codex is the "roughly comparable
-# in weight to reviewer's claude-sonnet-5" pick, not the newest/fastest
-# 5.3-codex checkpoint and not the cheapest mini - see OpenAI's current
-# pricing/lineup before assuming this exact model string is still the right
-# tradeoff; both the lineup and pricing move fast.
+# weak for real implementation work. gpt-5.2-codex was the first full-size
+# pick but broke immediately - it (and older Codex checkpoints) were
+# deprecated at the API level on/around 2026-07-23, confirmed live on
+# VOC-018-T02's implement run ("The model `gpt-5.2-codex` has been
+# deprecated"). gpt-5.3-codex is the current live replacement as of this
+# writing. This lineup moves fast - check OpenAI's actual deprecations page
+# (developers.openai.com/api/docs/deprecations) before assuming this exact
+# model string is still both current and the right cost/capability tradeoff.
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
 
-implementer: gpt-5.2-codex       # currently: openai/codex-action - full-size tier, see note above (was gpt-5.1-codex-mini, judged too weak)
+implementer: gpt-5.3-codex       # currently: openai/codex-action - full-size tier, see note above (was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
 reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md)
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
