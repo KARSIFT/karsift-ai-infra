@@ -162,9 +162,10 @@ jobs:
             --force
 
       # Deterministic, not model-chosen: scan existing package directories for
-      # the highest numeric suffix after id_prefix and increment. Mirrors
-      # implement.yml's philosophy that anything mechanical (branch names,
-      # commits, IDs) stays out of the model's hands.
+      # the highest numeric suffix after id_prefix as a starting point, then
+      # claim it for real via an atomic ref-creation race on the remote (see
+      # below) - mirrors implement.yml's philosophy that anything mechanical
+      # (branch names, commits, IDs) stays out of the model's hands.
       - name: Allocate next package ID
         id: id
         run: |
@@ -179,9 +180,38 @@ jobs:
               fi
             done < <(find specs/changes -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null || true)
           fi
-          next=$((highest + 1))
-          padded=$(printf "%03d" "$next")
-          echo "id=${prefix}-${padded}" >> "$GITHUB_OUTPUT"
+
+          # Scanning specs/changes alone isn't enough to prevent a collision:
+          # a draft's own package directory only lands on integration_branch
+          # once its PR is ADOPTED, not at draft time (see this workflow's
+          # header comment on the plan/adopt split) - so two plan.yml runs
+          # dispatched close together, or just both still-unmerged from
+          # earlier, start the scan above from the same state and compute
+          # the same "next" ID. Found live: two plan.yml runs dispatched a
+          # few seconds apart both allocated VOC-016. `git push origin
+          # HEAD:refs/karsift-ids/<id>` only succeeds if that ref doesn't
+          # already exist anywhere on the remote - a plain (non-force) push
+          # creating a brand-new ref name either wins outright or fails with
+          # "already exists", which is exactly the atomic compare-and-swap a
+          # numeric counter needs, using nothing but git itself. The ref
+          # otherwise carries no meaning (it just points at this run's base
+          # commit) and is never read back - it exists purely as a claim.
+          candidate=$((highest + 1))
+          claimed=""
+          for _ in $(seq 1 50); do
+            padded=$(printf "%03d" "$candidate")
+            attempt="${prefix}-${padded}"
+            if git push origin "HEAD:refs/karsift-ids/${attempt}" 2>/dev/null; then
+              claimed="$attempt"
+              break
+            fi
+            candidate=$((candidate + 1))
+          done
+          if [ -z "$claimed" ]; then
+            echo "Could not claim a package ID after 50 attempts starting at ${prefix}-$(printf '%03d' $((highest + 1)))." >&2
+            exit 1
+          fi
+          echo "id=${claimed}" >> "$GITHUB_OUTPUT"
 
       # Deterministic slug, not model output - same rationale as above. The
       # title source is whichever of these is present, in order: free-text
