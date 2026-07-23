@@ -4,18 +4,15 @@ name: implement (reusable)
 # Which model fills that role is resolved from THIS repo's own config/roles.yml,
 # so swapping models never touches a calling project's own workflow.
 #
-# KNOWN COMPROMISE, not a redesign: this currently runs the implementer role
-# on Claude Code CLI, the same vendor as the reviewer role - see
-# config/roles.yml's header comment for why (openai/codex-action requires a
-# metered, billed OpenAI API key with no subscription-auth path, and that
-# billing isn't set up yet). Same-vendor implement+review is not independent
-# review. To restore Codex as the implementer once billing is available:
-# revert this file's "Run implementer" step to `uses: openai/codex-action@v1`
-# with an `openai-api-key` input (see git history for the exact prior form),
-# and set config/roles.yml's `implementer` back to a Codex model/empty string.
-# Nothing else in this file or in review.yml/merge-gate.yml needs to change -
-# the role/prompt/branch/commit/PR machinery around it is provider-agnostic
-# by design.
+# Restored to openai/codex-action (2026-07-24) once OpenAI API billing became
+# available - see config/roles.yml's header comment for the prior same-vendor
+# compromise (Claude Code for both implementer and reviewer) this replaces.
+# Implementer and reviewer are different vendors again, which is what makes
+# review.yml's independent verification actually independent instead of
+# self-review. Swapping vendors again in the future only touches this file's
+# "Run implementer" step and config/roles.yml's `implementer` value - the
+# role/prompt/branch/commit/PR machinery around it is provider-agnostic by
+# design and needs no changes in review.yml/merge-gate.yml either way.
 
 on:
   workflow_call:
@@ -47,7 +44,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
+      OPENAI_API_KEY:
         required: true
       KARSIFT_BOT_APP_ID:
         description: >
@@ -202,27 +199,21 @@ jobs:
             fi
           } > /tmp/implement-prompt.txt
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      # The implementer role gets write tools (unlike review.yml's read-only
-      # reviewer) because its job is to actually produce the diff. It never
-      # touches git directly beyond what Claude Code's Bash tool might run
-      # for its own purposes - committing, pushing, and opening the PR remain
-      # deterministic steps below, not something the model is trusted to do
-      # itself. Swapping the implementer to a different provider/action means
-      # changing this one step - the rest of the job (branch, commit, PR,
-      # escalation) doesn't know or care which model produced the diff.
+      # codex-action only runs `codex exec` in a sandbox - it never touches
+      # git. Committing, pushing, and opening the PR are deterministic steps
+      # below, not something the model is trusted to do itself. Swapping the
+      # implementer to a different provider/action means changing this one
+      # step - the rest of the job (branch, commit, PR, escalation) doesn't
+      # know or care which model produced the diff.
       - name: Run implementer
         id: implementer
+        uses: openai/codex-action@v1
         continue-on-error: true
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          set -euo pipefail
-          claude --model "${{ steps.model.outputs.model }}" \
-            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-            -p "$(cat /tmp/implement-prompt.txt)"
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: /tmp/implement-prompt.txt
+          permission-profile: ":workspace"
+          model: ${{ steps.model.outputs.model }}
 
       - name: Commit and push
         id: commit

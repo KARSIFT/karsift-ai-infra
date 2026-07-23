@@ -3,36 +3,30 @@
 # ("implementer", "reviewer") and resolves it here - swap who occupies a role
 # by editing this one file, not by touching workflow logic.
 #
-# KNOWN COMPROMISE, not a redesign: "implementer" and "reviewer" are supposed
-# to stay different model vendors - same-vendor review isn't independent
-# review, it's self-review. That's still the correct target. Right now both
-# roles run on Claude Code because openai/codex-action requires a metered,
-# billed OpenAI API key with no subscription-auth path, and that billing
-# isn't set up. This is a deliberate, temporary, and DOCUMENTED exception,
-# not a silent drop of the cross-vendor rule - see implement.yml's header
-# comment for what it takes to swap the implementer back to Codex (or to any
-# other vendor) once that's unblocked.
+# "implementer" and "reviewer" are supposed to stay different model vendors -
+# same-vendor review isn't independent review, it's self-review. Restored
+# 2026-07-24: OpenAI API billing is now set up, so the implementer runs on
+# openai/codex-action again (see implement.yml's header comment) while the
+# reviewer stays on Claude Code - real cross-vendor independence, not the
+# same-vendor compromise this repo ran under for a while (see git history of
+# this file for that period, if it matters later).
 #
-# Using two different Claude models (not the same one) for the two roles was
-# a partial mitigation, not a substitute for real cross-vendor independence -
-# don't treat a PASS from this configuration as equivalent to a genuinely
-# independent review. That partial mitigation is currently OFF: all three
-# roles below were deliberately moved to the same model, claude-sonnet-5, for
-# cost efficiency (founder decision, 2026-07-23 - the prior opus-for-
-# reviewer/planner config was burning through session quota fast during
-# heavy live testing). Restoring even same-vendor model diversity (reviewer
-# back on a different Claude tier than implementer) is a cheap partial fix if
-# review independence becomes a concern again; real independence still needs
-# the cross-vendor swap described above.
+# implementer is pinned to a Codex *mini* model, not full-size Codex,
+# specifically for cost: the OpenAI account behind OPENAI_API_KEY is running
+# on a small prepaid credit balance (founder decision, 2026-07-24), and the
+# mini-codex tier holds most of full Codex's agentic coding/tool-calling
+# capability at roughly 5-10x lower per-token cost - see OpenAI's current
+# pricing before assuming this exact model string is still the cheapest
+# capable option; that ranking moves fast.
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
 
-implementer: claude-sonnet-5     # currently: Claude Code CLI (see prompts/implement.md) - was openai/codex-action, see note above
-reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md) - was claude-opus-4-8, moved for cost efficiency
+implementer: gpt-5.1-codex-mini  # currently: openai/codex-action - pinned to the mini tier for cost, see note above
+reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md)
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
 # never something an independent AI verifier checks the way review.yml checks
 # implementer output.
-planner: claude-sonnet-5         # currently: Claude Code CLI (see prompts/plan.md) - was claude-opus-4-8, moved for cost efficiency
+planner: claude-sonnet-5         # currently: Claude Code CLI (see prompts/plan.md)
