@@ -13,20 +13,26 @@
 # comment for what it takes to swap the implementer back to Codex (or to any
 # other vendor) once that's unblocked.
 #
-# Using two different Claude models (not the same one) for the two roles is
+# Using two different Claude models (not the same one) for the two roles was
 # a partial mitigation, not a substitute for real cross-vendor independence -
 # don't treat a PASS from this configuration as equivalent to a genuinely
-# independent review.
+# independent review. That partial mitigation is currently OFF: all three
+# roles below were deliberately moved to the same model, claude-sonnet-5, for
+# cost efficiency (founder decision, 2026-07-23 - the prior opus-for-
+# reviewer/planner config was burning through session quota fast during
+# heavy live testing). Restoring even same-vendor model diversity (reviewer
+# back on a different Claude tier than implementer) is a cheap partial fix if
+# review independence becomes a concern again; real independence still needs
+# the cross-vendor swap described above.
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
 
 implementer: claude-sonnet-5     # currently: Claude Code CLI (see prompts/implement.md) - was openai/codex-action, see note above
-reviewer: claude-opus-4-8        # currently: Claude Code CLI (see prompts/review.md)
+reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md) - was claude-opus-4-8, moved for cost efficiency
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
 # never something an independent AI verifier checks the way review.yml checks
-# implementer output. Picked opus over sonnet here because this runs once per change
-# package (not once per task), so drafting quality matters more than per-run cost.
-planner: claude-opus-4-8         # currently: Claude Code CLI (see prompts/plan.md)
+# implementer output.
+planner: claude-sonnet-5         # currently: Claude Code CLI (see prompts/plan.md) - was claude-opus-4-8, moved for cost efficiency
