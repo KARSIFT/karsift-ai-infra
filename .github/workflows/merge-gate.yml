@@ -78,6 +78,7 @@ jobs:
       risk: ${{ steps.status.outputs.risk }}
       checks_ok: ${{ steps.status.outputs.checks_ok }}
       verdict: ${{ steps.status.outputs.verdict }}
+      automatic_merge_allowed: ${{ steps.status.outputs.automatic_merge_allowed }}
     steps:
       - uses: actions/checkout@v4
 
@@ -98,6 +99,30 @@ jobs:
             risk="unknown"
           fi
           echo "risk=$risk" >> "$GITHUB_OUTPUT"
+
+          # A package's own change.yaml can carry a top-level
+          # `automatic_merge_allowed: false` - a per-package opt-out a human
+          # sets when they specifically want this exact package kept out of
+          # unattended auto-merge, independent of its risk class (e.g. "R1,
+          # but I want eyes on this one"). Found live (VOC-019-T00's
+          # independent review) that this field was parsed by nothing: every
+          # prior package that set it to false (VOC-016/017/018/019) was
+          # still fully eligible for auto-merge, because only the repo-level
+          # `auto_merge_enabled` input gated Path 3 below. This only affects
+          # the *auto-merge* path - a human's "approved" comment (Path 2)
+          # stays valid regardless, same as it already is for R4/unknown.
+          # Default "true" (no restriction) when the field is absent or the
+          # package_path can't be parsed, so bare doc-only PRs or packages
+          # predating this field aren't retroactively blocked.
+          package_path=$(echo "$body" | grep -oP '(?<=Package path: `)[^`]+' || true)
+          automatic_merge_allowed="true"
+          if [ -n "$package_path" ] && [ -f "$package_path/change.yaml" ]; then
+            value=$(grep -oP '^automatic_merge_allowed:\s*\K(true|false)' "$package_path/change.yaml" || true)
+            if [ "$value" = "false" ]; then
+              automatic_merge_allowed="false"
+            fi
+          fi
+          echo "automatic_merge_allowed=$automatic_merge_allowed" >> "$GITHUB_OUTPUT"
 
           # Excludes this pipeline's own governance checks ("merge-gate / *",
           # "remediate / *") from the checks_ok computation - not just the
@@ -150,6 +175,7 @@ jobs:
           risk="${{ steps.status.outputs.risk }}"
           checks_ok="${{ steps.status.outputs.checks_ok }}"
           verdict="${{ steps.status.outputs.verdict }}"
+          automatic_merge_allowed="${{ steps.status.outputs.automatic_merge_allowed }}"
 
           gates_pass=false
           if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "PENDING" ]; then
@@ -160,6 +186,8 @@ jobs:
             decision="requires founder approval - R4 never auto-merges, regardless of auto_merge_enabled"
           elif [ "$risk" = "unknown" ]; then
             decision="requires founder approval - no parseable 'Risk classification: R#' line found in the PR body, failing closed"
+          elif [ "$gates_pass" = "true" ] && [ "$automatic_merge_allowed" = "false" ]; then
+            decision="gates pass for $risk but this package's own change.yaml sets automatic_merge_allowed: false - requires founder approval"
           elif [ "$gates_pass" = "true" ] && [ "${{ inputs.auto_merge_enabled }}" = "true" ]; then
             decision="WOULD AUTO-MERGE ($risk, auto_merge_enabled=true)"
           elif [ "$gates_pass" = "true" ]; then
@@ -306,7 +334,8 @@ jobs:
       needs.report-status.outputs.risk != 'unknown' &&
       needs.report-status.outputs.checks_ok == 'true' &&
       needs.report-status.outputs.verdict != 'FAIL' &&
-      needs.report-status.outputs.verdict != 'PENDING'
+      needs.report-status.outputs.verdict != 'PENDING' &&
+      needs.report-status.outputs.automatic_merge_allowed != 'false'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
