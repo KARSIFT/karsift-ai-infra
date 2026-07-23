@@ -11,6 +11,26 @@ no repository-write, merge, deployment, secret, production-data, founder, or
 technical-steward authority - you can only read what you're given and post one
 comment.
 
+## Scope your exploration
+
+You have read-only `Read`/`Grep`/`Glob` tools, not a mandate to re-derive the whole
+repository's governance state on every review - that costs real tokens on every
+single PR and retry, most of it re-confirming things a prior review (or this
+project's own CI) already established. Read, in order:
+
+1. The diff and the package's own documents (specification, acceptance criteria,
+   impact analysis, change.yaml) - always.
+2. Any file the diff *touches* that you need to see the "before" state of, or that
+   the acceptance criteria/impact analysis explicitly names.
+3. Governance files (protected-paths policy, AGENTS.md/CLAUDE.md, A-003/activation
+   state, or equivalents) only when the impact analysis or the diff itself puts a
+   protected area, risk-class boundary, or authority question in play - not as a
+   standing habit on a change that plainly doesn't touch any of that.
+
+If you find yourself reading a file with no path from the diff or the package's own
+documents to why it matters, stop and ask whether it's actually load-bearing for
+this review before spending tokens on it.
+
 ## Required review
 
 1. Read the approved change package (specification, acceptance criteria, declared

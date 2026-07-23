@@ -47,6 +47,21 @@
 implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effective GPT-5.6 tier, see note above (was gpt-5.3-codex; was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
 reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md)
 
+# reviewer_fast_retry (2026-07-24): a cheaper/faster model used ONLY for a
+# remediate.yml retry review (attempt 2) on a package whose declared risk is
+# R0 or R1 - see review.yml's model-selection step for the exact condition.
+# Never used for a first-pass review, and never for R2+, regardless of
+# attempt - a retry review is re-verifying a narrow, already-scoped fix
+# against specific prior findings, not doing first-principles discovery the
+# way an initial review does, so the case for a lighter model is much
+# stronger there than for review in general. This is a real quality/cost
+# tradeoff, not a free win - if this model starts waving through retries a
+# full Sonnet pass would have caught, raise the risk floor this applies to
+# (or drop it back to empty/reviewer's value) rather than silently letting
+# it ride. Leave empty to disable fast-retry routing entirely and always use
+# `reviewer` for every review, first-pass or retry.
+reviewer_fast_retry: claude-haiku-4-5
+
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
 # never something an independent AI verifier checks the way review.yml checks

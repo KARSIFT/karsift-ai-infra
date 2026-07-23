@@ -47,12 +47,6 @@ jobs:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
 
-      - name: Resolve reviewer model
-        id: model
-        run: |
-          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh reviewer karsift-ai-infra/config/roles.yml)
-          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-
       - name: Fetch PR diff, metadata, and exact SHA
         id: pr
         env:
@@ -62,11 +56,51 @@ jobs:
           gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
           echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Build prompt
+      # Routes a remediate.yml retry (attempt 2) on a low-risk (R0/R1)
+      # package to a cheaper/faster model (config/roles.yml's
+      # `reviewer_fast_retry`) instead of the full `reviewer` model - see
+      # that role's comment for why this is scoped to retries only, never a
+      # first-pass review, and never R2+. Both attempt and risk are parsed
+      # here rather than plumbed as new inputs from pipeline.yml: attempt is
+      # already embedded in the PR body ("attempt N of 2", the same text
+      # remediate.yml itself parses), and risk is already in change.yaml,
+      # which this job reads anyway for the prompt below - no new wiring
+      # needed in the calling project's pipeline.yml.
+      - name: Resolve reviewer model
+        id: model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          attempt=$(jq -r .body /tmp/pr.json | grep -oP '(?<=attempt )[0-9]+(?= of 2)' | head -1 || echo "1")
+          risk=$(grep -oP '^risk:\s*\K.*' "${{ inputs.package_path }}/change.yaml" 2>/dev/null | head -1 || echo "")
+
+          role="reviewer"
+          if [ "$attempt" -ge 2 ] && { [ "$risk" = "R0" ] || [ "$risk" = "R1" ]; }; then
+            fast=$(bash karsift-ai-infra/config/resolve-model.sh reviewer_fast_retry karsift-ai-infra/config/roles.yml || echo "")
+            if [ -n "$fast" ]; then
+              role="reviewer_fast_retry"
+            fi
+          fi
+          echo "Routing this review as: role=$role (attempt=$attempt, risk=${risk:-unknown})"
+
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh "$role" karsift-ai-infra/config/roles.yml)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "role=$role" >> "$GITHUB_OUTPUT"
+
+      # Static across every single review this pipeline ever runs (same
+      # bytes regardless of project, PR, or attempt) - passed as the system
+      # prompt specifically so Anthropic's prompt caching can hit on it.
+      # Caching is keyed on exact prefix content under the same API key,
+      # not on CLI process/session, so this benefits across separate CI
+      # containers (e.g. attempt 1 vs. attempt 2 of the same PR, or two
+      # unrelated PRs reviewed minutes apart) as long as they land within
+      # the cache TTL - unlike the per-review variable content below, which
+      # never repeats and so never benefits from caching regardless of how
+      # it's passed.
+      - name: Build variable (per-review) prompt
         run: |
           {
-            cat karsift-ai-infra/prompts/review.md
-            echo
             echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
             echo
             echo "## Package under review"
@@ -96,12 +130,20 @@ jobs:
       # Read-only tools only, no --dangerously-skip-permissions: the reviewer
       # role has no repository-write authority here, by design, not just as
       # an implementation convenience.
+      #
+      # prompts/review.md goes in via --append-system-prompt (static, cache-
+      # eligible, identical every run), not concatenated into the -p prompt
+      # text as before - splitting the two is what makes the caching note
+      # above actually apply; before this, the static instructions and the
+      # never-repeating package content were one prefix, invalidating any
+      # would-be cache hit on the static portion.
       - name: Run independent verification
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
+            --append-system-prompt "$(cat karsift-ai-infra/prompts/review.md)" \
             --allowedTools "Read,Grep,Glob" \
             -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict.md
           cat /tmp/verdict.md
