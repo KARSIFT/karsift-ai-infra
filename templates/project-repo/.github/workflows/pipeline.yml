@@ -199,18 +199,33 @@ jobs:
       integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
-  # Runs after every review. A no-op unless the verdict is FAIL - then it
-  # either re-dispatches the implementer once (with the findings attached)
-  # or, if that retry already happened, escalates to the authority issue
-  # instead of trying a third time. See remediate.yml for the exact rule.
+  # Runs after ci and every review. A no-op unless ci failed outright or the
+  # review verdict is FAIL - then it either re-dispatches the implementer
+  # once (with the failure details attached) or, if that retry already
+  # happened, escalates to the authority issue instead of trying a third
+  # time. See remediate.yml for the exact rule.
+  #
+  # `needs: [ci, review, ...]` + `always()` is required because review.yml
+  # never runs at all when ci fails (review's own `needs: [ci, ...]` has no
+  # always() guard, so it's skipped by default) - without depending on ci
+  # directly and forcing this job to run regardless, a plain CI failure
+  # (no reviewer verdict ever produced) left a PR permanently stuck with no
+  # automatic retry. Found live: gpt-5.3-codex's first two implement
+  # attempts on vocanova-platform-sandbox's VOC-018-T02 both failed CI
+  # outright and needed a human to notice and push a fix by hand.
   remediate:
-    needs: [review, extract-package-path]
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
+    needs: [ci, review, extract-package-path]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/') &&
+      needs.extract-package-path.result == 'success' &&
+      needs.ci.result != 'skipped' && needs.ci.result != 'cancelled'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/remediate.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
       integration_branch: "develop"   # match the value used for implement, above
+      ci_failed: ${{ needs.ci.result == 'failure' }}
     secrets: inherit
 
   # `needs: review` + the `always()` guard below fixes a real race: on a

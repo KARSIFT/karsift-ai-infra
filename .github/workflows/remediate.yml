@@ -1,16 +1,26 @@
 name: remediate (reusable)
 
 # Closes the loop that used to require a human to notice: when the reviewer
-# returns FAIL, this automatically re-dispatches the implementer once, with
-# the reviewer's findings included as required reading, then - if that
-# retry also fails review - stops and escalates to the authority issue
-# instead of trying a third time. Two attempts total, same cap implement.yml
-# already enforced for its own internal failures; this just closes the gap
-# where an implementer *success* followed by a reviewer *FAIL* previously
-# went nowhere until a human happened to check.
+# returns FAIL, OR when CI itself fails outright (before review ever runs -
+# review needs a green CI to even start, see pipeline.yml's `review` job),
+# this automatically re-dispatches the implementer once, with the failure
+# details included as required reading, then - if that retry also fails -
+# stops and escalates to the authority issue instead of trying a third time.
+# Two attempts total, same cap implement.yml already enforced for its own
+# internal failures.
+#
+# The CI-failure path was added 2026-07-24 after finding it live: a plain CI
+# failure (a formatting slip, a cross-package module-resolution gap) left a
+# PR permanently stuck with no automatic retry, because review.yml never ran
+# to produce a verdict for this job to react to - the pre-existing FAIL-only
+# design had a blind spot for exactly the failure mode most likely on a
+# vendor swap's first real runs (gpt-5.3-codex's first two implement
+# attempts on VOC-018-T02 both needed a human to notice and push a fix by
+# hand). Requires pipeline.yml's `remediate` job to itself run on a CI
+# failure now (see that file), passing `ci_failed` through as an input.
 #
 # A PASS, PASS WITH NON-BLOCKING FINDINGS, or no verdict yet (review hasn't
-# posted) are all no-ops here - this only ever acts on an explicit FAIL.
+# posted, and CI didn't fail either) is still a no-op.
 
 on:
   workflow_call:
@@ -26,6 +36,11 @@ on:
         required: false
         type: string
         default: "develop"
+      ci_failed:
+        description: "Whether the ci job on this PR failed outright (pipeline.yml passes needs.ci.result == 'failure')."
+        required: false
+        type: string
+        default: "false"
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false
@@ -36,7 +51,8 @@ jobs:
   decide:
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: read
+      actions: read
+      pull-requests: write
       issues: write
     outputs:
       should_retry: ${{ steps.parse.outputs.should_retry }}
@@ -55,6 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
+          CI_FAILED: ${{ inputs.ci_failed }}
         run: |
           set -euo pipefail
 
@@ -94,17 +111,22 @@ jobs:
           # decoration - this checks for that exact anchor instead of
           # pattern-matching whatever prose/heading style the model chose
           # this time.
-          if ! echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*FAIL[[:space:]]*$'; then
+          has_fail_verdict=false
+          if echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*FAIL[[:space:]]*$'; then
+            has_fail_verdict=true
+          fi
+
+          if [ "$CI_FAILED" != "true" ] && [ "$has_fail_verdict" = "false" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
-            echo "No FAIL verdict present - nothing to remediate."
+            echo "No FAIL verdict and CI did not fail - nothing to remediate."
             exit 0
           fi
 
           if [ -z "$task_id" ] || [ -z "$change_id" ] || [ -z "$issue_number" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
-            echo "FAIL verdict present but could not parse task_id/change_id/issue_number from the PR body - refusing to guess, leaving this for a human." >&2
+            echo "A retry condition is present but task_id/change_id/issue_number could not be parsed from the PR body - refusing to guess, leaving this for a human." >&2
             exit 0
           fi
 
@@ -113,14 +135,71 @@ jobs:
           if [ "$next_attempt" -gt 2 ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            reason="was reviewed and failed"
+            [ "$CI_FAILED" = "true" ] && reason="failed CI"
             gh issue comment "$issue_number" --body \
-              "Attempt $attempt of 2 was reviewed and failed. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
+              "Attempt $attempt of 2 $reason. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
             exit 0
           fi
 
           echo "should_retry=true" >> "$GITHUB_OUTPUT"
           echo "next_attempt=$next_attempt" >> "$GITHUB_OUTPUT"
-          echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
+          if [ "$CI_FAILED" = "true" ]; then
+            echo "CI failed on attempt $attempt - will retry as attempt $next_attempt."
+          else
+            echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
+          fi
+
+      # review.yml posts its own "**Independent verification" comment that
+      # implement.yml's "Fetch prior review findings, if this is a retry"
+      # step already knows how to find and hand to the implementer as
+      # required reading. A CI failure never produces that comment (review
+      # never ran), so the retry would otherwise be blind - no worse odds
+      # than the first attempt, defeating the point of a retry. Posting a
+      # comment in the SAME shape (the same "**Independent verification"
+      # prefix, the same "VERDICT: FAIL" anchor) reuses that exact mechanism
+      # for a CI failure without needing any change to implement.yml at all.
+      - name: Attach CI failure output as retry context, if CI failed
+        if: inputs.ci_failed == 'true' && steps.parse.outputs.next_attempt != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          # remediate.yml runs as a job within the SAME overall workflow run
+          # as the ci job that just failed (pipeline.yml's `remediate` job
+          # calls this workflow directly, not via a separate dispatch) - so
+          # $GITHUB_RUN_ID here is already the right run to look in, no SHA-
+          # based run discovery needed.
+          ci_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q '.jobs[] | select(.name == "ci / ci") | .databaseId' | head -1)
+
+          if [ -n "$ci_job_id" ]; then
+            # Raw job log, timestamps/ANSI codes and all - noisier than a
+            # cleaned excerpt would be, but real signal beats a prettier
+            # blind retry. Tail-bounded so an unusually verbose failure
+            # (a long dependency-install log, say) doesn't blow out the
+            # implementer's prompt size.
+            log_tail=$(gh api "repos/${{ github.repository }}/actions/jobs/$ci_job_id/logs" | tail -150)
+          else
+            log_tail="(could not locate the ci / ci job's log for this run)"
+          fi
+
+          {
+            echo "**Independent verification - CI failure, not a reviewer verdict**"
+            echo
+            echo "VERDICT: FAIL"
+            echo
+            echo "CI failed on this attempt before independent review could run. Fix"
+            echo "whatever this points at, not just the symptom. Last ~150 lines of the"
+            echo "\`ci / ci\` job's log:"
+            echo
+            echo '```'
+            echo "$log_tail"
+            echo '```'
+          } > /tmp/ci-failure-comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/ci-failure-comment.md
 
   retry:
     needs: decide
