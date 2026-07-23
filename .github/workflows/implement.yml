@@ -214,6 +214,15 @@ jobs:
           prompt-file: /tmp/implement-prompt.txt
           permission-profile: ":workspace"
           model: ${{ steps.model.outputs.model }}
+          # codex-action's own default text.verbosity ("low") isn't accepted
+          # by every model - gpt-5.2-codex rejected it outright ("Unsupported
+          # value: 'low' is not supported with the 'gpt-5.2-codex' model.
+          # Supported values are: 'medium'."), found on this exact model's
+          # first live implement run. Forcing medium here works for every
+          # model tried so far; a future model swap in config/roles.yml
+          # should re-check this against that model's own supported values
+          # rather than assuming medium is universal.
+          codex-args: '["-c", "model_verbosity=\"medium\""]'
 
       - name: Commit and push
         id: commit
