@@ -182,13 +182,13 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -uo pipefail
+          claude_exit=0
           claude --model "${{ steps.model.outputs.model }}" \
             --bare \
             --append-system-prompt "$(cat karsift-ai-infra/prompts/review.md)" \
             --allowedTools "Read,Grep,Glob" \
             --output-format json \
-            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json 2> /tmp/verdict-stderr.txt
-          claude_exit=$?
+            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json 2> /tmp/verdict-stderr.txt || claude_exit=$?
 
           echo "--- claude stderr (if any) ---"
           cat /tmp/verdict-stderr.txt || true

@@ -327,11 +327,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -uo pipefail
+          claude_exit=0
           claude --model "${{ steps.model.outputs.model }}" \
             --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
             --output-format json \
-            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json 2> /tmp/planner-stderr.txt
-          claude_exit=$?
+            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json 2> /tmp/planner-stderr.txt || claude_exit=$?
 
           echo "--- claude stderr (if any) ---"
           cat /tmp/planner-stderr.txt || true
