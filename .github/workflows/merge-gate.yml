@@ -272,11 +272,16 @@ jobs:
             exit 1
           fi
 
+      # --delete-branch: these are always throwaway agent/plan-prefixed task
+      # branches, never the integration branch itself (release.yml's own
+      # develop -> main promotion merge is a separate job in a separate
+      # file and does not use this flag - deleting develop would be
+      # catastrophic, but nothing here ever merges that branch).
       - name: Merge
         if: steps.check.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge ${{ github.event.issue.number }} --squash
+        run: gh pr merge ${{ github.event.issue.number }} --squash --delete-branch
 
       - name: Check for GitHub App credentials
         id: has-app
@@ -343,10 +348,13 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v4
+      # --delete-branch: same reasoning as approve-and-merge's Merge step
+      # above - always a throwaway agent/plan-prefixed branch here, never
+      # the integration branch.
       - name: Merge automatically
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge ${{ github.event.pull_request.number }} --squash
+        run: gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch
 
       - name: Check for GitHub App credentials
         id: has-app
