@@ -214,6 +214,23 @@ jobs:
           prompt-file: /tmp/implement-prompt.txt
           permission-profile: ":workspace"
           model: ${{ steps.model.outputs.model }}
+          # codex-action's own actor-permission check queries the standard
+          # collaborator-permission API for whoever triggered the run - which
+          # resolves to karsift-ai-infra-bot[bot] (a GitHub App identity, not
+          # a plain user) whenever this job runs as part of a chain that
+          # traces back to a PR the bot itself opened or pushed to (e.g. a
+          # remediate.yml retry, or plan-from-issue's downstream implement
+          # dispatch) rather than a human's direct workflow_dispatch. That
+          # lookup can't resolve a GitHub App the same way it resolves a
+          # user, so it comes back "none" and the action refuses to run -
+          # found live on VOC-020-T00's first remediate retry ("Actor
+          # 'karsift-ai-infra-bot[bot]' is not permitted to run this action
+          # ... Detected permission: 'none'"), even though the App
+          # genuinely has write access via its installation permissions.
+          # `allow-bots` only covers the generic github-actions[bot] identity
+          # (not our custom App), so this repo's actual bot identity has to
+          # be named explicitly via allow-bot-users instead.
+          allow-bot-users: "karsift-ai-infra-bot[bot]"
           # codex-action's own default text.verbosity ("low") isn't accepted
           # by every model - gpt-5.2-codex rejected it outright ("Unsupported
           # value: 'low' is not supported with the 'gpt-5.2-codex' model.
