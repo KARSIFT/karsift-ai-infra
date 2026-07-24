@@ -21,25 +21,43 @@ name: review (reusable)
 # PILOT (2026-07-25): rewritten a second time, reviewer-only, from
 # openai/codex-action to a raw `opencode` CLI invocation (OpenCode -
 # opencode.ai - a model-agnostic coding-agent client, not itself a vendor).
-# Founder's explicit reason: cost - OpenCode Zen gives pass-through,
-# zero-markup pricing across ~75 providers under one API key, so the
-# reviewer role can run on a genuinely cheaper, still coding-tuned model
-# (opencode/kimi-k2.7-code, $0.95/$4.00 per 1M) instead of being stuck
-# choosing among OpenAI's own tiers. There is no official reusable action for
-# this the way openai/codex-action or anthropics/claude-code-action exist -
-# OpenCode's own `anomalyco/opencode/github@latest` Action is built for
-# interactive `/opencode` PR-comment mentions, not a workflow_call/one-shot
-# dispatch like this job, so it isn't used here. `--permissions read` is
-# this run's equivalent to codex-action's `:read-only` profile - it's what
-# preserves the no-write, no-merge guarantee for this role under the new
-# provider. This pilot is reviewer-only by explicit founder instruction -
-# implementer and planner stay on openai/codex-action; do not extend this
-# pattern to those roles without a separate explicit decision.
+# Founder's explicit reason: cost - an existing OpenCode Go subscription
+# ($10/month) unlocks a set of `opencode-go/`-prefixed models, letting the
+# reviewer role run on a coding-tuned model (opencode-go/kimi-k2.7-code)
+# without paying OpenAI's own per-token tiers. There is no official reusable
+# action for this the way openai/codex-action or anthropics/claude-code-action
+# exist - OpenCode's own `anomalyco/opencode/github@latest` Action is built
+# for interactive `/opencode` PR-comment mentions, not a workflow_call/
+# one-shot dispatch like this job, so it isn't used here.
 #
-# Needs OPENCODE_ZEN_API_KEY (from opencode.ai/auth) as a repo/org secret on
-# the calling project - same Free-plan-org private-repo caveat as
-# OPENAI_API_KEY documented in the project template's pipeline.yml (org
-# secrets can silently not reach a private repo; set at repo level too if so).
+# `opencode run` (the actual installed CLI, v1.18.5 as of this pilot) has NO
+# `--permissions` or `--quiet` flag - an earlier version of this same step
+# assumed both existed (from web-fetched docs that turned out unreliable -
+# see config/roles.yml's correction note) and every run hard-failed
+# immediately on the rejected `--permissions` flag, never even reaching a
+# model. Real read-only enforcement is agent-based: a `reviewer` agent is
+# defined in a generated `opencode.jsonc` (see "Configure opencode" step
+# below) with every permission key explicitly `allow` (read/grep/glob/list)
+# or `deny` (everything else - edit, bash, webfetch, websearch, task,
+# todowrite, external_directory, question, skill, lsp, doom_loop) - this is
+# what preserves the no-write, no-merge guarantee for this role, the
+# equivalent of codex-action's `:read-only` profile. `--format json` gives
+# structured nd-JSON events instead of the default formatted output (which
+# mixes in ANSI color codes and decorative tool-call trace lines even when
+# stdout isn't a TTY) - the "Extract verdict text" step below pulls out only
+# `type: "text"` events' `part.text`, the model's actual response.
+#
+# This pilot is reviewer-only by explicit founder instruction - implementer
+# and planner stay on openai/codex-action; do not extend this pattern to
+# those roles without a separate explicit decision.
+#
+# Needs OPENCODE_API_KEY (NOT OPENCODE_ZEN_API_KEY - an earlier version of
+# this pilot used that name, tied to OpenCode Zen's separate pay-as-you-go
+# balance, which is unfunded; the Go-subscription key is OPENCODE_API_KEY)
+# as a repo/org secret on the calling project - same Free-plan-org
+# private-repo caveat as OPENAI_API_KEY documented in the project template's
+# pipeline.yml (org secrets can silently not reach a private repo; set at
+# repo level too if so).
 
 on:
   workflow_call:
@@ -57,7 +75,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      OPENCODE_ZEN_API_KEY:
+      OPENCODE_API_KEY:
         required: true
 
 jobs:
@@ -203,24 +221,90 @@ jobs:
       - name: Install opencode
         run: curl -fsSL https://opencode.ai/install | bash
 
+      # Read-only enforcement lives here, not in a CLI flag - see this file's
+      # header comment for why `run` has no `--permissions`/`--quiet` flag to
+      # use instead. Every permission key from OpenCode's own published
+      # schema (https://opencode.ai/config.json, $defs.PermissionConfig) is
+      # set explicitly so nothing falls through to an implicit default.
+      - name: Configure opencode
+        run: |
+          cat > opencode.jsonc <<'EOF'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "agent": {
+              "reviewer": {
+                "description": "Independent read-only reviewer - never edits or executes",
+                "mode": "primary",
+                "permission": {
+                  "read": "allow",
+                  "grep": "allow",
+                  "glob": "allow",
+                  "list": "allow",
+                  "edit": "deny",
+                  "bash": "deny",
+                  "webfetch": "deny",
+                  "websearch": "deny",
+                  "task": "deny",
+                  "todowrite": "deny",
+                  "external_directory": "deny",
+                  "question": "deny",
+                  "skill": "deny",
+                  "lsp": "deny",
+                  "doom_loop": "deny"
+                }
+              }
+            }
+          }
+          EOF
+
       # No allow-bot-users equivalent needed: opencode has no actor-permission
       # gate the way codex-action does (that check was specific to resolving
       # a GitHub Actions actor identity against repo-collaborator permissions
       # before running - opencode has no such concept, it just runs with
-      # whatever credentials/permissions flags it's given). `--permissions
-      # read` is the write/edit/bash-denying equivalent of codex-action's
-      # `:read-only` profile - this role must never gain write, edit, or
-      # execute tools. `--quiet` suppresses the interactive spinner so stdout
-      # capture below is clean model output only, not progress noise.
+      # whatever credentials/permissions the active agent config grants).
+      #
+      # --format json gives nd-JSON events instead of decorated text (see
+      # header comment) - "Extract verdict text" below pulls the actual
+      # response out of it. No --auto flag: every permission the `reviewer`
+      # agent could need is already explicitly allow/deny above, so nothing
+      # should ever hit an "ask" prompt this run could hang on; --auto would
+      # only paper over a permission key I forgot to enumerate, which is
+      # exactly the failure mode worth surfacing (a hang/timeout), not
+      # silently auto-approving.
       - name: Run independent verification
         id: verify
         env:
-          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           opencode run "$(cat /tmp/review-prompt.txt)" \
+            --agent reviewer \
             --model "${{ steps.model.outputs.model }}" \
-            --permissions read \
-            --quiet > /tmp/verdict.md
+            --format json > /tmp/verdict-events.jsonl
+
+      - name: Extract verdict text
+        run: |
+          python3 - <<'PYEOF'
+          import json
+
+          chunks = []
+          with open("/tmp/verdict-events.jsonl") as f:
+              for line in f:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  event = json.loads(line)
+                  if event.get("type") == "text":
+                      chunks.append(event["part"]["text"])
+
+          if not chunks:
+              raise SystemExit(
+                  "opencode produced no text response - see /tmp/verdict-events.jsonl "
+                  "in this job's logs for the raw event stream (likely an error event)."
+              )
+
+          with open("/tmp/verdict.md", "w") as f:
+              f.write("".join(chunks))
+          PYEOF
 
       - name: Show verdict
         run: cat /tmp/verdict.md

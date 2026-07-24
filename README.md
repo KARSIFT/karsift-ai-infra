@@ -27,7 +27,7 @@ purpose and temporarily** (as of 2026-07-24): the Anthropic Console org this rep
 under was disabled (a billing/account issue, not a karsift-ai-infra bug), with no fallback Claude
 access available (no subscription auth, no Bedrock/Vertex set up) at the time, so all three roles ran
 on `openai/codex-action` for a stretch. **As of 2026-07-25, reviewer is on a cost-driven pilot to
-`opencode`/`opencode.ai`** (OpenCode Zen, model `opencode/kimi-k2.7-code`) - a model-agnostic CLI, not
+`opencode`/`opencode.ai`** (an OpenCode Go subscription, model `opencode-go/kimi-k2.7-code`) - a model-agnostic CLI, not
 the OpenAI vendor implementer/planner still run on, so cross-vendor independence for review is
 restored (against OpenAI, even though neither side is Claude). This is reviewer-only, founder-directed,
 and being watched against real verdicts before any consideration of extending it to

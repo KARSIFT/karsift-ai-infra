@@ -98,25 +98,42 @@ implementer_escalation: gpt-5.6-sol
 # quality gap.
 #
 # PILOT (2026-07-25): moved again, this time off OpenAI entirely, to
-# opencode/kimi-k2.7-code via OpenCode (opencode.ai) - a model-agnostic CLI
-# client, not itself a vendor. Kimi K2.7-Code is Moonshot AI's coding-tuned
-# checkpoint, $0.95/$4.00 per 1M tokens through OpenCode Zen's pass-through
-# pricing - meaningfully cheaper than gpt-5.6-luna's $1-2/$6-9 while staying
-# on a model explicitly tuned for code review rather than jumping straight to
-# the cheapest available tier (deepseek-v4-flash at $0.14/$0.28) untested.
-# review.yml's execution step was rewritten from openai/codex-action to a
-# raw `opencode run` CLI invocation - see that file's own header comment.
-# This ALSO ends the OpenAI same-vendor-compromise concern from above for
-# review specifically: reviewer and implementer are cross-vendor again
-# (OpenCode/Kimi vs OpenAI/Codex), even though neither is Claude. Founder
-# explicitly asked to pilot this on reviewer only and watch real verdicts
-# before considering it for implementer/planner too - do not swap those
-# roles to OpenCode based on this comment alone.
-reviewer: opencode/kimi-k2.7-code
+# opencode-go/kimi-k2.7-code via OpenCode (opencode.ai) - a model-agnostic
+# CLI client, not itself a vendor. Kimi K2.7-Code is Moonshot AI's
+# coding-tuned checkpoint. Founder has an OpenCode Go subscription
+# ($10/month, opencode.ai/go) - Go-tier models use the `opencode-go/` model
+# prefix and are billed against the Go plan, NOT the `opencode/` prefix
+# (OpenCode Zen's separate pay-as-you-go billing/balance - confirmed live:
+# `opencode/kimi-k2.7-code` returned "Insufficient balance" against an
+# unfunded Zen balance, while the identical call against
+# `opencode-go/kimi-k2.7-code` succeeded immediately with the same
+# credential). Auth is OPENCODE_API_KEY (not OPENCODE_ZEN_API_KEY, which an
+# earlier version of this same pilot incorrectly required - see git history
+# if resurrecting that). CORRECTION: an earlier version of this comment
+# cited a detailed per-model Zen pricing table (specific $/1M figures for
+# dozens of models across many vendors) sourced from a web fetch that turned
+# out to be fabricated - it even inexplicably listed our own private
+# gpt-5.6-sol/terra/luna model names as if they were generic Zen catalog
+# entries, which was the tell. Don't trust a fetched pricing/model-catalog
+# page for this vendor without cross-checking `opencode models` live
+# against a real authenticated session - the CLI's own output is the only
+# verified-accurate source found this session. review.yml's execution step
+# was rewritten from openai/codex-action to a raw `opencode run
+# --format json` CLI invocation with a read-only `reviewer` agent defined in
+# a generated opencode.jsonc - see that file's own header comment for why
+# (the CLI has no `--permissions`/`--quiet` flags on `run`, contrary to an
+# earlier, also-wrong assumption in this same pilot). This ALSO ends the
+# OpenAI same-vendor-compromise concern from above for review specifically:
+# reviewer and implementer are cross-vendor again (OpenCode/Kimi vs
+# OpenAI/Codex), even though neither is Claude. Founder explicitly asked to
+# pilot this on reviewer only and watch real verdicts before considering it
+# for implementer/planner too - do not swap those roles to OpenCode based on
+# this comment alone.
+reviewer: opencode-go/kimi-k2.7-code
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
-reviewer_fast_retry: opencode/kimi-k2.7-code
+reviewer_fast_retry: opencode-go/kimi-k2.7-code
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
