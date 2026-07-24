@@ -297,6 +297,15 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      # --bare: recommended by Anthropic's own docs for scripted/CI calls -
+      # skips hook/skill/plugin/MCP-server/auto-memory/CLAUDE.md discovery
+      # this stateless planner role never needed (its own instructions are
+      # prompts/plan.md, read explicitly into the prompt file above).
+      # --output-format json purely for cost/cache visibility (see
+      # review.yml's identical change for the fuller rationale) - the
+      # planner's actual output is the files it writes via Write/Edit, not
+      # anything parsed from stdout, so switching formats here doesn't
+      # affect the needs-info file-marker check below.
       - name: Run planner
         id: planner
         continue-on-error: true
@@ -305,8 +314,15 @@ jobs:
         run: |
           set -euo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
+            --bare \
             --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-            -p "$(cat /tmp/plan-prompt.txt)"
+            --output-format json \
+            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json
+
+          jq -r '.result' /tmp/planner-raw.json || cat /tmp/planner-raw.json
+
+          echo "--- cost/cache telemetry ---"
+          jq '{total_cost_usd, usage}' /tmp/planner-raw.json || true
 
       # Branches the whole rest of the job. If the planner asked a question
       # instead of drafting, every downstream package-handling step below is

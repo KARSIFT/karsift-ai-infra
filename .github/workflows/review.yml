@@ -137,16 +137,45 @@ jobs:
       # above actually apply; before this, the static instructions and the
       # never-repeating package content were one prefix, invalidating any
       # would-be cache hit on the static portion.
+      #
+      # --bare: Anthropic's own docs name this "the recommended mode for
+      # scripted and SDK calls" - it skips auto-discovery of hooks, skills,
+      # plugins, MCP servers, auto memory, and the *calling project's own*
+      # CLAUDE.md (this job's working directory is the checked-out project
+      # repo, which has one), none of which this stateless, single-purpose
+      # reviewer role needs or was ever intentionally relying on - the
+      # review instructions it actually needs are prompts/review.md, passed
+      # explicitly above. Not yet measured how much this saves by itself;
+      # watch actual cost across the next few reviews (see the cost-logging
+      # step below, added at the same time specifically to make that
+      # measurable instead of guessed at).
+      #
+      # --output-format json: the plain-text default gave zero visibility
+      # into actual token/cache/cost usage, making it impossible to confirm
+      # whether prompt caching (above) was doing anything - found this gap
+      # live after a user-reported $1.75-per-task Claude spend with no way
+      # to verify what the scoping/caching/model-routing changes had
+      # actually done. `.result` holds the same verdict text the old plain-
+      # text output was; `.total_cost_usd` and the per-model usage block
+      # (including cache_read_input_tokens/cache_creation_input_tokens) are
+      # now logged below for exactly this kind of debugging going forward.
       - name: Run independent verification
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
+            --bare \
             --append-system-prompt "$(cat karsift-ai-infra/prompts/review.md)" \
             --allowedTools "Read,Grep,Glob" \
-            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict.md
+            --output-format json \
+            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json
+
+          jq -r '.result' /tmp/verdict-raw.json > /tmp/verdict.md
           cat /tmp/verdict.md
+
+          echo "--- cost/cache telemetry ---"
+          jq '{total_cost_usd, usage}' /tmp/verdict-raw.json || true
 
       - name: Post verification comment
         env:
