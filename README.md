@@ -11,9 +11,9 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does | Current occupant |
 |---|---|---|
-| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | `openai/codex-action` |
-| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. | `openai/codex-action` |
-| `reviewer` | Independent, read-only verification (`opencode run --permissions read`). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `opencode` CLI (OpenCode Zen) - pilot, 2026-07-25 |
+| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | `opencode run --agent build` (OpenCode Go, `qwen3.7-max`) |
+| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. | `opencode run --agent build` (OpenCode Go, `kimi-k2.7-code`); escalation stays on `openai/codex-action` (`gpt-5.6-sol`) |
+| `reviewer` | Independent, read-only verification (a generated `opencode.jsonc` with an explicit-deny-by-default `reviewer` agent). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `opencode run --agent reviewer` (OpenCode Go, `deepseek-v4-pro`) |
 
 **The only file that names a specific model or vendor is `config/roles.yml`.** Swapping any role
 to a different model/provider means editing that one file plus the relevant workflow's execution
@@ -26,16 +26,21 @@ a vendor with the implementer isn't independent, it's self-review. **That princi
 purpose and temporarily** (as of 2026-07-24): the Anthropic Console org this repo's Claude access ran
 under was disabled (a billing/account issue, not a karsift-ai-infra bug), with no fallback Claude
 access available (no subscription auth, no Bedrock/Vertex set up) at the time, so all three roles ran
-on `openai/codex-action` for a stretch. **As of 2026-07-25, reviewer is on a cost-driven pilot to
-`opencode`/`opencode.ai`** (an OpenCode Go subscription, model `opencode-go/kimi-k2.7-code`) - a model-agnostic CLI, not
-the OpenAI vendor implementer/planner still run on, so cross-vendor independence for review is
-restored (against OpenAI, even though neither side is Claude). This is reviewer-only, founder-directed,
-and being watched against real verdicts before any consideration of extending it to
-implementer/planner - see `config/roles.yml`'s and `review.yml`'s own header comments for the full
-reasoning and exact revert path. Implementer and planner remain on `openai/codex-action`
-(`gpt-5.6-terra`, escalating to `gpt-5.6-sol` on implementer's last retry). Don't treat a `PASS`
-verdict as a long-settled guarantee here - both the OpenAI-only stretch and this new pilot are
-still-being-verified configurations, not a finished state.
+on `openai/codex-action` for a stretch.
+
+**As of 2026-07-25, all three roles run through OpenCode** (an OpenCode Go subscription) instead,
+each on a different underlying model: `implementer` on `kimi-k2.7-code` (Moonshot AI), `reviewer` on
+`deepseek-v4-pro` (DeepSeek), `planner` on `qwen3.7-max` (Alibaba/Qwen). This is genuine cross-*model*
+independence between implementer and reviewer (different labs, different checkpoints), but it is
+**not** cross-*vendor* independence the way the OpenAI-vs-Claude split used to be - both roles now go
+through the same `opencode` CLI and the same OpenCode Go billing/account. `implementer_escalation`
+(the last-retry fallback) deliberately stayed on `openai/codex-action` (`gpt-5.6-sol`) as the one
+genuinely separate infrastructure stack, reserved for the attempt that matters most. Don't treat a
+`PASS` verdict as a long-settled guarantee here - this whole configuration is freshly built and still
+being verified against real runs, not a finished state. See `config/roles.yml`'s and each workflow's
+own header comments for the full reasoning, the real OpenCode CLI details (no `--permissions`/
+`--quiet` flags, agent-based permission config, `OPENCODE_API_KEY` vs `OPENCODE_ZEN_API_KEY`), and a
+correction note about an earlier fabricated model/pricing table this pilot briefly relied on.
 
 ## What this is not
 

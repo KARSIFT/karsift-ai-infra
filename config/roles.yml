@@ -66,9 +66,32 @@
 # switch to Bedrock/Vertex billing, or a subscription OAuth token) - see
 # [[karsift_founder_gate_workflow]]/[[karsift_bugs_fixed]] memory for context
 # if you're revisiting this later without the live conversation history.
+#
+# SUPERSEDED IN PART (2026-07-25): implementer, reviewer, and planner have
+# all since moved again, to OpenCode (see each role's own value/comment
+# below) - "reviewer and implementer are both OpenAI now" above is no longer
+# true. This block is kept as history for why the OpenAI move happened at
+# all; check the actual `implementer`/`reviewer`/`planner`/
+# `implementer_escalation` values below for current state, not this
+# paragraph. implementer_escalation is the one role still deliberately on
+# OpenAI - see its own comment for why.
 # ############################################################################
 
-implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effective GPT-5.6 tier, see note above (was gpt-5.3-codex; was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
+# MIXED-VENDOR (2026-07-25): implementer itself moved to OpenCode too, after
+# opencode-go/kimi-k2.7-code demonstrated genuinely strong analytical quality
+# as reviewer first (a real PR review that cross-referenced Ent schemas
+# against a raw SQL migration, verified specific field/constraint invariants,
+# and found one well-reasoned Low finding rather than rubber-stamping -
+# VOC-025-T00, PR #72). That's evidence about review/analysis quality
+# specifically, not proof of implementer-quality code writing under real
+# build/test constraints - founder made the call anyway; watch early
+# implement runs' CI/review pass rate to confirm this holds for writing code,
+# not just judging it. implement.yml's execution step is now genuinely
+# mixed-vendor: this role runs via a raw `opencode run --agent build`
+# invocation, while implementer_escalation below deliberately stayed on
+# openai/codex-action - see that file's header comment for why (a real
+# different-vendor fallback for the hardest retry, not just cost).
+implementer: opencode-go/kimi-k2.7-code
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -80,6 +103,13 @@ implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effecti
 # alternative is a human getting paged regardless, so there's little
 # downside to trying harder first. Leave empty to disable escalation
 # entirely and always use `implementer`, even on retry.
+#
+# Deliberately NOT moved to OpenCode alongside `implementer` above (2026-07-25):
+# this is the one remaining case where staying on a fully separate vendor
+# (OpenAI/codex-action, not just a different model under the same OpenCode
+# CLI) matters most - the hardest attempt, one shot left before a human gets
+# paged, is exactly when a genuinely different infrastructure stack (not
+# just a different checkpoint) is worth keeping.
 implementer_escalation: gpt-5.6-sol
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
@@ -122,18 +152,28 @@ implementer_escalation: gpt-5.6-sol
 # --format json` CLI invocation with a read-only `reviewer` agent defined in
 # a generated opencode.jsonc - see that file's own header comment for why
 # (the CLI has no `--permissions`/`--quiet` flags on `run`, contrary to an
-# earlier, also-wrong assumption in this same pilot). This ALSO ends the
-# OpenAI same-vendor-compromise concern from above for review specifically:
-# reviewer and implementer are cross-vendor again (OpenCode/Kimi vs
-# OpenAI/Codex), even though neither is Claude. Founder explicitly asked to
-# pilot this on reviewer only and watch real verdicts before considering it
-# for implementer/planner too - do not swap those roles to OpenCode based on
-# this comment alone.
-reviewer: opencode-go/kimi-k2.7-code
+# earlier, also-wrong assumption in this same pilot).
+#
+# MOVED AGAIN (2026-07-25, same day): after kimi-k2.7-code's strong first
+# review (see implementer's own note above - that result is WHY implementer
+# moved to Kimi), founder asked for a different, well-reputed model for
+# reviewer specifically, so it isn't just re-checking implementer's own
+# model under another name. DeepSeek has the strongest public reasoning/
+# coding-benchmark reputation of the models available on this OpenCode Go
+# plan (see `opencode models` for the real live catalog - don't trust a
+# fetched pricing page, see the correction note above). Note this is
+# cross-MODEL independence (different lab: DeepSeek vs Moonshot AI), not
+# cross-VENDOR the way OpenCode-vs-OpenAI was - both implementer and
+# reviewer now run through the same `opencode` CLI/OpenCode Go plan, just
+# different underlying checkpoints. Whether that's still enough independence
+# to catch what a same-vendor compromise would miss is exactly what watching
+# real verdicts here is meant to establish - don't assume it's equivalent to
+# the OpenAI-vs-OpenCode split without evidence.
+reviewer: opencode-go/deepseek-v4-pro
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
-reviewer_fast_retry: opencode-go/kimi-k2.7-code
+reviewer_fast_retry: opencode-go/deepseek-v4-pro
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
@@ -141,4 +181,13 @@ reviewer_fast_retry: opencode-go/kimi-k2.7-code
 # implementer output. Founder's explicit choice (2026-07-24): gpt-5.6-terra, the
 # same cost-effective tier as implementer - not gpt-5.6-sol (tried first, reverted
 # on cost grounds, see reviewer's note above for the same reasoning applied here).
-planner: gpt-5.6-terra
+#
+# MOVED (2026-07-25): planner too moved to OpenCode - opencode-go/qwen3.7-max,
+# founder's explicit choice of "a different, slightly stronger model" than
+# implementer's kimi-k2.7-code. Different lab again (Alibaba/Qwen vs Moonshot/
+# Kimi vs DeepSeek/reviewer) and Qwen's own flagship tier ("max", not "plus").
+# Still no independence requirement to satisfy here (see paragraph above) -
+# this is purely a quality/cost choice, not a cross-checking one.
+# plan.yml's execution step was rewritten from openai/codex-action to
+# `opencode run --agent build` the same way implement.yml's was.
+planner: opencode-go/qwen3.7-max

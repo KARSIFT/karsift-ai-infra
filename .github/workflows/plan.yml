@@ -15,6 +15,15 @@ name: plan (reusable)
 # requirement the way implementer/reviewer do, so this swap is lower-stakes
 # than review.yml's, but it's still the same underlying provider outage).
 #
+# PILOT (2026-07-25): rewritten a second time, to a raw `opencode` CLI
+# invocation (opencode-go/qwen3.7-max - see config/roles.yml). Same reasoning
+# as implement.yml/review.yml's own OpenCode moves - see their header
+# comments for the CLI-specific details (no --permissions/--quiet flags,
+# agent-based permission config, OPENCODE_API_KEY vs OPENCODE_ZEN_API_KEY).
+# Planner uses OpenCode's built-in `build` agent (full read/write access,
+# same as implement.yml) since it needs to create real files, not the
+# restricted read-only `reviewer` agent review.yml defines.
+#
 # The request can come from three places, mutually exclusive per run:
 #   - `request`: free text, written directly for this dispatch.
 #   - `source_document_path`: an existing document already in the repo.
@@ -90,7 +99,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      OPENAI_API_KEY:
+      OPENCODE_API_KEY:
         required: true
       KARSIFT_BOT_APP_ID:
         description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
@@ -311,25 +320,28 @@ jobs:
       # disabled (a billing/account issue) - the "successful" run predated
       # the disablement, every "failing" one came after it. --bare was never
       # actually confirmed broken; don't avoid it on that basis if Claude is
-      # restored here later. See config/roles.yml's header comment for the
-      # full context on why this step now uses openai/codex-action instead.
+      # restored here later.
       #
-      # permission-profile ":workspace" (not ":read-only" - contrast with
-      # review.yml): the planner needs to create real files (the draft
-      # package directory), same requirement implement.yml's own use of
-      # ":workspace" documents. allow-bot-users: this can in principle run
-      # under the karsift-ai-infra-bot[bot] actor identity too (a
-      # plan-from-issue reply chain), same fix as implement.yml/review.yml.
+      # --agent build (not review.yml's restricted `reviewer` agent): the
+      # planner needs to create real files (the draft package directory),
+      # same requirement implement.yml's own use of the built-in full-access
+      # agent documents. --auto for the same reason as implement.yml - avoids
+      # a headless hang on the two permissions `build` marks "ask" rather
+      # than allow/deny outright. No allow-bot-users equivalent needed -
+      # opencode has no actor-permission gate the way codex-action did.
+      - name: Install opencode
+        run: curl -fsSL https://opencode.ai/install | bash
+
       - name: Run planner
         id: planner
         continue-on-error: true
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: /tmp/plan-prompt.txt
-          permission-profile: ":workspace"
-          model: ${{ steps.model.outputs.model }}
-          allow-bot-users: "karsift-ai-infra-bot[bot]"
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          opencode run "$(cat /tmp/plan-prompt.txt)" \
+            --agent build \
+            --model "${{ steps.model.outputs.model }}" \
+            --auto
 
       # Branches the whole rest of the job. If the planner asked a question
       # instead of drafting, every downstream package-handling step below is

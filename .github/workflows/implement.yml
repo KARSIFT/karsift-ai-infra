@@ -16,6 +16,19 @@ name: implement (reusable)
 # "Run implementer" step and config/roles.yml's `implementer` value - the
 # role/prompt/branch/commit/PR machinery around it is provider-agnostic by
 # design and needs no changes in review.yml/merge-gate.yml either way.
+#
+# MIXED-VENDOR (2026-07-25): `implementer` itself moved to OpenCode
+# (opencode-go/kimi-k2.7-code - see config/roles.yml), but
+# `implementer_escalation` deliberately stayed on openai/codex-action
+# (gpt-5.6-sol) as a genuinely different, strong fallback for the one retry
+# that matters most - not just a cost lever this time, a real cross-vendor
+# second opinion on the hardest attempt. That means THIS file, unlike
+# review.yml/plan.yml, now has two real execution steps ("Run implementer
+# (opencode)" and "Run implementer (openai/codex-action escalation)"),
+# gated by `steps.model.outputs.role`, not one - a future full move of
+# implementer_escalation to OpenCode too would let this collapse back to a
+# single step, but don't do that without checking config/roles.yml's actual
+# current values first.
 
 on:
   workflow_call:
@@ -48,6 +61,10 @@ on:
         default: "develop"
     secrets:
       OPENAI_API_KEY:
+        description: "Used only for implementer_escalation (gpt-5.6-sol) - see this file's header comment."
+        required: true
+      OPENCODE_API_KEY:
+        description: "Used for the base implementer role (opencode-go/kimi-k2.7-code)."
         required: true
       KARSIFT_BOT_APP_ID:
         description: >
@@ -165,6 +182,7 @@ jobs:
           echo "Resolving implementer as: role=$role (attempt=${{ inputs.attempt }})"
           MODEL=$(bash karsift-ai-infra/config/resolve-model.sh "$role" karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "role=$role" >> "$GITHUB_OUTPUT"
 
       # On a remediation attempt (attempt > 1), the branch/PR from the
       # previous attempt already exists - fetch its most recent review
@@ -222,14 +240,45 @@ jobs:
             fi
           } > /tmp/implement-prompt.txt
 
+      # Two vendor-branched execution steps, gated by which role
+      # steps.model.outputs.role resolved to (see this file's header
+      # comment for why implementer_escalation stayed on a different
+      # vendor). Neither commits or pushes - that's the deterministic
+      # "Commit and push" step below, not something either model is trusted
+      # to do itself. A future full move of implementer_escalation to
+      # OpenCode too would let these collapse back to one step.
+
+      - name: Install opencode
+        if: steps.model.outputs.role == 'implementer'
+        run: curl -fsSL https://opencode.ai/install | bash
+
+      # --agent build uses OpenCode's own built-in full-access agent (real
+      # write/edit/bash needed here, unlike review.yml's restricted
+      # read-only `reviewer` agent) - no custom opencode.jsonc needed.
+      # --auto auto-approves the two permissions `build` itself marks "ask"
+      # (doom_loop, external_directory) rather than denying them outright -
+      # required so a headless CI run can't hang waiting for interactive
+      # approval; safe here because this is a fresh, disposable checkout
+      # with nothing sensitive outside the workspace to protect.
+      - name: Run implementer (opencode)
+        id: implementer-opencode
+        if: steps.model.outputs.role == 'implementer'
+        continue-on-error: true
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          opencode run "$(cat /tmp/implement-prompt.txt)" \
+            --agent build \
+            --model "${{ steps.model.outputs.model }}" \
+            --auto
+
       # codex-action only runs `codex exec` in a sandbox - it never touches
-      # git. Committing, pushing, and opening the PR are deterministic steps
-      # below, not something the model is trusted to do itself. Swapping the
-      # implementer to a different provider/action means changing this one
-      # step - the rest of the job (branch, commit, PR, escalation) doesn't
-      # know or care which model produced the diff.
-      - name: Run implementer
-        id: implementer
+      # git either. Used only for implementer_escalation (attempt 2, a
+      # different vendor from the base implementer above - see this file's
+      # header comment).
+      - name: Run implementer (openai/codex-action escalation)
+        id: implementer-openai
+        if: steps.model.outputs.role == 'implementer_escalation'
         uses: openai/codex-action@v1
         continue-on-error: true
         with:
@@ -263,6 +312,22 @@ jobs:
           # should re-check this against that model's own supported values
           # rather than assuming medium is universal.
           codex-args: '["-c", "model_verbosity=\"medium\""]'
+
+      # Normalizes both branches' outcome into one `steps.implementer.outputs
+      # .outcome` the rest of this job (which doesn't know or shouldn't need
+      # to know which vendor ran) checks - always() so it runs even though
+      # each branch above uses continue-on-error and only one of them ran at
+      # all (the other's outcome is 'skipped', not 'failure').
+      - name: Normalize implementer outcome
+        id: implementer
+        if: always()
+        run: |
+          if [ "${{ steps.model.outputs.role }}" = "implementer_escalation" ]; then
+            outcome="${{ steps.implementer-openai.outcome }}"
+          else
+            outcome="${{ steps.implementer-opencode.outcome }}"
+          fi
+          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
         id: commit
