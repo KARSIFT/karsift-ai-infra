@@ -43,9 +43,41 @@
 #
 # Leave a value empty to use that provider's own action/CLI current default
 # model instead of pinning a version here.
+#
+# ############################################################################
+# TEMPORARY SAME-VENDOR COMPROMISE (2026-07-24) - reviewer and planner moved
+# from Claude Code CLI to openai/codex-action because the Anthropic Console
+# organization behind ANTHROPIC_API_KEY was disabled (billing/account issue on
+# the founder's side, not a karsift-ai-infra bug) and no fallback Claude
+# access (subscription OAuth, Bedrock, Vertex) was available at the time.
+#
+# This is explicitly the same compromise documented above and in
+# implement.yml's header comment as "same-vendor review isn't independent
+# review, it's self-review" - reviewer and implementer are both OpenAI now,
+# which weakens (does not eliminate - different checkpoints still catch
+# different things) the independent-verification guarantee this pipeline is
+# designed around. review.yml/plan.yml's execution steps were rewritten from
+# Claude Code CLI to openai/codex-action to make this possible - reverting
+# needs those files' execution steps changed back, not just this config.
+#
+# REVERT THIS the moment Claude access is restored (fix the Anthropic org, or
+# switch to Bedrock/Vertex billing, or a subscription OAuth token) - see
+# [[karsift_founder_gate_workflow]]/[[karsift_bugs_fixed]] memory for context
+# if you're revisiting this later without the live conversation history.
+# ############################################################################
 
 implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effective GPT-5.6 tier, see note above (was gpt-5.3-codex; was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
-reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/review.md)
+
+# reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
+# the exact same model for both would mean the reviewer never catches
+# anything the implementer itself couldn't have caught, the worst-case
+# version of the same-vendor compromise above. Sol is also the strongest
+# OpenAI model for exactly this kind of long-horizon reasoning/analysis task
+# (state-of-the-art on Terminal-Bench 2.1 and Agents' Last Exam per public
+# benchmarks as of this writing), so it's not a cost-blind pick either -
+# first-pass review quality matters more than shaving cost on the one gate
+# standing between the implementer and a merge.
+reviewer: gpt-5.6-sol
 
 # reviewer_fast_retry (2026-07-24): a cheaper/faster model used ONLY for a
 # remediate.yml retry review (attempt 2) on a package whose declared risk is
@@ -56,14 +88,19 @@ reviewer: claude-sonnet-5        # currently: Claude Code CLI (see prompts/revie
 # way an initial review does, so the case for a lighter model is much
 # stronger there than for review in general. This is a real quality/cost
 # tradeoff, not a free win - if this model starts waving through retries a
-# full Sonnet pass would have caught, raise the risk floor this applies to
-# (or drop it back to empty/reviewer's value) rather than silently letting
-# it ride. Leave empty to disable fast-retry routing entirely and always use
-# `reviewer` for every review, first-pass or retry.
-reviewer_fast_retry: claude-haiku-4-5
+# full `reviewer`-model pass would have caught, raise the risk floor this
+# applies to (or drop it back to empty) rather than silently letting it
+# ride. gpt-5.6-luna is the cheapest GPT-5.6 tier (~1/5 Sol's cost) with only
+# a small aggregate benchmark gap versus Sol/Terra - the same reasoning that
+# made Claude Haiku the prior pick for this exact slot. Leave empty to
+# disable fast-retry routing entirely and always use `reviewer`.
+reviewer_fast_retry: gpt-5.6-luna
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
 # never something an independent AI verifier checks the way review.yml checks
-# implementer output.
-planner: claude-sonnet-5         # currently: Claude Code CLI (see prompts/plan.md)
+# implementer output. gpt-5.6-sol for the same reason as reviewer above: planning
+# (specification/acceptance-criteria/task drafting) is exactly the long-horizon
+# reasoning category Sol leads on, and it's called once per package (not once per
+# implement attempt/retry), so the flagship's cost is easily bounded.
+planner: gpt-5.6-sol

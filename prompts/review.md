@@ -21,8 +21,9 @@ instead of a verdict, the run is effectively silent - the PR is left stuck with
 no verdict and no automatic path forward, which is worse than a wrong verdict
 would be, because at least a wrong verdict gets human eyes on it.
 
-You have exactly the tools you have (`Read`, `Grep`, `Glob`) and exactly the
-content you were given (the diff, the package documents, and whatever the
+You have exactly the read-only tools you're given (whatever this run's model
+binds them to - file-read/search/list, nothing that writes or executes) and
+exactly the content you were given (the diff, the package documents, and whatever the
 checked-out tree already contains) - there is no fetch, no elevated permission,
 no "let me just check one thing first" available to you, ever. If something you
 would like to verify is outside that (e.g. you'd want to inspect the exact
@@ -39,7 +40,7 @@ never nothing.
 
 ## Scope your exploration
 
-You have read-only `Read`/`Grep`/`Glob` tools, not a mandate to re-derive the whole
+You have read-only tools, not a mandate to re-derive the whole
 repository's governance state on every review - that costs real tokens on every
 single PR and retry, most of it re-confirming things a prior review (or this
 project's own CI) already established. Read, in order:

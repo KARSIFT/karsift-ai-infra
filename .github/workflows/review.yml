@@ -5,11 +5,21 @@ name: review (reusable)
 # this role is resolved from THIS repo's own config/roles.yml.
 #
 # Known limitation: the *model* is config-driven (roles.yml), but the
-# *execution step* below is still Claude Code CLI-specific (its own install
-# step, its own --allowedTools flag). Swapping the reviewer role to a
-# different vendor's CLI/action means editing the "Run independent
-# verification" step itself, not just roles.yml - full run-time provider
-# abstraction isn't built yet. Don't claim more decoupling than exists.
+# *execution step* below is still specific to whichever CLI/action fills the
+# role (its own install step, its own permission-profile/tool-restriction
+# flags). Swapping the reviewer role to a different vendor's CLI/action means
+# editing the "Run independent verification" step itself, not just
+# roles.yml - full run-time provider abstraction isn't built yet. Don't claim
+# more decoupling than exists.
+#
+# TEMPORARY (2026-07-24): rewritten from Claude Code CLI to openai/codex-action
+# because the Anthropic Console org behind ANTHROPIC_API_KEY was disabled with
+# no fallback Claude access available - see config/roles.yml's header comment
+# for the full same-vendor-compromise rationale and the explicit note to
+# revert this once Claude access is restored. codex-action's built-in
+# `:read-only` permission profile is what preserves this role's no-write
+# guarantee under the new provider - see the "Run independent verification"
+# step below.
 
 on:
   workflow_call:
@@ -27,7 +37,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
         required: true
 
 jobs:
@@ -106,19 +116,15 @@ jobs:
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "role=$role" >> "$GITHUB_OUTPUT"
 
-      # Static across every single review this pipeline ever runs (same
-      # bytes regardless of project, PR, or attempt) - passed as the system
-      # prompt specifically so Anthropic's prompt caching can hit on it.
-      # Caching is keyed on exact prefix content under the same API key,
-      # not on CLI process/session, so this benefits across separate CI
-      # containers (e.g. attempt 1 vs. attempt 2 of the same PR, or two
-      # unrelated PRs reviewed minutes apart) as long as they land within
-      # the cache TTL - unlike the per-review variable content below, which
-      # never repeats and so never benefits from caching regardless of how
-      # it's passed.
-      - name: Build variable (per-review) prompt
+      # codex-action has no prompt-caching equivalent to Anthropic's, so the
+      # static-instructions/variable-content split that mattered for Claude
+      # Code CLI (system prompt vs. -p text) has no benefit here - back to
+      # one concatenated prompt file, prompts/review.md first.
+      - name: Build prompt
         run: |
           {
+            cat karsift-ai-infra/prompts/review.md
+            echo
             echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
             echo
             echo "## Package under review"
@@ -142,64 +148,34 @@ jobs:
             cat /tmp/pr.diff
           } > /tmp/review-prompt.txt
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      # Read-only tools only, no --dangerously-skip-permissions: the reviewer
-      # role has no repository-write authority here, by design, not just as
-      # an implementation convenience.
+      # :read-only is a codex-action built-in permission profile - what
+      # preserves this role's no-write, no-merge guarantee under the new
+      # provider, the same guarantee --allowedTools "Read,Grep,Glob" gave
+      # under Claude Code CLI. allow-bot-users: this job can run under the
+      # karsift-ai-infra-bot[bot] actor identity (a re-review triggered by a
+      # remediate.yml retry's own push), which codex-action's actor-
+      # permission check can't resolve via the normal collaborator-lookup
+      # API - same root cause and same fix as implement.yml's identical note.
       #
-      # prompts/review.md goes in via --append-system-prompt (static, cache-
-      # eligible, identical every run), not concatenated into the -p prompt
-      # text as before - splitting the two is what makes the caching note
-      # above actually apply; before this, the static instructions and the
-      # never-repeating package content were one prefix, invalidating any
-      # would-be cache hit on the static portion.
-      #
-      # --bare: Anthropic's own docs name this "the recommended mode for
-      # scripted and SDK calls" - it skips auto-discovery of hooks, skills,
-      # plugins, MCP servers, auto memory, and the *calling project's own*
-      # CLAUDE.md (this job's working directory is the checked-out project
-      # repo, which has one), none of which this stateless, single-purpose
-      # reviewer role needs or was ever intentionally relying on - the
-      # review instructions it actually needs are prompts/review.md, passed
-      # explicitly above. Not yet measured how much this saves by itself;
-      # watch actual cost across the next few reviews (see the cost-logging
-      # step below, added at the same time specifically to make that
-      # measurable instead of guessed at).
-      #
-      # --output-format json: the plain-text default gave zero visibility
-      # into actual token/cache/cost usage, making it impossible to confirm
-      # whether prompt caching (above) was doing anything - found this gap
-      # live after a user-reported $1.75-per-task Claude spend with no way
-      # to verify what the scoping/caching/model-routing changes had
-      # actually done. `.result` holds the same verdict text the old plain-
-      # text output was; `.total_cost_usd` and the per-model usage block
-      # (including cache_read_input_tokens/cache_creation_input_tokens) are
-      # now logged below for exactly this kind of debugging going forward.
+      # No `effort` override set: implement.yml needed model_verbosity forced
+      # because gpt-5.2-codex rejected the action's own default - untested
+      # here whether reviewer's models (Sol/Luna) need an equivalent
+      # override, so leaving it unset rather than guessing a value that
+      # could break the call the way an unverified flag broke plan.yml
+      # (see that file's own history) - watch the first live run.
       - name: Run independent verification
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          set -uo pipefail
-          claude_exit=0
-          claude --model "${{ steps.model.outputs.model }}" \
-            --bare \
-            --append-system-prompt "$(cat karsift-ai-infra/prompts/review.md)" \
-            --allowedTools "Read,Grep,Glob" \
-            --output-format json \
-            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json 2> /tmp/verdict-stderr.txt || claude_exit=$?
+        id: verify
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: /tmp/review-prompt.txt
+          permission-profile: ":read-only"
+          model: ${{ steps.model.outputs.model }}
+          output-file: /tmp/verdict.md
+          allow-bot-users: "karsift-ai-infra-bot[bot]"
 
-          echo "--- claude stderr (if any) ---"
-          cat /tmp/verdict-stderr.txt || true
-
-          jq -r '.result' /tmp/verdict-raw.json > /tmp/verdict.md 2>/dev/null || cat /tmp/verdict-raw.json > /tmp/verdict.md
-          cat /tmp/verdict.md
-
-          echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/verdict-raw.json 2>/dev/null || true
-
-          exit "$claude_exit"
+      - name: Show verdict
+        run: cat /tmp/verdict.md
 
       - name: Post verification comment
         env:

@@ -8,6 +8,13 @@ name: plan (reusable)
 # resolved from THIS repo's own config/roles.yml, same convention as
 # implement.yml/review.yml.
 #
+# TEMPORARY (2026-07-24): rewritten from Claude Code CLI to openai/codex-action
+# because the Anthropic Console org behind ANTHROPIC_API_KEY was disabled with
+# no fallback Claude access available - see config/roles.yml's header comment
+# for the full same-vendor-compromise rationale (planner has no independence
+# requirement the way implementer/reviewer do, so this swap is lower-stakes
+# than review.yml's, but it's still the same underlying provider outage).
+#
 # The request can come from three places, mutually exclusive per run:
 #   - `request`: free text, written directly for this dispatch.
 #   - `source_document_path`: an existing document already in the repo.
@@ -83,7 +90,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      ANTHROPIC_API_KEY:
+      OPENAI_API_KEY:
         required: true
       KARSIFT_BOT_APP_ID:
         description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
@@ -294,54 +301,35 @@ jobs:
             done
           } > /tmp/plan-prompt.txt
 
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      # --bare REVERTED here (2026-07-24) after breaking every real drafting
-      # run: it worked in the one test dispatch that only needed Read/Grep
-      # (ended in a clarifying question, no file writes), but every run
-      # that actually needed to draft a package - i.e. exercise Write/Edit/
-      # Bash - failed the `claude` invocation itself within ~6 seconds with
-      # zero stdout/stderr captured, reproduced twice. Anthropic's own docs
-      # describe bare mode's tool access as "Bash, file read, and file edit
-      # tools" - notably not naming Write as a separate always-available
-      # tool the way full/interactive mode does - so --allowedTools listing
-      # Write may not actually be grantable under --bare, unlike review.yml
-      # where the reviewer's Read/Grep/Glob-only tool list has run cleanly
-      # under --bare repeatedly. Not re-attempting --bare here without
-      # first confirming Write/Bash really do work under it in isolation -
-      # correctness matters far more than the CLAUDE.md-discovery savings
-      # --bare would add. --output-format json is kept (unrelated to this
-      # failure, and still gives real cost/cache visibility on every run
-      # that does succeed).
+      # NOTE ON HISTORY (correcting an earlier misdiagnosis in this file's own
+      # git history, for whoever reads it later): a prior version of this
+      # step used Claude Code CLI with --bare and appeared to break on every
+      # real drafting run (Write/Edit/Bash-using), while a --bare run that
+      # only needed Read/Grep succeeded - at the time this was blamed on
+      # --bare's tool-access model. The ACTUAL cause, found shortly after,
+      # was that the Anthropic Console org behind ANTHROPIC_API_KEY had been
+      # disabled (a billing/account issue) - the "successful" run predated
+      # the disablement, every "failing" one came after it. --bare was never
+      # actually confirmed broken; don't avoid it on that basis if Claude is
+      # restored here later. See config/roles.yml's header comment for the
+      # full context on why this step now uses openai/codex-action instead.
       #
-      # || true + explicit exit-code check below replaces the old bare
-      # `set -euo pipefail; claude ... > file` pattern, which silently
-      # swallowed any diagnostic output on failure (set -e aborted the
-      # script before the fallback `cat` line ever ran) - this is exactly
-      # what made this regression hard to diagnose from the job log alone.
+      # permission-profile ":workspace" (not ":read-only" - contrast with
+      # review.yml): the planner needs to create real files (the draft
+      # package directory), same requirement implement.yml's own use of
+      # ":workspace" documents. allow-bot-users: this can in principle run
+      # under the karsift-ai-infra-bot[bot] actor identity too (a
+      # plan-from-issue reply chain), same fix as implement.yml/review.yml.
       - name: Run planner
         id: planner
         continue-on-error: true
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          set -uo pipefail
-          claude_exit=0
-          claude --model "${{ steps.model.outputs.model }}" \
-            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-            --output-format json \
-            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json 2> /tmp/planner-stderr.txt || claude_exit=$?
-
-          echo "--- claude stderr (if any) ---"
-          cat /tmp/planner-stderr.txt || true
-
-          jq -r '.result' /tmp/planner-raw.json 2>/dev/null || cat /tmp/planner-raw.json
-
-          echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/planner-raw.json 2>/dev/null || true
-
-          exit "$claude_exit"
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: /tmp/plan-prompt.txt
+          permission-profile: ":workspace"
+          model: ${{ steps.model.outputs.model }}
+          allow-bot-users: "karsift-ai-infra-bot[bot]"
 
       # Branches the whole rest of the job. If the planner asked a question
       # instead of drafting, every downstream package-handling step below is
