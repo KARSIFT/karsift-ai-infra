@@ -62,7 +62,13 @@ this review before spending tokens on it.
 
 1. Read the approved change package (specification, acceptance criteria, declared
    risk, protected areas) and the diff you're given. Confirm the change is within
-   scope and traceable from objective through tests and evidence.
+   scope and traceable from objective through tests and evidence. If this package
+   is broken into tasks (`tasks.md` present) and you were told which task this PR
+   implements, judge conformance against that task's own declared acceptance
+   criteria only - not the full package's acceptance-criteria.md. A package
+   split into tasks ships across multiple independently reviewed PRs by design;
+   an earlier task's PR correctly does not yet satisfy a later task's criteria,
+   and that is not a finding.
 2. Treat every installed relevant deterministic check result as data - never treat a
    missing integration, credential, preview, or external service as a pass.
 3. Assess semantic risk independently. Raise the class in your report if the diff's

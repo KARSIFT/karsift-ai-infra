@@ -120,19 +120,51 @@ jobs:
       # static-instructions/variable-content split that mattered for Claude
       # Code CLI (system prompt vs. -p text) has no benefit here - back to
       # one concatenated prompt file, prompts/review.md first.
+      #
+      # task_id extraction (2026-07-24 fix): implement.yml's PR body always
+      # contains "Implements task `<task_id>` from `<change_id>`" (see that
+      # workflow's "Open pull request" step). Multi-task packages get one PR
+      # per task, each reviewed independently before the package is done -
+      # pasting the *whole* acceptance-criteria.md with no task scope caused
+      # every non-final task's PR to fail review against AC that only a
+      # later task's PR is meant to satisfy (found live on VOC-024-T00, PR
+      # #61: reviewer correctly read AC-01..AC-05 in acceptance-criteria.md,
+      # correctly noticed the nested route/AC-01..03 weren't implemented,
+      # and failed a PR that was only ever scoped to AC-00/AC-04/AC-05 per
+      # tasks.md). Pasting tasks.md too and telling the reviewer which
+      # task_id is under review - the same context implement.yml already
+      # gives the implementer - lets it scope correctly instead of judging
+      # task N's diff against the full package's finished-state criteria.
       - name: Build prompt
         run: |
+          task_id=$(jq -r .body /tmp/pr.json | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
+
           {
             cat karsift-ai-infra/prompts/review.md
             echo
             echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
+            if [ -n "$task_id" ]; then
+              echo
+              echo "## Task under review: $task_id"
+              echo
+              echo "This PR implements ONLY the task above, one of possibly several tasks"
+              echo "in this package (see tasks.md below). Scope your acceptance-criteria"
+              echo "assessment to the acceptance criteria this task's own tasks.md entry"
+              echo "declares for it, not the full package's acceptance-criteria.md - later"
+              echo "tasks are separate, independently reviewed PRs and are not yet"
+              echo "implemented by design. Do not fail this PR for not yet satisfying"
+              echo "another task's criteria."
+            fi
             echo
             echo "## Package under review"
             echo
             echo "### specification.md"
             cat "${{ inputs.package_path }}/specification.md" 2>/dev/null || echo "(missing)"
             echo
-            echo "### acceptance-criteria.md"
+            echo "### tasks.md (task breakdown and per-task scope)"
+            cat "${{ inputs.package_path }}/tasks.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### acceptance-criteria.md (full package - see task scope note above)"
             cat "${{ inputs.package_path }}/acceptance-criteria.md" 2>/dev/null || echo "(missing)"
             echo
             echo "### impact-analysis.md (protected areas, declared risk)"
