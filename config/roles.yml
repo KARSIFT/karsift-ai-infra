@@ -93,20 +93,30 @@ implementer_escalation: gpt-5.6-sol
 # cost (Sol is $5/$30 per 1M, the single most expensive OpenAI tier, and
 # review.yml is called on *every* implement attempt plus every retry - the
 # exact call pattern that ran up the Claude bill this whole pivot was
-# reacting to). Reviewer is now gpt-5.6-luna instead - the cheapest GPT-5.6
-# tier - as the founder's explicit choice, prioritizing cost over the
-# marginal quality gap. This is a real, accepted tradeoff, not a
-# quality-blind default: watch verdicts for anything a stronger model would
-# have caught, and reconsider if Luna starts waving through real bugs.
-reviewer: gpt-5.6-luna
+# reacting to). Reviewer went to gpt-5.6-luna - the cheapest GPT-5.6 tier -
+# as the founder's explicit choice, prioritizing cost over the marginal
+# quality gap.
+#
+# PILOT (2026-07-25): moved again, this time off OpenAI entirely, to
+# opencode/kimi-k2.7-code via OpenCode (opencode.ai) - a model-agnostic CLI
+# client, not itself a vendor. Kimi K2.7-Code is Moonshot AI's coding-tuned
+# checkpoint, $0.95/$4.00 per 1M tokens through OpenCode Zen's pass-through
+# pricing - meaningfully cheaper than gpt-5.6-luna's $1-2/$6-9 while staying
+# on a model explicitly tuned for code review rather than jumping straight to
+# the cheapest available tier (deepseek-v4-flash at $0.14/$0.28) untested.
+# review.yml's execution step was rewritten from openai/codex-action to a
+# raw `opencode run` CLI invocation - see that file's own header comment.
+# This ALSO ends the OpenAI same-vendor-compromise concern from above for
+# review specifically: reviewer and implementer are cross-vendor again
+# (OpenCode/Kimi vs OpenAI/Codex), even though neither is Claude. Founder
+# explicitly asked to pilot this on reviewer only and watch real verdicts
+# before considering it for implementer/planner too - do not swap those
+# roles to OpenCode based on this comment alone.
+reviewer: opencode/kimi-k2.7-code
 
-# reviewer_fast_retry: same value as reviewer now that reviewer itself is
-# already the cheapest tier - a separate "even cheaper for retries" slot has
-# no further cost lever to pull. Kept as a distinct key (not deleted) so
-# review.yml's existing routing logic doesn't need touching, and so a future
-# change back to a pricier `reviewer` (e.g. if Luna's quality proves
-# insufficient) automatically regains a cheap-retry tier without extra work.
-reviewer_fast_retry: gpt-5.6-luna
+# reviewer_fast_retry: same value as reviewer - see reviewer's own note for
+# why a separate "even cheaper for retries" tier isn't being pulled here.
+reviewer_fast_retry: opencode/kimi-k2.7-code
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),

@@ -13,7 +13,7 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 |---|---|---|
 | `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | `openai/codex-action` |
 | `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. | `openai/codex-action` |
-| `reviewer` | Independent, read-only verification (codex-action's built-in `:read-only` permission profile). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `openai/codex-action` |
+| `reviewer` | Independent, read-only verification (`opencode run --permissions read`). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `opencode` CLI (OpenCode Zen) - pilot, 2026-07-25 |
 
 **The only file that names a specific model or vendor is `config/roles.yml`.** Swapping any role
 to a different model/provider means editing that one file plus the relevant workflow's execution
@@ -22,19 +22,20 @@ verification"/"Run planner" step). Nothing else in this repo, and nothing in a c
 workflow, should need to change.
 
 **Reviewer and implementer are supposed to stay different vendors** - independent review that shares
-a vendor with the implementer isn't independent, it's self-review. **That principle is currently
-violated, on purpose and temporarily** (as of 2026-07-24), not silently: the Anthropic Console org
-this repo's Claude access ran under was disabled (a billing/account issue, not a karsift-ai-infra
-bug), with no fallback Claude access available (no subscription auth, no Bedrock/Vertex set up) at
-the time. Until that's resolved, all three roles run on `openai/codex-action`. Reviewer uses `gpt-5.6-luna`,
-deliberately *not* `implementer`'s own model (`gpt-5.6-terra`) - reviewing with the identical model
-that wrote the code would be the worst-case version of this compromise, since it would never catch
-anything the implementer itself couldn't have caught. Planner shares `implementer`'s model
-(`gpt-5.6-terra`) without issue - planner has no independence requirement the way reviewer does (see
-"Roles are technology-agnostic" table above: its output is a draft a human reviews, never something
-an independent verifier checks). `config/roles.yml`'s header comment has the exact revert steps once
-Claude access is restored. Don't treat a `PASS` verdict from this configuration as equivalent to a
-genuinely independent review - it isn't one yet.
+a vendor with the implementer isn't independent, it's self-review. **That principle was violated, on
+purpose and temporarily** (as of 2026-07-24): the Anthropic Console org this repo's Claude access ran
+under was disabled (a billing/account issue, not a karsift-ai-infra bug), with no fallback Claude
+access available (no subscription auth, no Bedrock/Vertex set up) at the time, so all three roles ran
+on `openai/codex-action` for a stretch. **As of 2026-07-25, reviewer is on a cost-driven pilot to
+`opencode`/`opencode.ai`** (OpenCode Zen, model `opencode/kimi-k2.7-code`) - a model-agnostic CLI, not
+the OpenAI vendor implementer/planner still run on, so cross-vendor independence for review is
+restored (against OpenAI, even though neither side is Claude). This is reviewer-only, founder-directed,
+and being watched against real verdicts before any consideration of extending it to
+implementer/planner - see `config/roles.yml`'s and `review.yml`'s own header comments for the full
+reasoning and exact revert path. Implementer and planner remain on `openai/codex-action`
+(`gpt-5.6-terra`, escalating to `gpt-5.6-sol` on implementer's last retry). Don't treat a `PASS`
+verdict as a long-settled guarantee here - both the OpenAI-only stretch and this new pilot are
+still-being-verified configurations, not a finished state.
 
 ## What this is not
 
