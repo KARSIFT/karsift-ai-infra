@@ -177,6 +177,22 @@ jobs:
             exit 1
           fi
 
+      # If two release-approval issues land close together (e.g. two
+      # packages both merged to the integration branch before either
+      # release was approved), the first approval's promotion already
+      # carries the second package's changes into production_branch too -
+      # there's nothing left for the second one to promote. `gh pr create`
+      # fails outright in that case ("No commits between main and develop"),
+      # which used to fail this whole job and leave the issue open forever
+      # with no automatic path forward, even though the release's actual
+      # goal (the package's changes reaching production_branch) was already
+      # satisfied. Found live: VOC-020 and VOC-021's releases were both
+      # approved within seconds of each other, VOC-020's promotion (merged
+      # moments earlier) already brought main up to develop's tip including
+      # VOC-021, and VOC-021's own release run failed with exactly this
+      # error - required a manual close after manually confirming main
+      # already had VOC-021's real content. Now detected and treated as the
+      # success it actually is, not a failure.
       - name: Open or reuse the promotion PR, then merge it
         if: steps.check.outcome == 'success'
         env:
@@ -185,12 +201,20 @@ jobs:
           set -euo pipefail
           existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" --state open --json number -q '.[0].number' || true)
           if [ -z "$existing" ] || [ "$existing" = "null" ]; then
-            existing=$(gh pr create \
+            create_output=$(gh pr create \
               --base "${{ inputs.production_branch }}" \
               --head "${{ inputs.integration_branch }}" \
               --title "Release: promote ${{ inputs.integration_branch }} to ${{ inputs.production_branch }}" \
-              --body "Promotion requested and approved via issue #${{ github.event.issue.number }} (\`${{ github.event.issue.title }}\`).")
-            existing=$(echo "$existing" | grep -oP '\d+$')
+              --body "Promotion requested and approved via issue #${{ github.event.issue.number }} (\`${{ github.event.issue.title }}\`)." 2>&1) \
+              || {
+                if echo "$create_output" | grep -qi "No commits between"; then
+                  gh issue close ${{ github.event.issue.number }} --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrently-approved release most likely already brought this package's changes in. No new promotion PR was needed."
+                  exit 0
+                fi
+                echo "$create_output" >&2
+                exit 1
+              }
+            existing=$(echo "$create_output" | grep -oP '\d+$')
           fi
           gh pr merge "$existing" --merge
           gh issue close ${{ github.event.issue.number }} --comment "Promoted via PR #$existing."
