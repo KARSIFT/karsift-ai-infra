@@ -37,24 +37,42 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      # No repo checked out yet at this point - gh needs GH_REPO set
+      # explicitly rather than inferring it from a local git remote (same
+      # fix already applied in remediate.yml's own metadata-parsing step,
+      # for the identical reason).
+      - name: Fetch PR diff, metadata, and exact SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
+          echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
+
+      # Checks out the PR's own reviewed commit, not integration_branch -
+      # found live (VOC-022-T00) that checking out integration_branch here
+      # gave the reviewer a tree that genuinely did not contain the commit
+      # it was told to review, and no way to fetch it either (read-only
+      # Read/Grep/Glob tools, no Bash). Twice now this has produced a bad
+      # review: once the model asked an unanswerable question instead of a
+      # verdict (fixed in prompts/review.md), and once it correctly
+      # disclosed the limitation per that fix but still treated "commit
+      # unreachable" as a disqualifying Critical finding on an otherwise-
+      # clean structural review - the actual root cause was always that the
+      # commit really was unreachable, not a model quality problem either
+      # time. Checking out the exact reviewed SHA removes the root cause:
+      # the reviewer now has the real file tree for what it's reviewing.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.integration_branch }}
+          ref: ${{ steps.pr.outputs.sha }}
 
       - name: Checkout karsift-ai-infra
         uses: actions/checkout@v4
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
-
-      - name: Fetch PR diff, metadata, and exact SHA
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
-          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
-          echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
 
       # Routes a remediate.yml retry (attempt 2) on a low-risk (R0/R1)
       # package to a cheaper/faster model (config/roles.yml's
