@@ -71,36 +71,33 @@ implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effecti
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
 # anything the implementer itself couldn't have caught, the worst-case
-# version of the same-vendor compromise above. Sol is also the strongest
-# OpenAI model for exactly this kind of long-horizon reasoning/analysis task
-# (state-of-the-art on Terminal-Bench 2.1 and Agents' Last Exam per public
-# benchmarks as of this writing), so it's not a cost-blind pick either -
-# first-pass review quality matters more than shaving cost on the one gate
-# standing between the implementer and a merge.
-reviewer: gpt-5.6-sol
+# version of the same-vendor compromise above.
+#
+# Revised 2026-07-24, same session: initially set to gpt-5.6-sol (the
+# strongest OpenAI model for long-horizon reasoning/analysis per public
+# benchmarks) on a quality-first basis - founder pushed back immediately on
+# cost (Sol is $5/$30 per 1M, the single most expensive OpenAI tier, and
+# review.yml is called on *every* implement attempt plus every retry - the
+# exact call pattern that ran up the Claude bill this whole pivot was
+# reacting to). Reviewer is now gpt-5.6-luna instead - the cheapest GPT-5.6
+# tier - as the founder's explicit choice, prioritizing cost over the
+# marginal quality gap. This is a real, accepted tradeoff, not a
+# quality-blind default: watch verdicts for anything a stronger model would
+# have caught, and reconsider if Luna starts waving through real bugs.
+reviewer: gpt-5.6-luna
 
-# reviewer_fast_retry (2026-07-24): a cheaper/faster model used ONLY for a
-# remediate.yml retry review (attempt 2) on a package whose declared risk is
-# R0 or R1 - see review.yml's model-selection step for the exact condition.
-# Never used for a first-pass review, and never for R2+, regardless of
-# attempt - a retry review is re-verifying a narrow, already-scoped fix
-# against specific prior findings, not doing first-principles discovery the
-# way an initial review does, so the case for a lighter model is much
-# stronger there than for review in general. This is a real quality/cost
-# tradeoff, not a free win - if this model starts waving through retries a
-# full `reviewer`-model pass would have caught, raise the risk floor this
-# applies to (or drop it back to empty) rather than silently letting it
-# ride. gpt-5.6-luna is the cheapest GPT-5.6 tier (~1/5 Sol's cost) with only
-# a small aggregate benchmark gap versus Sol/Terra - the same reasoning that
-# made Claude Haiku the prior pick for this exact slot. Leave empty to
-# disable fast-retry routing entirely and always use `reviewer`.
+# reviewer_fast_retry: same value as reviewer now that reviewer itself is
+# already the cheapest tier - a separate "even cheaper for retries" slot has
+# no further cost lever to pull. Kept as a distinct key (not deleted) so
+# review.yml's existing routing logic doesn't need touching, and so a future
+# change back to a pricier `reviewer` (e.g. if Luna's quality proves
+# insufficient) automatically regains a cheap-retry tier without extra work.
 reviewer_fast_retry: gpt-5.6-luna
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
 # never something an independent AI verifier checks the way review.yml checks
-# implementer output. gpt-5.6-sol for the same reason as reviewer above: planning
-# (specification/acceptance-criteria/task drafting) is exactly the long-horizon
-# reasoning category Sol leads on, and it's called once per package (not once per
-# implement attempt/retry), so the flagship's cost is easily bounded.
-planner: gpt-5.6-sol
+# implementer output. Founder's explicit choice (2026-07-24): gpt-5.6-terra, the
+# same cost-effective tier as implementer - not gpt-5.6-sol (tried first, reverted
+# on cost grounds, see reviewer's note above for the same reasoning applied here).
+planner: gpt-5.6-terra

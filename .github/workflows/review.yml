@@ -157,12 +157,16 @@ jobs:
       # permission check can't resolve via the normal collaborator-lookup
       # API - same root cause and same fix as implement.yml's identical note.
       #
-      # No `effort` override set: implement.yml needed model_verbosity forced
-      # because gpt-5.2-codex rejected the action's own default - untested
-      # here whether reviewer's models (Sol/Luna) need an equivalent
-      # override, so leaving it unset rather than guessing a value that
-      # could break the call the way an unverified flag broke plan.yml
-      # (see that file's own history) - watch the first live run.
+      # effort: "low" - codex-action's own reasoning-effort input, OpenAI's
+      # direct equivalent to a thinking-token budget. Reviewer already runs
+      # the cheapest model tier (gpt-5.6-luna) by explicit founder choice on
+      # cost grounds (see config/roles.yml); trimming reasoning effort too is
+      # the same cost lever applied a second way - fewer internal reasoning
+      # tokens generated before the final verdict, not just a cheaper price
+      # per token. Unverified against this model - watch the first live run
+      # for a rejected-value error the way gpt-5.2-codex once rejected
+      # implement.yml's default text.verbosity; drop this input entirely if
+      # so, same remediation pattern as that fix.
       - name: Run independent verification
         id: verify
         uses: openai/codex-action@v1
@@ -171,6 +175,7 @@ jobs:
           prompt-file: /tmp/review-prompt.txt
           permission-profile: ":read-only"
           model: ${{ steps.model.outputs.model }}
+          effort: "low"
           output-file: /tmp/verdict.md
           allow-bot-users: "karsift-ai-infra-bot[bot]"
 
