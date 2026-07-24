@@ -181,19 +181,25 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
             --bare \
             --append-system-prompt "$(cat karsift-ai-infra/prompts/review.md)" \
             --allowedTools "Read,Grep,Glob" \
             --output-format json \
-            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json
+            -p "$(cat /tmp/review-prompt.txt)" > /tmp/verdict-raw.json 2> /tmp/verdict-stderr.txt
+          claude_exit=$?
 
-          jq -r '.result' /tmp/verdict-raw.json > /tmp/verdict.md
+          echo "--- claude stderr (if any) ---"
+          cat /tmp/verdict-stderr.txt || true
+
+          jq -r '.result' /tmp/verdict-raw.json > /tmp/verdict.md 2>/dev/null || cat /tmp/verdict-raw.json > /tmp/verdict.md
           cat /tmp/verdict.md
 
           echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/verdict-raw.json || true
+          jq '{total_cost_usd, usage}' /tmp/verdict-raw.json 2>/dev/null || true
+
+          exit "$claude_exit"
 
       - name: Post verification comment
         env:

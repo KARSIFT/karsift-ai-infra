@@ -297,32 +297,51 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      # --bare: recommended by Anthropic's own docs for scripted/CI calls -
-      # skips hook/skill/plugin/MCP-server/auto-memory/CLAUDE.md discovery
-      # this stateless planner role never needed (its own instructions are
-      # prompts/plan.md, read explicitly into the prompt file above).
-      # --output-format json purely for cost/cache visibility (see
-      # review.yml's identical change for the fuller rationale) - the
-      # planner's actual output is the files it writes via Write/Edit, not
-      # anything parsed from stdout, so switching formats here doesn't
-      # affect the needs-info file-marker check below.
+      # --bare REVERTED here (2026-07-24) after breaking every real drafting
+      # run: it worked in the one test dispatch that only needed Read/Grep
+      # (ended in a clarifying question, no file writes), but every run
+      # that actually needed to draft a package - i.e. exercise Write/Edit/
+      # Bash - failed the `claude` invocation itself within ~6 seconds with
+      # zero stdout/stderr captured, reproduced twice. Anthropic's own docs
+      # describe bare mode's tool access as "Bash, file read, and file edit
+      # tools" - notably not naming Write as a separate always-available
+      # tool the way full/interactive mode does - so --allowedTools listing
+      # Write may not actually be grantable under --bare, unlike review.yml
+      # where the reviewer's Read/Grep/Glob-only tool list has run cleanly
+      # under --bare repeatedly. Not re-attempting --bare here without
+      # first confirming Write/Bash really do work under it in isolation -
+      # correctness matters far more than the CLAUDE.md-discovery savings
+      # --bare would add. --output-format json is kept (unrelated to this
+      # failure, and still gives real cost/cache visibility on every run
+      # that does succeed).
+      #
+      # || true + explicit exit-code check below replaces the old bare
+      # `set -euo pipefail; claude ... > file` pattern, which silently
+      # swallowed any diagnostic output on failure (set -e aborted the
+      # script before the fallback `cat` line ever ran) - this is exactly
+      # what made this regression hard to diagnose from the job log alone.
       - name: Run planner
         id: planner
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           claude --model "${{ steps.model.outputs.model }}" \
-            --bare \
             --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
             --output-format json \
-            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json
+            -p "$(cat /tmp/plan-prompt.txt)" > /tmp/planner-raw.json 2> /tmp/planner-stderr.txt
+          claude_exit=$?
 
-          jq -r '.result' /tmp/planner-raw.json || cat /tmp/planner-raw.json
+          echo "--- claude stderr (if any) ---"
+          cat /tmp/planner-stderr.txt || true
+
+          jq -r '.result' /tmp/planner-raw.json 2>/dev/null || cat /tmp/planner-raw.json
 
           echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/planner-raw.json || true
+          jq '{total_cost_usd, usage}' /tmp/planner-raw.json 2>/dev/null || true
+
+          exit "$claude_exit"
 
       # Branches the whole rest of the job. If the planner asked a question
       # instead of drafting, every downstream package-handling step below is
