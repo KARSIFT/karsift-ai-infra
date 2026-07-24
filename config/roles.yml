@@ -5,11 +5,13 @@
 #
 # "implementer" and "reviewer" are supposed to stay different model vendors -
 # same-vendor review isn't independent review, it's self-review. Restored
-# 2026-07-24: OpenAI API billing is now set up, so the implementer runs on
-# openai/codex-action again (see implement.yml's header comment) while the
-# reviewer stays on Claude Code - real cross-vendor independence, not the
-# same-vendor compromise this repo ran under for a while (see git history of
-# this file for that period, if it matters later).
+# 2026-07-23: OpenAI API billing is now set up, so the implementer runs on
+# openai/codex-action again (see implement.yml's header comment). At the time
+# this paragraph was written the reviewer stayed on Claude Code, giving real
+# cross-vendor independence - that no longer holds as of the very next
+# section below (2026-07-24: reviewer also moved to OpenAI, a second,
+# different same-vendor compromise). Check the block below and the actual
+# `reviewer`/`implementer` values, not this paragraph, for current state.
 #
 # implementer is pinned to full-size Codex, not the mini tier - the mini tier
 # was tried first (2026-07-24) for cost, given the OpenAI account behind
@@ -67,6 +69,18 @@
 # ############################################################################
 
 implementer: gpt-5.6-terra       # currently: openai/codex-action - cost-effective GPT-5.6 tier, see note above (was gpt-5.3-codex; was gpt-5.2-codex, deprecated 2026-07-23; was gpt-5.1-codex-mini, judged too weak)
+
+# implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
+# (attempt 2 - implement.yml's own last attempt before it gives up and
+# escalates to a human) - see implement.yml's model-resolution step for the
+# exact condition. Never used on attempt 1. Opposite lever from
+# reviewer_fast_retry: a retry here means the task already proved harder
+# than the cheaper tier could handle, so escalate to the strongest model for
+# the one remaining shot rather than retry blind with the same model - the
+# alternative is a human getting paged regardless, so there's little
+# downside to trying harder first. Leave empty to disable escalation
+# entirely and always use `implementer`, even on retry.
+implementer_escalation: gpt-5.6-sol
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches

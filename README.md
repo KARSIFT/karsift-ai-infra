@@ -11,24 +11,30 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does | Current occupant |
 |---|---|---|
-| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | Claude Code CLI |
-| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. | Claude Code CLI (was `openai/codex-action` - see compromise note below) |
-| `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. | Claude Code CLI |
+| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | `openai/codex-action` |
+| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. | `openai/codex-action` |
+| `reviewer` | Independent, read-only verification (codex-action's built-in `:read-only` permission profile). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `openai/codex-action` |
 
-**The only file that names a specific model or vendor is `config/roles.yml`.** Swapping either role
+**The only file that names a specific model or vendor is `config/roles.yml`.** Swapping any role
 to a different model/provider means editing that one file plus the relevant workflow's execution
-step (`implement.yml`'s "Run implementer" step, or `review.yml`'s install/run step). Nothing else in
-this repo, and nothing in a calling project's own workflow, should need to change.
+step (`implement.yml`'s "Run implementer" step, `review.yml`'s/`plan.yml`'s "Run independent
+verification"/"Run planner" step). Nothing else in this repo, and nothing in a calling project's own
+workflow, should need to change.
 
-**The two roles are supposed to stay different vendors** - independent review that shares a vendor
-with the implementer isn't independent, it's self-review. **That principle is currently violated,
-on purpose and temporarily**, not silently: `openai/codex-action` requires a metered, billed OpenAI
-API key with no subscription-auth equivalent to Claude Code's `setup-token`, and that billing isn't
-set up. Until it is, both roles run on Claude Code - different models (`claude-sonnet-5` implementing,
-`claude-opus-4-8` reviewing) as a partial mitigation, not a substitute for real cross-vendor
-independence. `implement.yml`'s header comment has the exact revert steps once Codex billing is
-available. Don't treat a `PASS` verdict from this configuration as equivalent to a genuinely
-independent review - it isn't one yet.
+**Reviewer and implementer are supposed to stay different vendors** - independent review that shares
+a vendor with the implementer isn't independent, it's self-review. **That principle is currently
+violated, on purpose and temporarily** (as of 2026-07-24), not silently: the Anthropic Console org
+this repo's Claude access ran under was disabled (a billing/account issue, not a karsift-ai-infra
+bug), with no fallback Claude access available (no subscription auth, no Bedrock/Vertex set up) at
+the time. Until that's resolved, all three roles run on `openai/codex-action`. Reviewer uses `gpt-5.6-luna`,
+deliberately *not* `implementer`'s own model (`gpt-5.6-terra`) - reviewing with the identical model
+that wrote the code would be the worst-case version of this compromise, since it would never catch
+anything the implementer itself couldn't have caught. Planner shares `implementer`'s model
+(`gpt-5.6-terra`) without issue - planner has no independence requirement the way reviewer does (see
+"Roles are technology-agnostic" table above: its output is a draft a human reviews, never something
+an independent verifier checks). `config/roles.yml`'s header comment has the exact revert steps once
+Claude access is restored. Don't treat a `PASS` verdict from this configuration as equivalent to a
+genuinely independent review - it isn't one yet.
 
 ## What this is not
 
@@ -77,10 +83,15 @@ through its own governance documents and through inputs to `merge-gate.yml`:
   `R4`, never auto-merges regardless of any switch - both require a human's literal `approved`
   comment from the project's configured founder identity. R0-R3 can auto-merge only when
   `auto_merge_enabled: "true"` is explicitly passed by the calling project **and** CI is green **and**
-  the reviewer's verdict passed. `auto_merge_enabled` defaults to `"false"` - this is the real,
+  the reviewer's verdict passed **and** the specific package's own `change.yaml` doesn't set
+  `automatic_merge_allowed: false` - a per-package opt-out a human can set at adoption time to keep
+  one particular package out of unattended auto-merge regardless of its risk class, independent of
+  the project-wide switch. `auto_merge_enabled` defaults to `"false"` - this is the real,
   current, evidenced activation state in every KARSIFT project checked against this repo as of this
   writing, not a cautious guess. Flipping it is a deliberate future edit made after real evidence the
-  loop is reliable, never a default.
+  loop is reliable, never a default. Both the auto-merge path and the human `approved`-comment path
+  delete the merged task/plan branch afterward (never the integration branch itself, which
+  `release.yml`'s separate promotion merge never deletes either).
 
 **Planner output is a draft, never an authoritative risk signal.** `plan.yml` lets
 the planner role propose a `risk:` value in the change package it drafts, but that
@@ -104,16 +115,21 @@ capability as active just because policy permits it.
 
 ## Automated remediation
 
-When the reviewer returns `FAIL`, `remediate.yml` (wired into the caller template right after
-`review`) automatically re-dispatches the implementer once, with the reviewer's exact findings
-included in the prompt as required reading - not a blind second guess. It force-updates the same
-PR rather than opening a new one. If that retry also fails review, it stops and escalates to the
-authority issue instead of trying a third time - the same two-attempt cap `implement.yml` already
-enforced for its own internal failures, now closing the gap where an implementer *success* followed
-by a reviewer *FAIL* previously went nowhere until a human happened to notice.
+When the reviewer returns `FAIL`, **or CI itself fails outright before review ever runs** (`ci`
+failing means `review` never gets a chance to produce a verdict at all, a real blind spot until this
+was added), `remediate.yml` (wired into the caller template right after `review`) automatically
+re-dispatches the implementer once, with the failure details - the reviewer's exact findings, or the
+CI job's own failure log when there was no review to draw from - included in the prompt as required
+reading, not a blind second guess. It force-updates the same PR rather than opening a new one. On
+that one retry, `implement.yml` escalates to a stronger model (`implementer_escalation` in
+`config/roles.yml`) rather than reusing the same model that already failed once. If the retry also
+fails, it stops and escalates to the authority issue instead of trying a third time - the same
+two-attempt cap `implement.yml` already enforced for its own internal failures, now closing the gap
+where an implementer *success* followed by a reviewer *FAIL* (or a plain CI failure) previously went
+nowhere until a human happened to notice.
 
-A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet are all no-ops - this only ever acts
-on an explicit `FAIL`.
+A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet (with CI still green) are all no-ops -
+this only ever acts on an explicit `FAIL` or a CI failure.
 
 ## Drafting and issue-creation are two separate steps
 
@@ -165,8 +181,10 @@ planner-authored) aren't covered - the release gate only applies going forward.
 
 ## What's deliberately not built yet
 
-- A run-time-swappable reviewer *execution step* (today, swapping the model is config-driven;
-  swapping the reviewer to a non-Claude-Code CLI/action is a workflow edit, not just a config edit)
+- A run-time-swappable reviewer/planner *execution step* (today, swapping the model within a
+  provider is config-driven; swapping to a different provider's CLI/action - as happened 2026-07-24,
+  Claude Code CLI to `openai/codex-action`, for both `review.yml` and `plan.yml` - is still a workflow
+  edit, not just a config edit)
 - Per-project custom risk-classification schemes beyond the `Risk classification: R#` convention
   `merge-gate.yml` parses
 - Writing verification verdicts back into a package's own machine-readable status (the reviewer has

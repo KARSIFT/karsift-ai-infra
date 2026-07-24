@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# Resolves a role ("codex" or "claude-verifier") to a model string from
-# config/roles.yml. Prints an empty string if the role maps to "" (meaning:
-# use the tool's own current default).
+# Resolves a role (e.g. "implementer", "reviewer", "planner", or one of the
+# retry/escalation variants - see config/roles.yml's own key names, which are
+# the actual source of truth) to a model string from config/roles.yml. Prints
+# an empty string if the role maps to "" (meaning: use the tool's own current
+# default), or if the role key isn't present and a caller is checking for an
+# optional variant with `|| echo ""` (see implement.yml/review.yml's
+# escalation/fast-retry resolution steps for that pattern).
 #
 # Usage: resolve-model.sh <role> <roles-path>
 set -euo pipefail

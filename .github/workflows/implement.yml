@@ -4,12 +4,15 @@ name: implement (reusable)
 # Which model fills that role is resolved from THIS repo's own config/roles.yml,
 # so swapping models never touches a calling project's own workflow.
 #
-# Restored to openai/codex-action (2026-07-24) once OpenAI API billing became
+# Restored to openai/codex-action (2026-07-23) once OpenAI API billing became
 # available - see config/roles.yml's header comment for the prior same-vendor
-# compromise (Claude Code for both implementer and reviewer) this replaces.
-# Implementer and reviewer are different vendors again, which is what makes
-# review.yml's independent verification actually independent instead of
-# self-review. Swapping vendors again in the future only touches this file's
+# compromise (Claude Code for both implementer and reviewer) this replaced,
+# and for the LATER same-vendor compromise (2026-07-24: Anthropic Console org
+# disabled, reviewer/planner moved to openai/codex-action too) that currently
+# applies again - check config/roles.yml's actual values before assuming
+# implementer and reviewer are on different vendors right now; the two
+# compromises are not the same event, just the same category of problem.
+# Swapping vendors again in the future only touches this file's
 # "Run implementer" step and config/roles.yml's `implementer` value - the
 # role/prompt/branch/commit/PR machinery around it is provider-agnostic by
 # design and needs no changes in review.yml/merge-gate.yml either way.
@@ -137,10 +140,30 @@ jobs:
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
+      # Escalates to config/roles.yml's `implementer_escalation` (if
+      # configured) on attempt 2 - the last chance before remediate.yml gives
+      # up and escalates to a human, per that file's own 2-attempt cap. A
+      # first attempt already failed CI or review; retrying with the exact
+      # same model on the exact same task is a weaker second guess than
+      # trying a stronger model for the one attempt that actually matters
+      # (the alternative is a human getting paged regardless). This is the
+      # inverse of review.yml's reviewer_fast_retry (which goes CHEAPER on
+      # retry, since a review retry is narrow re-verification of an
+      # already-scoped fix) - here a retry means the task itself is proving
+      # harder than expected, so the lever points the other way.
       - name: Resolve implementer model
         id: model
         run: |
-          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh implementer karsift-ai-infra/config/roles.yml)
+          set -euo pipefail
+          role="implementer"
+          if [ "${{ inputs.attempt }}" != "1" ]; then
+            escalation=$(bash karsift-ai-infra/config/resolve-model.sh implementer_escalation karsift-ai-infra/config/roles.yml || echo "")
+            if [ -n "$escalation" ]; then
+              role="implementer_escalation"
+            fi
+          fi
+          echo "Resolving implementer as: role=$role (attempt=${{ inputs.attempt }})"
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh "$role" karsift-ai-infra/config/roles.yml)
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       # On a remediation attempt (attempt > 1), the branch/PR from the
