@@ -252,6 +252,25 @@ jobs:
           impl = data.setdefault("implementation", {})
           impl["authority_issue"] = roster[0]["issue"] if len(roster) == 1 else None
 
+          # Found live on VOC-025-T00: nothing else in this pipeline ever set
+          # these three fields, so a package could pass "Verify the package
+          # was actually adopted" above (status != draft, implementation.
+          # authorized == true - both hand-edited by the founder at adoption)
+          # while repository_adoption_status stayed the human-authored
+          # draft's original "not-adopted" - and implement.yml's own prompt
+          # reads that stale value straight out of change.yaml and refuses to
+          # implement T00, citing "not-adopted" as the reason, even though
+          # this very job just finished opening real task issues for it. This
+          # job (the thing that actually makes adoption real - opening task
+          # issues) is the right place to also record that adoption happened,
+          # not something a human should have to remember as a separate
+          # manual edit at merge time.
+          data["repository_adoption_status"] = "adopted"
+          data["adoption_pr"] = int("${{ inputs.pr_number }}")
+          data["adoption_evidence"] = (
+              "https://github.com/${{ github.repository }}/pull/${{ inputs.pr_number }}"
+          )
+
           with open(change_path, "w") as f:
               yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
           PYEOF
