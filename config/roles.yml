@@ -191,4 +191,19 @@ reviewer_fast_retry: opencode-go/deepseek-v4-pro
 # is purely a quality/cost choice, not a cross-checking one. plan.yml's
 # execution step was rewritten from openai/codex-action to `opencode run
 # --agent build` the same way implement.yml's was.
-planner: opencode-go/glm-5.2
+#
+# TEMPORARILY MOVED AGAIN (2026-07-25, same day): glm-5.2 hung with zero
+# progress dispatching VOC-027/P2, 3 attempts in a row, each killed only by
+# plan.yml's new 20-minute step timeout (added same incident - see that
+# file's header comment). The exact same model had drafted VOC-026/P1
+# cleanly just hours earlier (~5-6 min), so this isn't glm-5.2 being weak in
+# general - either a request-specific pathological case (P2's prompt is
+# longer/more document-referencing than P1's) or a vendor-side blip specific
+# to this model today. Rather than keep burning 20-minute timeout cycles,
+# switched to kimi-k2.7-code (implementer's own model, already proven
+# reliable across all 6 of VOC-026/P1's real implement runs this session) -
+# no independence requirement blocks reusing it here. REVISIT: switch back
+# to glm-5.2 once there's a reason to believe the hang was request-specific
+# rather than model-wide (e.g. after confirming glm-5.2 drafts a normal
+# package again on some other request).
+planner: opencode-go/kimi-k2.7-code
