@@ -292,8 +292,12 @@ jobs:
       # pilot's item 26/27) - any other failure (a real prompt/model/CLI
       # bug) fails normally instead of silently burning the second
       # account's quota chasing an unrelated error.
+      # timeout-minutes bounds a real hang, not just a slow run - see
+      # plan.yml's identical addition for the live incident that surfaced
+      # this gap (a planner hang, same underlying opencode CLI).
       - name: Run independent verification
         id: verify
+        timeout-minutes: 15
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}

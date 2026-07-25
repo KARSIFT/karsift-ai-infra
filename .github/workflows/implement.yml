@@ -292,10 +292,14 @@ jobs:
       # quota/balance exhaustion from the primary account - see review.yml's
       # identical fallback for the full rationale (only retries on that
       # specific failure class, never blindly on any failure).
+      # timeout-minutes bounds a real hang, not just a slow run - see
+      # plan.yml's identical addition for the live incident that surfaced
+      # this gap (a planner hang, same underlying opencode CLI).
       - name: Run implementer (opencode)
         id: implementer-opencode
         if: steps.model.outputs.role == 'implementer'
         continue-on-error: true
+        timeout-minutes: 20
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
