@@ -182,12 +182,13 @@ reviewer_fast_retry: opencode-go/deepseek-v4-pro
 # same cost-effective tier as implementer - not gpt-5.6-sol (tried first, reverted
 # on cost grounds, see reviewer's note above for the same reasoning applied here).
 #
-# MOVED (2026-07-25): planner too moved to OpenCode - opencode-go/qwen3.7-max,
-# founder's explicit choice of "a different, slightly stronger model" than
-# implementer's kimi-k2.7-code. Different lab again (Alibaba/Qwen vs Moonshot/
-# Kimi vs DeepSeek/reviewer) and Qwen's own flagship tier ("max", not "plus").
-# Still no independence requirement to satisfy here (see paragraph above) -
-# this is purely a quality/cost choice, not a cross-checking one.
-# plan.yml's execution step was rewritten from openai/codex-action to
-# `opencode run --agent build` the same way implement.yml's was.
-planner: opencode-go/qwen3.7-max
+# MOVED (2026-07-25): planner too moved to OpenCode, founder's explicit
+# choice of "a different, slightly stronger model" than implementer's
+# kimi-k2.7-code - initially opencode-go/qwen3.7-max, then switched same day
+# to opencode-go/glm-5.2 (founder's direct follow-up choice). Different lab
+# again either way (Zhipu/GLM vs Moonshot/Kimi vs DeepSeek/reviewer). Still
+# no independence requirement to satisfy here (see paragraph above) - this
+# is purely a quality/cost choice, not a cross-checking one. plan.yml's
+# execution step was rewritten from openai/codex-action to `opencode run
+# --agent build` the same way implement.yml's was.
+planner: opencode-go/glm-5.2
