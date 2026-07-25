@@ -227,17 +227,8 @@ reviewer_fast_retry: opencode-go/deepseek-v4-pro
 # MOVED (2026-07-26, founder cost directive: "opencode usage is high"):
 # glm-5.2 -> mimo-v2.5-pro, a cheaper OpenCode Go tier. No independence
 # requirement to satisfy for this role (see paragraph above) - purely a
-# cost choice. Not exercised live before being superseded by the next
-# change below (same day).
-#
-# RESTORED TO CLAUDE CODE (2026-07-26, founder follow-up same day: "use
-# claude code as a planner, i remember we used to use it"). planner had
-# been OpenCode-only since 2026-07-25 - see plan.yml's own header comment
-# for the full history (an Anthropic Console org billing outage on
-# 2026-07-24 was the original reason for leaving Claude, not a
-# karsift-ai-infra bug; the org's access is apparently usable again).
-# claude-sonnet-5 matches this role's historical pre-outage model string.
-# plan.yml's execution step was rewritten back from `opencode run` to the
-# Claude Code CLI (prompt via stdin, not `-p` as a CLI argument - avoids
-# the same argv-length class of bug documented for OpenCode).
-planner: claude-sonnet-5
+# cost choice. Not yet exercised live; watch the next real plan dispatch's
+# draft quality and timing (glm-5.2's own capacity/timeout history on
+# larger packages, see plan.yml's 35-minute timeout comment, is worth
+# re-checking against this model too).
+planner: opencode-go/mimo-v2.5-pro
