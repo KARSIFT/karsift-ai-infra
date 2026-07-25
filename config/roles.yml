@@ -116,12 +116,20 @@ implementer: opencode-go/minimax-m3
 # through 2026-07-25 specifically for cross-vendor independence on the
 # hardest retry - not just cost, a real different-infrastructure second
 # opinion. That property is gone now that OpenAI/Codex credits are
-# exhausted; opencode-go/glm-5.2 (founder's explicit choice - also the
-# current `planner` model, no conflict, different role/timing) is the
-# fallback instead. implement.yml's codex-action step is disabled
-# (if: false), not deleted, so restoring cross-vendor escalation is a
-# one-line revert if Codex quota is restored later.
-implementer_escalation: opencode-go/glm-5.2
+# exhausted. implement.yml's codex-action step is disabled (if: false),
+# not deleted, so restoring cross-vendor escalation is a one-line revert
+# if Codex quota is restored later.
+#
+# Briefly glm-5.2, then founder's direct follow-up (same day) moved it to
+# kimi-k2.7-code - the model `implementer` itself ran on through 2026-07-25
+# with a genuinely strong track record (the VOC-025-T00 reviewer evidence
+# cited above is about kimi in the reviewer role specifically, but its
+# implementer-quality output through VOC-025/026/027 was solid too, save
+# the one VOC-025-T04 retry documented in the bugs-fixed memory). Now that
+# `implementer` itself has moved to minimax-m3 for cost, using kimi here
+# keeps escalation a genuinely different, previously-proven-stronger model
+# rather than retrying with the same tier that already struggled.
+implementer_escalation: opencode-go/kimi-k2.7-code
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
