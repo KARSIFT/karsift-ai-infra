@@ -234,13 +234,26 @@ jobs:
       # request, source document's basename, source issue's title. Lowercase,
       # non-alphanumeric runs collapsed to a single hyphen, trimmed, capped so
       # branch names stay sane.
+      #
+      # inputs.request/source_document_path go through env vars, not direct
+      # ${{ }} interpolation into this run: block - found live (2026-07-25,
+      # dispatching VOC-026/P1): a request containing literal double quotes
+      # broke out of the interpolated string and was executed as raw shell,
+      # failing with a bash syntax error. Untrusted/arbitrary free text
+      # (this input can come from anyone with workflow_dispatch access, not
+      # just the founder) must never be spliced directly into a run: script -
+      # same script-injection reasoning adopt.yml's PR_BODY_SOURCE pattern
+      # already documents for PR bodies.
       - name: Derive slug and branch name
         id: branch
+        env:
+          REQUEST: ${{ inputs.request }}
+          SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
         run: |
           set -euo pipefail
-          title_source="${{ inputs.request }}"
-          if [ -z "$title_source" ] && [ -n "${{ inputs.source_document_path }}" ]; then
-            title_source=$(basename "${{ inputs.source_document_path }}")
+          title_source="$REQUEST"
+          if [ -z "$title_source" ] && [ -n "$SOURCE_DOCUMENT_PATH" ]; then
+            title_source=$(basename "$SOURCE_DOCUMENT_PATH")
           fi
           if [ -z "$title_source" ] && [ -n "${{ steps.issue.outputs.title }}" ]; then
             title_source="${{ steps.issue.outputs.title }}"
@@ -260,18 +273,21 @@ jobs:
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
+        env:
+          REQUEST: ${{ inputs.request }}
+          SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
         run: |
           {
             cat karsift-ai-infra/prompts/plan.md
-            if [ -n "${{ inputs.request }}" ]; then
+            if [ -n "$REQUEST" ]; then
               echo
               echo "## Request (free text)"
-              echo "${{ inputs.request }}"
+              echo "$REQUEST"
             fi
-            if [ -n "${{ inputs.source_document_path }}" ]; then
+            if [ -n "$SOURCE_DOCUMENT_PATH" ]; then
               echo
-              echo "## Request (source document: ${{ inputs.source_document_path }})"
-              cat "${{ inputs.source_document_path }}" 2>/dev/null || echo "(unreadable)"
+              echo "## Request (source document: $SOURCE_DOCUMENT_PATH)"
+              cat "$SOURCE_DOCUMENT_PATH" 2>/dev/null || echo "(unreadable)"
             fi
             if [ -n "${{ inputs.source_issue_number }}" ]; then
               echo
@@ -489,6 +505,8 @@ jobs:
         if: steps.commit.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          REQUEST: ${{ inputs.request }}
+          SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
         run: |
           set -euo pipefail
           {
@@ -498,12 +516,12 @@ jobs:
             if [ -n "${{ inputs.source_issue_number }}" ]; then
               echo "In response to issue #${{ inputs.source_issue_number }}."
             fi
-            if [ -n "${{ inputs.source_document_path }}" ]; then
-              echo "Drafted from \`${{ inputs.source_document_path }}\`."
+            if [ -n "$SOURCE_DOCUMENT_PATH" ]; then
+              echo "Drafted from \`$SOURCE_DOCUMENT_PATH\`."
             fi
-            if [ -n "${{ inputs.request }}" ]; then
+            if [ -n "$REQUEST" ]; then
               echo
-              echo "> ${{ inputs.request }}"
+              echo "> $REQUEST"
             fi
             echo
             echo "**This is a draft, not an approved or authorized package.** Nothing in"
