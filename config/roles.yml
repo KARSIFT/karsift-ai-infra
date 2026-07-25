@@ -88,9 +88,9 @@
 # implement runs' CI/review pass rate to confirm this holds for writing code,
 # not just judging it. implement.yml's execution step is now genuinely
 # mixed-vendor: this role runs via a raw `opencode run --agent build`
-# invocation, while implementer_escalation below deliberately stayed on
-# openai/codex-action - see that file's header comment for why (a real
-# different-vendor fallback for the hardest retry, not just cost).
+# invocation. implementer_escalation below also runs via `opencode run
+# --agent build` as of 2026-07-26 - see that entry's own comment for why
+# the cross-vendor separation was traded away.
 implementer: opencode-go/kimi-k2.7-code
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
@@ -104,13 +104,17 @@ implementer: opencode-go/kimi-k2.7-code
 # downside to trying harder first. Leave empty to disable escalation
 # entirely and always use `implementer`, even on retry.
 #
-# Deliberately NOT moved to OpenCode alongside `implementer` above (2026-07-25):
-# this is the one remaining case where staying on a fully separate vendor
-# (OpenAI/codex-action, not just a different model under the same OpenCode
-# CLI) matters most - the hardest attempt, one shot left before a human gets
-# paged, is exactly when a genuinely different infrastructure stack (not
-# just a different checkpoint) is worth keeping.
-implementer_escalation: gpt-5.6-sol
+# MOVED TO OPENCODE (2026-07-26, founder directive: "no more quota in
+# codex"): was deliberately kept on openai/codex-action (gpt-5.6-sol)
+# through 2026-07-25 specifically for cross-vendor independence on the
+# hardest retry - not just cost, a real different-infrastructure second
+# opinion. That property is gone now that OpenAI/Codex credits are
+# exhausted; opencode-go/glm-5.2 (founder's explicit choice - also the
+# current `planner` model, no conflict, different role/timing) is the
+# fallback instead. implement.yml's codex-action step is disabled
+# (if: false), not deleted, so restoring cross-vendor escalation is a
+# one-line revert if Codex quota is restored later.
+implementer_escalation: opencode-go/glm-5.2
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches

@@ -17,18 +17,17 @@ name: implement (reusable)
 # role/prompt/branch/commit/PR machinery around it is provider-agnostic by
 # design and needs no changes in review.yml/merge-gate.yml either way.
 #
-# MIXED-VENDOR (2026-07-25): `implementer` itself moved to OpenCode
-# (opencode-go/kimi-k2.7-code - see config/roles.yml), but
+# MIXED-VENDOR (2026-07-25), SUPERSEDED (2026-07-26): `implementer` moved to
+# OpenCode (opencode-go/kimi-k2.7-code - see config/roles.yml) on 2026-07-25;
 # `implementer_escalation` deliberately stayed on openai/codex-action
-# (gpt-5.6-sol) as a genuinely different, strong fallback for the one retry
-# that matters most - not just a cost lever this time, a real cross-vendor
-# second opinion on the hardest attempt. That means THIS file, unlike
-# review.yml/plan.yml, now has two real execution steps ("Run implementer
-# (opencode)" and "Run implementer (openai/codex-action escalation)"),
-# gated by `steps.model.outputs.role`, not one - a future full move of
-# implementer_escalation to OpenCode too would let this collapse back to a
-# single step, but don't do that without checking config/roles.yml's actual
-# current values first.
+# (gpt-5.6-sol) at first, as a genuinely different, strong fallback for the
+# one retry that matters most - not just a cost lever, a real cross-vendor
+# second opinion on the hardest attempt. That cross-vendor property was
+# traded away on 2026-07-26 (founder: "no more quota in codex") -
+# implementer_escalation moved to opencode-go/glm-5.2, collapsing this file
+# back to a single real execution step ("Run implementer (opencode)"), same
+# as review.yml/plan.yml. The openai/codex-action step is disabled
+# (if: false), not deleted - see that step's own comment for why.
 
 on:
   workflow_call:
@@ -61,10 +60,10 @@ on:
         default: "develop"
     secrets:
       OPENAI_API_KEY:
-        description: "Used only for implementer_escalation (gpt-5.6-sol) - see this file's header comment."
-        required: true
+        description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
+        required: false
       OPENCODE_API_KEY:
-        description: "Used for the base implementer role (opencode-go/kimi-k2.7-code)."
+        description: "Used for both the base implementer and implementer_escalation roles (both OpenCode-backed as of 2026-07-26)."
         required: true
       KARSIFT_BOT_APP_ID:
         description: >
@@ -260,16 +259,16 @@ jobs:
             fi
           } > /tmp/implement-prompt.txt
 
-      # Two vendor-branched execution steps, gated by which role
-      # steps.model.outputs.role resolved to (see this file's header
-      # comment for why implementer_escalation stayed on a different
-      # vendor). Neither commits or pushes - that's the deterministic
-      # "Commit and push" step below, not something either model is trusted
-      # to do itself. A future full move of implementer_escalation to
-      # OpenCode too would let these collapse back to one step.
+      # implementer_escalation moved onto OpenCode too (2026-07-26, founder
+      # directive: "no more quota in codex") - collapsed back to the single
+      # opencode step this file's own header comment anticipated. The
+      # openai/codex-action step below is kept but disabled (if: false), not
+      # deleted, so restoring Codex-backed escalation later is a one-line
+      # revert if OpenAI quota comes back, rather than reconstructing the
+      # actor-permission/verbosity workarounds from scratch.
 
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -297,7 +296,7 @@ jobs:
       # this gap (a planner hang, same underlying opencode CLI).
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
         timeout-minutes: 20
         env:
@@ -330,12 +329,15 @@ jobs:
           exit "$exit_code"
 
       # codex-action only runs `codex exec` in a sandbox - it never touches
-      # git either. Used only for implementer_escalation (attempt 2, a
-      # different vendor from the base implementer above - see this file's
-      # header comment).
+      # git either. DISABLED 2026-07-26 (founder: "no more quota in codex") -
+      # implementer_escalation moved onto the opencode step above. Left in
+      # place (if: false) rather than deleted so re-enabling Codex-backed
+      # escalation later is a one-line revert (this if: + the two if:
+      # conditions above) if OpenAI quota is restored, instead of
+      # reconstructing the actor-permission/verbosity workarounds below.
       - name: Run implementer (openai/codex-action escalation)
         id: implementer-openai
-        if: steps.model.outputs.role == 'implementer_escalation'
+        if: false
         uses: openai/codex-action@v1
         continue-on-error: true
         with:
@@ -379,12 +381,7 @@ jobs:
         id: implementer
         if: always()
         run: |
-          if [ "${{ steps.model.outputs.role }}" = "implementer_escalation" ]; then
-            outcome="${{ steps.implementer-openai.outcome }}"
-          else
-            outcome="${{ steps.implementer-opencode.outcome }}"
-          fi
-          echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+          echo "outcome=${{ steps.implementer-opencode.outcome }}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
         id: commit
