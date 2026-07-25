@@ -562,13 +562,24 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Deliberately no "Risk classification: R#" or "Package path: `...`"
-      # line (that literal wording) in this PR body - see this file's header
-      # comment for why that absence is what keeps extract-package-path/
-      # review/remediate/merge-gate behaving correctly for a planning PR
-      # without any special-casing in merge-gate.yml itself. The package's
-      # location is still stated below, just not under that exact literal
-      # label extract-package-path's regex looks for.
+      # Deliberately no "Package path: `...`" line (that literal wording) in
+      # this PR body - extract-package-path/review/remediate are actually
+      # gated on the head branch's "agent/" prefix (see the calling
+      # project's pipeline.yml template), not on this line's absence, so
+      # omitting it isn't load-bearing for that guard, but keeping it out
+      # avoids extract-package-path's regex ever matching a planning PR by
+      # accident if that guard is ever loosened.
+      #
+      # A "Risk classification: R#" line IS required, though - found live
+      # 2026-07-25 dispatching VOC-026/P1 (PR #81): a prior version of this
+      # step omitted it too, on the mistaken belief it served the same
+      # guard purpose as "Package path:". It doesn't - governance-policy.yml
+      # runs on every PR regardless of branch prefix, and
+      # classify-change-risk.sh --require-declaration fails closed (exit 1)
+      # whenever the diff touches an R1+ path (change.yaml always does) and
+      # the PR body has no such line - which blocked PR #81 outright. Read
+      # back from the risk the planner itself proposed in change.yaml's own
+      # `risk:` field, defaulting to the template's floor if absent/unparseable.
       - name: Open PR
         id: pr
         if: steps.commit.outputs.has_changes == 'true'
@@ -578,6 +589,8 @@ jobs:
           SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
         run: |
           set -euo pipefail
+          declared_risk=$(grep -m1 -E '^risk:[[:space:]]*R[0-4]' "${{ steps.branch.outputs.package_path }}/change.yaml" | grep -oE 'R[0-4]' || true)
+          declared_risk="${declared_risk:-R1}"
           {
             echo "Draft change package proposed by the planner role (model resolved from"
             echo "karsift-ai-infra/config/roles.yml)."
@@ -600,6 +613,8 @@ jobs:
             echo "PR merges with an adopted change.yaml), not before."
             echo
             echo "New package directory: \`${{ steps.branch.outputs.package_path }}\`"
+            echo
+            echo "Risk classification: $declared_risk"
           } > /tmp/pr-body.txt
           url=$(gh pr create \
             --base "${{ inputs.integration_branch }}" \
