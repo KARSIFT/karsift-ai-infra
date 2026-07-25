@@ -348,16 +348,85 @@ jobs:
       - name: Install opencode
         run: curl -fsSL https://opencode.ai/install | bash
 
+      # Bounded self-correcting retry (max 2 attempts) on top of the single
+      # opencode call this used to be. Found live 2026-07-25 dispatching
+      # VOC-026/P1: three consecutive planner runs on the same request each
+      # wrote a change.yaml that failed to parse as YAML in the "Force draft
+      # status" step below - two different syntax-error classes (an unquoted
+      # colon inside a scalar, then a bad indentation level) from two
+      # different models (glm-5.2, then after a prompt-only fix, the same
+      # model again). Same lesson as item 24/31 in the bugs list: telling the
+      # model to "double-check it parses" in the prompt is not enforcement -
+      # a deterministic check with a targeted retry is. Validates every
+      # YAML file the planner wrote inside its own package directory
+      # immediately after each attempt; on failure, resets the package
+      # directory (matches the "fresh attempt over patching a bad one"
+      # lesson from the implementer's own retry behavior) and re-runs with
+      # the exact parser error appended to the prompt, once.
       - name: Run planner
         id: planner
         continue-on-error: true
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          opencode run "$(cat /tmp/plan-prompt.txt)" \
-            --agent build \
-            --model "${{ steps.model.outputs.model }}" \
-            --auto
+          set -uo pipefail
+          pip install --quiet pyyaml
+          package_path="${{ steps.branch.outputs.package_path }}"
+          prompt_file=/tmp/plan-prompt.txt
+          max_attempts=2
+          attempt=1
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "::group::Planner attempt $attempt/$max_attempts"
+            opencode run "$(cat "$prompt_file")" \
+              --agent build \
+              --model "${{ steps.model.outputs.model }}" \
+              --auto
+            opencode_exit=$?
+            echo "::endgroup::"
+            if [ "$opencode_exit" -ne 0 ]; then
+              echo "opencode run itself failed (exit $opencode_exit)" >&2
+              exit "$opencode_exit"
+            fi
+
+            if [ -f ".karsift-plan-needs-info.md" ]; then
+              # Not a drafting outcome - nothing to YAML-validate, let the
+              # existing needs-info step downstream handle it.
+              exit 0
+            fi
+
+            yaml_error=""
+            for f in $(find "$package_path" -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null); do
+              err=$(python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$f" 2>&1) || {
+                yaml_error="$f: $err"
+                break
+              }
+            done
+
+            if [ -z "$yaml_error" ]; then
+              exit 0
+            fi
+
+            echo "::warning::Planner wrote invalid YAML on attempt $attempt: $yaml_error"
+            if [ "$attempt" -eq "$max_attempts" ]; then
+              echo "Planner produced invalid YAML after $max_attempts attempts, giving up:" >&2
+              echo "$yaml_error" >&2
+              exit 1
+            fi
+
+            git checkout -- . 2>/dev/null || true
+            git clean -fd "$package_path" 2>/dev/null || true
+            retry_prompt=/tmp/plan-prompt-retry.txt
+            {
+              cat "$prompt_file"
+              echo
+              echo "---"
+              echo "Your previous attempt wrote invalid YAML and failed to parse with this exact error:"
+              echo "$yaml_error"
+              echo "Write the full package again from scratch. Before finishing, re-check every YAML file you write for strictly valid syntax: consistent indentation throughout each block, no unquoted scalar containing \": \" (quote the whole value instead), and proper block-scalar markers (| or >) for any multi-line prose value."
+            } > "$retry_prompt"
+            prompt_file="$retry_prompt"
+            attempt=$((attempt + 1))
+          done
 
       # Branches the whole rest of the job. If the planner asked a question
       # instead of drafting, every downstream package-handling step below is
