@@ -99,8 +99,8 @@ on:
         type: string
         default: "develop"
     secrets:
-      ANTHROPIC_API_KEY:
-        description: "Used for the planner role (Claude Code CLI, restored 2026-07-26 - founder: 'use claude code as a planner, i remember we used to use it')."
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "Used for the planner role (Claude Code CLI, restored 2026-07-26). Subscription OAuth, not ANTHROPIC_API_KEY - the org behind that metered key is disabled (confirmed live the same day, see the karsift_ai_infra_overview memory), so this authenticates against the founder's own personal Claude Code subscription instead."
         required: true
       OPENCODE_API_KEY:
         description: "Unused by planner as of 2026-07-26 (moved back to Claude Code) - kept optional in case plan.yml's OpenCode execution is ever restored."
@@ -393,12 +393,23 @@ jobs:
       # version's own `--file` flag existed to avoid (see item 35). No
       # second-account fallback here (unlike OpenCode's OPENCODE_SECOND_
       # API_KEY) - no second Anthropic account/key is provisioned.
+      #
+      # CLAUDE_CODE_OAUTH_TOKEN, not ANTHROPIC_API_KEY (2026-07-26): a real
+      # diagnostic dispatch confirmed the org behind ANTHROPIC_API_KEY is
+      # still disabled ("Your ANTHROPIC_API_KEY belongs to a disabled
+      # organization") - my own local `claude` CLI test working first was
+      # misleading, since that used a personal login, not this repo's
+      # secret. CLAUDE_CODE_OAUTH_TOKEN authenticates against the
+      # founder's own personal Claude Code subscription instead - this is
+      # the same secret/pattern this role used before the 2026-07-23
+      # switch to metered ANTHROPIC_API_KEY billing (see git history,
+      # d6ff1ab~1, for that original OAuth-based version).
       - name: Run planner
         id: planner
         continue-on-error: true
         timeout-minutes: 35
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -uo pipefail
           pip install --quiet pyyaml
