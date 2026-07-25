@@ -282,16 +282,44 @@ jobs:
       # attaching the prompt as a file (`-f`/`--file`, which the CLI reads
       # itself rather than the shell placing it on the exec argv) instead of
       # inlining its content into the command line.
+      # Falls back to a second OpenCode account (OPENCODE_SECOND_API_KEY,
+      # unset unless the calling project defines it - a per-project cost
+      # decision, not a karsift-ai-infra default) if the primary account's
+      # own run fails with what looks like quota/balance exhaustion, rather
+      # than failing the whole review outright. Only retries on that
+      # specific failure class (matched against stderr/stdout by the
+      # vendor's own wording, e.g. "Insufficient balance" per the OpenCode
+      # pilot's item 26/27) - any other failure (a real prompt/model/CLI
+      # bug) fails normally instead of silently burning the second
+      # account's quota chasing an unrelated error.
       - name: Run independent verification
         id: verify
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
-          opencode run "Follow the instructions in the attached file exactly." \
-            --file /tmp/review-prompt.txt \
-            --agent reviewer \
-            --model "${{ steps.model.outputs.model }}" \
-            --format json > /tmp/verdict-events.jsonl
+          set -uo pipefail
+          run_review() {
+            OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
+              --file /tmp/review-prompt.txt \
+              --agent reviewer \
+              --model "${{ steps.model.outputs.model }}" \
+              --format json > /tmp/verdict-events.jsonl 2> /tmp/opencode-stderr.log
+          }
+          run_review "$OPENCODE_API_KEY"
+          exit_code=$?
+          if [ "$exit_code" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
+             grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
+               /tmp/opencode-stderr.log /tmp/verdict-events.jsonl 2>/dev/null; then
+            echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
+            cat /tmp/opencode-stderr.log >&2
+            run_review "$OPENCODE_SECOND_API_KEY"
+            exit_code=$?
+          fi
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/opencode-stderr.log >&2
+          fi
+          exit "$exit_code"
 
       - name: Extract verdict text
         run: |

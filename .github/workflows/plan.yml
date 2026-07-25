@@ -368,6 +368,7 @@ jobs:
         continue-on-error: true
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
           set -uo pipefail
           pip install --quiet pyyaml
@@ -375,20 +376,37 @@ jobs:
           prompt_file=/tmp/plan-prompt.txt
           max_attempts=2
           attempt=1
-          while [ "$attempt" -le "$max_attempts" ]; do
-            echo "::group::Planner attempt $attempt/$max_attempts"
-            # --file (a real file the CLI reads itself), not inlined into
-            # the command line - a large prompt can exceed Linux's ~128KB
-            # single-argument exec limit (MAX_ARG_STRLEN). Found live via
-            # review.yml's identical pattern (VOC-026-T00, PR #88).
-            opencode run "Follow the instructions in the attached file exactly." \
+          # --file (a real file the CLI reads itself), not inlined into the
+          # command line - a large prompt can exceed Linux's ~128KB
+          # single-argument exec limit (MAX_ARG_STRLEN). Found live via
+          # review.yml's identical pattern (VOC-026-T00, PR #88). Falls back
+          # to a second OpenCode account (OPENCODE_SECOND_API_KEY, unset
+          # unless the calling project defines it) on what looks like
+          # quota/balance exhaustion - see review.yml's identical fallback
+          # for the full rationale. This fallback is independent of the
+          # YAML-validity retry loop below (doesn't consume an attempt).
+          run_planner() {
+            OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
               --file "$prompt_file" \
               --agent build \
               --model "${{ steps.model.outputs.model }}" \
-              --auto
+              --auto 2> /tmp/opencode-stderr.log
+          }
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "::group::Planner attempt $attempt/$max_attempts"
+            run_planner "$OPENCODE_API_KEY"
             opencode_exit=$?
+            if [ "$opencode_exit" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
+               grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
+                 /tmp/opencode-stderr.log 2>/dev/null; then
+              echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
+              cat /tmp/opencode-stderr.log >&2
+              run_planner "$OPENCODE_SECOND_API_KEY"
+              opencode_exit=$?
+            fi
             echo "::endgroup::"
             if [ "$opencode_exit" -ne 0 ]; then
+              cat /tmp/opencode-stderr.log >&2
               echo "opencode run itself failed (exit $opencode_exit)" >&2
               exit "$opencode_exit"
             fi

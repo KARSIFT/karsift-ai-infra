@@ -287,18 +287,41 @@ jobs:
       # (MAX_ARG_STRLEN), independent of the much larger overall ARG_MAX.
       # See review.yml's identical fix for the live failure (VOC-026-T00,
       # PR #88, "Argument list too long") that surfaced this pattern.
+      # Falls back to a second OpenCode account (OPENCODE_SECOND_API_KEY,
+      # unset unless the calling project defines it) on what looks like
+      # quota/balance exhaustion from the primary account - see review.yml's
+      # identical fallback for the full rationale (only retries on that
+      # specific failure class, never blindly on any failure).
       - name: Run implementer (opencode)
         id: implementer-opencode
         if: steps.model.outputs.role == 'implementer'
         continue-on-error: true
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
-          opencode run "Follow the instructions in the attached file exactly." \
-            --file /tmp/implement-prompt.txt \
-            --agent build \
-            --model "${{ steps.model.outputs.model }}" \
-            --auto
+          set -uo pipefail
+          run_implementer() {
+            OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
+              --file /tmp/implement-prompt.txt \
+              --agent build \
+              --model "${{ steps.model.outputs.model }}" \
+              --auto 2> /tmp/opencode-stderr.log
+          }
+          run_implementer "$OPENCODE_API_KEY"
+          exit_code=$?
+          if [ "$exit_code" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
+             grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
+               /tmp/opencode-stderr.log 2>/dev/null; then
+            echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
+            cat /tmp/opencode-stderr.log >&2
+            run_implementer "$OPENCODE_SECOND_API_KEY"
+            exit_code=$?
+          fi
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/opencode-stderr.log >&2
+          fi
+          exit "$exit_code"
 
       # codex-action only runs `codex exec` in a sandbox - it never touches
       # git either. Used only for implementer_escalation (attempt 2, a
