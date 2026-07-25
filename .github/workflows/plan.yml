@@ -390,13 +390,19 @@ jobs:
       # the planner (opencode-go/glm-5.2) hung with zero progress for 40+
       # minutes (P1's equivalent run took ~5-6 minutes) - had to be manually
       # cancelled and redispatched, and there was no automatic signal that
-      # anything was wrong short of a human noticing the elapsed time. 20
-      # minutes accounts for this step's own internal 2-attempt YAML-retry
-      # loop above, not just one opencode call.
+      # anything was wrong short of a human noticing the elapsed time.
+      # Raised from 20 to 35 minutes the same day, dispatching VOC-028/P3
+      # (sentence practice/AI feedback, a 6-task package grounded in a much
+      # longer/denser source doc than P1/P2): two consecutive attempts hit
+      # the 20-minute cap with zero sign of a hang (clean linear progress,
+      # no repeated tool-call loop) - a genuine capacity shortfall for a
+      # larger package, not the same failure mode item 37/38 fixed. 35
+      # minutes accounts for both a legitimately larger single draft AND
+      # this step's own internal 2-attempt YAML-retry loop above.
       - name: Run planner
         id: planner
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
           # TEMPORARILY SWAPPED (2026-07-25): the primary account's weekly
           # OpenCode Go quota ran out mid-VOC-027/P2 - confirmed by the
