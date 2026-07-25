@@ -391,7 +391,7 @@ jobs:
 
       - name: Commit and push
         id: commit
-        if: steps.implementer.outcome == 'success'
+        if: steps.implementer.outputs.outcome == 'success'
         run: |
           set -euo pipefail
           git config user.name "karsift-ai-infra-bot"
@@ -537,16 +537,30 @@ jobs:
             --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
             --body "$body"
 
-      # `!= 'success'`, not `== 'failure'` - a step that hits its own
-      # timeout-minutes is cancelled by the runner, and continue-on-error
-      # preserves that as outcome == 'cancelled' (not 'failure'). The old
-      # `== 'failure'` check missed that case entirely: found live on
-      # VOC-028-T05, which hit "Run implementer (opencode)"'s 20-minute
-      # timeout and the job still reported overall success (no PR, no
-      # escalation comment, no job failure - a silent no-op auto-advance
-      # had no way to detect or react to).
+      # Two stacked bugs found live on VOC-028-T05, both now fixed:
+      # 1. `!= 'success'`, not `== 'failure'` - a step that hits its own
+      #    timeout-minutes is cancelled by the runner, and continue-on-error
+      #    preserves that as outcome == 'cancelled' (not 'failure').
+      # 2. `steps.implementer.outputs.outcome`, not `steps.implementer.outcome`
+      #    (missing `.outputs`) - `steps.<id>.outcome` (no `.outputs`) is the
+      #    *step's own* execution result (did "Normalize implementer outcome"
+      #    itself run without erroring - an `echo` command, so always
+      #    'success' no matter what it echoed), completely different from
+      #    `steps.<id>.outputs.<name>`, the custom output value that step
+      #    wrote. Fix #1 alone (still using the wrong field) made zero
+      #    observable difference - re-timed-out on the very next T05 retry
+      #    with the identical silent-success symptom, which is what
+      #    surfaced this second, more fundamental bug. Together: neither
+      #    "Escalate on final failed attempt" nor "Fail job if implementer
+      #    step failed" had EVER actually fired on any real implementer
+      #    failure since this Normalize/outcome pattern was introduced -
+      #    both conditions were unconditionally false. Also fixed the same
+      #    bug on line ~394 ("Commit and push"'s own `if:`), which had been
+      #    running unconditionally regardless of implementer outcome for
+      #    the same reason (harmless in practice only because its own
+      #    internal git-diff check happens to no-op when nothing changed).
       - name: Escalate on final failed attempt
-        if: (steps.implementer.outcome != 'success' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
+        if: (steps.implementer.outputs.outcome != 'success' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -554,5 +568,5 @@ jobs:
             "The implementer failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
 
       - name: Fail job if implementer step failed
-        if: steps.implementer.outcome != 'success'
+        if: steps.implementer.outputs.outcome != 'success'
         run: exit 1
