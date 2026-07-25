@@ -99,8 +99,12 @@ on:
         type: string
         default: "develop"
     secrets:
-      OPENCODE_API_KEY:
+      ANTHROPIC_API_KEY:
+        description: "Used for the planner role (Claude Code CLI, restored 2026-07-26 - founder: 'use claude code as a planner, i remember we used to use it')."
         required: true
+      OPENCODE_API_KEY:
+        description: "Unused by planner as of 2026-07-26 (moved back to Claude Code) - kept optional in case plan.yml's OpenCode execution is ever restored."
+        required: false
       KARSIFT_BOT_APP_ID:
         description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
         required: false
@@ -359,61 +363,42 @@ jobs:
       # actually confirmed broken; don't avoid it on that basis if Claude is
       # restored here later.
       #
-      # --agent build (not review.yml's restricted `reviewer` agent): the
-      # planner needs to create real files (the draft package directory),
-      # same requirement implement.yml's own use of the built-in full-access
-      # agent documents. --auto for the same reason as implement.yml - avoids
-      # a headless hang on the two permissions `build` marks "ask" rather
-      # than allow/deny outright. No allow-bot-users equivalent needed -
-      # opencode has no actor-permission gate the way codex-action did.
-      - name: Install opencode
-        run: curl -fsSL https://opencode.ai/install | bash
+      # RESTORED TO CLAUDE CODE (2026-07-26, founder: "use claude code as a
+      # planner, i remember we used to use it"). planner had been on
+      # OpenCode since 2026-07-25 (opencode-go/glm-5.2, then
+      # opencode-go/mimo-v2.5-pro for cost) after the original 2026-07-24
+      # move away from Claude (an Anthropic Console org billing outage, not
+      # a karsift-ai-infra bug - see this file's own git history,
+      # 6457d37~1, for the last pre-OpenAI/OpenCode version this restores
+      # the invocation style from). If Claude access is ever disabled
+      # again, config/roles.yml's own header comments document the same
+      # revert-to-OpenCode path.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
 
-      # Bounded self-correcting retry (max 2 attempts) on top of the single
-      # opencode call this used to be. Found live 2026-07-25 dispatching
-      # VOC-026/P1: three consecutive planner runs on the same request each
-      # wrote a change.yaml that failed to parse as YAML in the "Force draft
-      # status" step below - two different syntax-error classes (an unquoted
-      # colon inside a scalar, then a bad indentation level) from two
-      # different models (glm-5.2, then after a prompt-only fix, the same
-      # model again). Same lesson as item 24/31 in the bugs list: telling the
-      # model to "double-check it parses" in the prompt is not enforcement -
-      # a deterministic check with a targeted retry is. Validates every
-      # YAML file the planner wrote inside its own package directory
-      # immediately after each attempt; on failure, resets the package
-      # directory (matches the "fresh attempt over patching a bad one"
-      # lesson from the implementer's own retry behavior) and re-runs with
-      # the exact parser error appended to the prompt, once.
-      # timeout-minutes bounds a real hang, not just a slow run - without it
-      # this step inherits the job's default (up to 6 hours) and blocks the
-      # whole pipeline silently. Found live 2026-07-25 dispatching VOC-027/P2:
-      # the planner (opencode-go/glm-5.2) hung with zero progress for 40+
-      # minutes (P1's equivalent run took ~5-6 minutes) - had to be manually
-      # cancelled and redispatched, and there was no automatic signal that
-      # anything was wrong short of a human noticing the elapsed time.
-      # Raised from 20 to 35 minutes the same day, dispatching VOC-028/P3
-      # (sentence practice/AI feedback, a 6-task package grounded in a much
-      # longer/denser source doc than P1/P2): two consecutive attempts hit
-      # the 20-minute cap with zero sign of a hang (clean linear progress,
-      # no repeated tool-call loop) - a genuine capacity shortfall for a
-      # larger package, not the same failure mode item 37/38 fixed. 35
-      # minutes accounts for both a legitimately larger single draft AND
-      # this step's own internal 2-attempt YAML-retry loop above.
+      # Bounded self-correcting retry (max 2 attempts), unchanged in shape
+      # from the OpenCode-era version - see item 33 in the bugs-fixed
+      # memory for why this exists (three consecutive planner runs each
+      # wrote invalid YAML; a deterministic parse-and-retry check, not a
+      # prompt instruction, is the real enforcement). timeout-minutes 35
+      # for the same reason as the OpenCode version's own history (a large
+      # package's single draft, plus this loop's own retry, both take real
+      # time) - not yet re-measured against Claude's own typical duration,
+      # watch the first few real dispatches.
+      #
+      # Prompt is piped via stdin (`claude -p < file`), not passed as a CLI
+      # argument - confirmed live that `-p`/`--print` reads from stdin when
+      # no positional prompt argument is given, avoiding the same
+      # ~128KB single-argument exec limit (MAX_ARG_STRLEN) the OpenCode
+      # version's own `--file` flag existed to avoid (see item 35). No
+      # second-account fallback here (unlike OpenCode's OPENCODE_SECOND_
+      # API_KEY) - no second Anthropic account/key is provisioned.
       - name: Run planner
         id: planner
         continue-on-error: true
         timeout-minutes: 35
         env:
-          # TEMPORARILY SWAPPED (2026-07-25): the primary account's weekly
-          # OpenCode Go quota ran out mid-VOC-027/P2 - confirmed by the
-          # founder, not just inferred from the symptom (a hard quota cap
-          # apparently blocks the CLI indefinitely with zero output rather
-          # than a clean error, which is why the quota-fallback logic below
-          # never caught it - see this file's Run planner step for that
-          # logic and its own limitation). Using the second account as
-          # primary until the first's weekly quota resets - swap back then.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
-          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -uo pipefail
           pip install --quiet pyyaml
@@ -421,39 +406,24 @@ jobs:
           prompt_file=/tmp/plan-prompt.txt
           max_attempts=2
           attempt=1
-          # --file (a real file the CLI reads itself), not inlined into the
-          # command line - a large prompt can exceed Linux's ~128KB
-          # single-argument exec limit (MAX_ARG_STRLEN). Found live via
-          # review.yml's identical pattern (VOC-026-T00, PR #88). Falls back
-          # to a second OpenCode account (OPENCODE_SECOND_API_KEY, unset
-          # unless the calling project defines it) on what looks like
-          # quota/balance exhaustion - see review.yml's identical fallback
-          # for the full rationale. This fallback is independent of the
-          # YAML-validity retry loop below (doesn't consume an attempt).
           run_planner() {
-            OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
-              --file "$prompt_file" \
-              --agent build \
-              --model "${{ steps.model.outputs.model }}" \
-              --auto 2> /tmp/opencode-stderr.log
+            claude --model "${{ steps.model.outputs.model }}" \
+              --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
+              --output-format json \
+              -p < "$prompt_file" > /tmp/planner-raw.json 2> /tmp/claude-stderr.log
           }
           while [ "$attempt" -le "$max_attempts" ]; do
             echo "::group::Planner attempt $attempt/$max_attempts"
-            run_planner "$OPENCODE_API_KEY"
-            opencode_exit=$?
-            if [ "$opencode_exit" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
-               grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
-                 /tmp/opencode-stderr.log 2>/dev/null; then
-              echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
-              cat /tmp/opencode-stderr.log >&2
-              run_planner "$OPENCODE_SECOND_API_KEY"
-              opencode_exit=$?
-            fi
+            claude_exit=0
+            run_planner || claude_exit=$?
+            jq -r '.result // empty' /tmp/planner-raw.json 2>/dev/null || true
+            echo "--- cost/cache telemetry ---"
+            jq '{total_cost_usd, usage}' /tmp/planner-raw.json 2>/dev/null || true
             echo "::endgroup::"
-            if [ "$opencode_exit" -ne 0 ]; then
-              cat /tmp/opencode-stderr.log >&2
-              echo "opencode run itself failed (exit $opencode_exit)" >&2
-              exit "$opencode_exit"
+            if [ "$claude_exit" -ne 0 ]; then
+              cat /tmp/claude-stderr.log >&2
+              echo "claude run itself failed (exit $claude_exit)" >&2
+              exit "$claude_exit"
             fi
 
             if [ -f ".karsift-plan-needs-info.md" ]; then
