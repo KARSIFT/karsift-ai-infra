@@ -275,3 +275,21 @@ jobs:
       integration_branch: "develop"   # match the value used elsewhere in this file
       production_branch: "main"
     secrets: inherit
+
+  # Fills the gap between adoption (one human decision, the whole roster at
+  # once) and release (one human decision, the whole completed package at
+  # once): dispatches the NEXT task in an adopted package's roster
+  # automatically once the current task's tracking issue closes, so routine
+  # task-to-task progression needs no further per-task human trigger. A
+  # no-op on the package's last task (release's own check-completion above
+  # handles that transition instead) or if the next task is already
+  # dispatched/done. Runs on the same `issues: closed` event as `release`
+  # above - both are safe to fire together, since each package/task can
+  # only ever be in the "next task exists" or "roster complete" state, never
+  # both, so exactly one of the two actually does something per event.
+  auto-advance:
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/auto-advance.yml@main
+    with:
+      integration_branch: "develop"   # match the value used elsewhere in this file
+    secrets: inherit

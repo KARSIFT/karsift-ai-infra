@@ -1,0 +1,158 @@
+name: auto-advance (reusable)
+
+# Closes the "who dispatches the next task" gap the founder-gate workflow
+# was doing by hand until now (2026-07-25): once a package is ADOPTED, a
+# human/founder already authorized its whole task roster in one decision at
+# adoption time (see adopt.yml) - so routine task-to-task progression
+# through that already-authorized roster is not a second decision point.
+# The two decisions that still need a human are package adoption (merging
+# the plan/ PR) and release promotion (release.yml's "Release: <id>" issue,
+# unaffected by this file) - this workflow only fills the gap in between:
+# when a task's tracking issue closes (normally via its PR merging), find
+# the next task_id in `<package_path>/.karsift/tasks.json` and dispatch
+# implement.yml for it automatically, attempt 1.
+#
+# Deliberately conservative about when it fires - a wrongly-triggered
+# duplicate dispatch is a worse failure mode than staying silent:
+#   - No-ops on any issue whose title isn't "<CHANGE-ID>: ..." (mirrors
+#     release.yml's own check-completion guard).
+#   - No-ops if there's no next task (release.yml's check-completion job
+#     handles that case - opening the release-approval issue instead).
+#   - No-ops if the next task's issue is already closed (already done or
+#     already in flight) or if a PR already exists on its deterministic
+#     agent/<change>-<slug> branch (avoids a double-dispatch race if this
+#     fires more than once for the same close event, or a human already
+#     dispatched it by hand in the meantime).
+
+on:
+  workflow_call:
+    inputs:
+      integration_branch:
+        description: 'The calling project''s integration branch, e.g. "develop".'
+        required: false
+        type: string
+        default: "develop"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      OPENCODE_API_KEY:
+        required: false
+      OPENCODE_SECOND_API_KEY:
+        required: false
+      KARSIFT_BOT_APP_ID:
+        required: false
+      KARSIFT_BOT_PRIVATE_KEY:
+        required: false
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+      contents: read
+    outputs:
+      should_dispatch: ${{ steps.next.outputs.should_dispatch }}
+      change_id: ${{ steps.next.outputs.change_id }}
+      package_path: ${{ steps.next.outputs.package_path }}
+      task_id: ${{ steps.next.outputs.task_id }}
+      issue_number: ${{ steps.next.outputs.issue_number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.integration_branch }}
+
+      # Same identify pattern as release.yml's check-completion job (title
+      # prefix -> package directory glob -> roster file), reused verbatim
+      # for consistency - plus the closed issue's own task_id, parsed from
+      # the same "<change_id>: <task_id> - <title>" convention plan.yml
+      # uses when opening these issues.
+      - name: Determine next task, if any
+        id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+          echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+
+          change_id=$(echo "$ISSUE_TITLE" | grep -oP '^[A-Za-z][A-Za-z0-9]*-\d+(?=:)' || true)
+          closed_task_id=$(echo "$ISSUE_TITLE" | grep -oP '(?<=: )[A-Za-z0-9]+-\d+-T\d+' || true)
+          if [ -z "$change_id" ] || [ -z "$closed_task_id" ]; then
+            echo "Closed issue title doesn't match '<CHANGE-ID>: <TASK-ID> - ...' - not a tracked task issue, nothing to do."
+            exit 0
+          fi
+
+          package_path=$(find specs/changes -maxdepth 1 -mindepth 1 -type d -name "${change_id}-*" | head -1 || true)
+          if [ -z "$package_path" ]; then
+            echo "No package directory found for $change_id under specs/changes/ on ${{ inputs.integration_branch }} - nothing to do."
+            exit 0
+          fi
+
+          roster="$package_path/.karsift/tasks.json"
+          if [ ! -f "$roster" ]; then
+            echo "$package_path has no .karsift/tasks.json - nothing to do."
+            exit 0
+          fi
+
+          next=$(python3 - "$roster" "$closed_task_id" <<'PYEOF'
+          import json
+          import sys
+
+          roster_path, closed = sys.argv[1:3]
+          roster = json.load(open(roster_path))
+          ids = [t["task_id"] for t in roster]
+          if closed not in ids:
+              print("")
+          else:
+              i = ids.index(closed)
+              if i + 1 < len(roster):
+                  nxt = roster[i + 1]
+                  print(f'{nxt["task_id"]}\t{nxt["issue"]}')
+              else:
+                  print("")
+          PYEOF
+          )
+          if [ -z "$next" ]; then
+            echo "No next task after $closed_task_id in $roster (last task, or not found in roster) - nothing to do; release.yml's check-completion handles the last-task case."
+            exit 0
+          fi
+
+          next_task_id=$(echo "$next" | cut -f1)
+          next_issue=$(echo "$next" | cut -f2)
+
+          next_state=$(gh issue view "$next_issue" --json state -q .state)
+          if [ "$next_state" != "OPEN" ]; then
+            echo "Next task's issue #$next_issue is already $next_state - not redispatching."
+            exit 0
+          fi
+
+          slug=$(echo "$next_task_id" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+          change_lower=$(echo "$change_id" | tr '[:upper:]' '[:lower:]')
+          branch="agent/${change_lower}-${slug}"
+          existing_pr=$(gh pr list --head "$branch" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$existing_pr" ]; then
+            echo "Branch $branch already has PR #$existing_pr - not redispatching."
+            exit 0
+          fi
+
+          echo "should_dispatch=true" >> "$GITHUB_OUTPUT"
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+          echo "task_id=$next_task_id" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$next_issue" >> "$GITHUB_OUTPUT"
+
+  implement:
+    needs: advance
+    if: needs.advance.outputs.should_dispatch == 'true'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
+    with:
+      change_id: ${{ needs.advance.outputs.change_id }}
+      package_path: ${{ needs.advance.outputs.package_path }}
+      task_id: ${{ needs.advance.outputs.task_id }}
+      issue_number: ${{ needs.advance.outputs.issue_number }}
+      attempt: "1"
+      integration_branch: ${{ inputs.integration_branch }}
+    secrets: inherit
