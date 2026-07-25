@@ -377,7 +377,12 @@ jobs:
           attempt=1
           while [ "$attempt" -le "$max_attempts" ]; do
             echo "::group::Planner attempt $attempt/$max_attempts"
-            opencode run "$(cat "$prompt_file")" \
+            # --file (a real file the CLI reads itself), not inlined into
+            # the command line - a large prompt can exceed Linux's ~128KB
+            # single-argument exec limit (MAX_ARG_STRLEN). Found live via
+            # review.yml's identical pattern (VOC-026-T00, PR #88).
+            opencode run "Follow the instructions in the attached file exactly." \
+              --file "$prompt_file" \
               --agent build \
               --model "${{ steps.model.outputs.model }}" \
               --auto

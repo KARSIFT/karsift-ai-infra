@@ -271,12 +271,24 @@ jobs:
       # only paper over a permission key I forgot to enumerate, which is
       # exactly the failure mode worth surfacing (a hang/timeout), not
       # silently auto-approving.
+      # The prompt used to be spliced in as a single positional argument
+      # (`opencode run "$(cat ...)"`) - fine for a small package but Linux's
+      # execve() rejects any single argument over ~128KB (MAX_ARG_STRLEN)
+      # regardless of the much larger overall ARG_MAX, and a real review
+      # prompt (full diff + task files + acceptance criteria) crosses that
+      # on anything but a trivial PR. Found live 2026-07-25 on VOC-026-T00
+      # (a migration/schema-heavy PR, PR #88): failed in 8s with "Argument
+      # list too long", exit 126, before ever reaching the model. Fixed by
+      # attaching the prompt as a file (`-f`/`--file`, which the CLI reads
+      # itself rather than the shell placing it on the exec argv) instead of
+      # inlining its content into the command line.
       - name: Run independent verification
         id: verify
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          opencode run "$(cat /tmp/review-prompt.txt)" \
+          opencode run "Follow the instructions in the attached file exactly." \
+            --file /tmp/review-prompt.txt \
             --agent reviewer \
             --model "${{ steps.model.outputs.model }}" \
             --format json > /tmp/verdict-events.jsonl

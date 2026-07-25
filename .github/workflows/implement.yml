@@ -260,6 +260,13 @@ jobs:
       # required so a headless CI run can't hang waiting for interactive
       # approval; safe here because this is a fresh, disposable checkout
       # with nothing sensitive outside the workspace to protect.
+      # Prompt passed via `--file` (a real file the CLI itself reads), not
+      # inlined into the command line as a positional argument - a large
+      # prompt (full task/spec/acceptance-criteria/prior-findings content)
+      # can exceed Linux's ~128KB single-argument exec limit
+      # (MAX_ARG_STRLEN), independent of the much larger overall ARG_MAX.
+      # See review.yml's identical fix for the live failure (VOC-026-T00,
+      # PR #88, "Argument list too long") that surfaced this pattern.
       - name: Run implementer (opencode)
         id: implementer-opencode
         if: steps.model.outputs.role == 'implementer'
@@ -267,7 +274,8 @@ jobs:
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
-          opencode run "$(cat /tmp/implement-prompt.txt)" \
+          opencode run "Follow the instructions in the attached file exactly." \
+            --file /tmp/implement-prompt.txt \
             --agent build \
             --model "${{ steps.model.outputs.model }}" \
             --auto
