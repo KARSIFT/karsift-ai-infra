@@ -104,15 +104,20 @@ jobs:
           # alone on its own line (vocanova-platform-sandbox VOC-013-T00's
           # first real remediation-path run: a genuine FAIL verdict was
           # posted, should_retry stayed false, and the retry silently never
-          # fired - again). Rather than adding a third regex variant for a
-          # third formatting shape, prompts/review.md now requires the
-          # reviewer's literal last line to be exactly "VERDICT: FAIL" (or
-          # PASS / PASS WITH NON-BLOCKING FINDINGS), with no markdown
-          # decoration - this checks for that exact anchor instead of
-          # pattern-matching whatever prose/heading style the model chose
-          # this time.
+          # fired - again). prompts/review.md requires the reviewer's
+          # literal last line to be exactly "VERDICT: FAIL" (or PASS / PASS
+          # WITH NON-BLOCKING FINDINGS), with no markdown decoration - but a
+          # FOURTH occurrence (2026-07-25, VOC-025-T04 PR #76, the new
+          # OpenCode reviewer's first real run) posted "**VERDICT: FAIL**",
+          # the whole line wrapped in bold, and should_retry again read
+          # false on a genuine FAIL. A new model violating the same explicit
+          # instruction is exactly the scenario prompt compliance alone
+          # doesn't reliably survive. Added 0-2 leading/trailing '*'
+          # tolerance around the exact anchor IN ADDITION TO the prompt
+          # instruction (kept, not replaced) - merge-gate.yml's report-status
+          # job carries the identical fix and reasoning; keep both in sync.
           has_fail_verdict=false
-          if echo "$verdict" | grep -qE '^VERDICT:[[:space:]]*FAIL[[:space:]]*$'; then
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL[[:space:]]*\*{0,2}$'; then
             has_fail_verdict=true
           fi
 
