@@ -91,7 +91,14 @@
 # invocation. implementer_escalation below also runs via `opencode run
 # --agent build` as of 2026-07-26 - see that entry's own comment for why
 # the cross-vendor separation was traded away.
-implementer: opencode-go/kimi-k2.7-code
+#
+# MOVED (2026-07-26, founder cost directive: "opencode usage is high"):
+# kimi-k2.7-code -> minimax-m3, a cheaper OpenCode Go tier. Same open
+# question as every prior implementer swap - kimi's own track record here
+# was genuinely good (see the VOC-025-T00 review evidence above); watch the
+# next several implement runs' CI/review pass rate to confirm minimax-m3
+# holds up on real build/test-constrained code, not just cost less.
+implementer: opencode-go/minimax-m3
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -208,4 +215,12 @@ reviewer_fast_retry: opencode-go/deepseek-v4-pro
 # the credentials layer (OPENCODE_API_KEY/OPENCODE_SECOND_API_KEY swapped in
 # all three workflow files, not here) rather than the model layer - reverted
 # back to glm-5.2, the founder's actual choice.
-planner: opencode-go/glm-5.2
+#
+# MOVED (2026-07-26, founder cost directive: "opencode usage is high"):
+# glm-5.2 -> mimo-v2.5-pro, a cheaper OpenCode Go tier. No independence
+# requirement to satisfy for this role (see paragraph above) - purely a
+# cost choice. Not yet exercised live; watch the next real plan dispatch's
+# draft quality and timing (glm-5.2's own capacity/timeout history on
+# larger packages, see plan.yml's 35-minute timeout comment, is worth
+# re-checking against this model too).
+planner: opencode-go/mimo-v2.5-pro
