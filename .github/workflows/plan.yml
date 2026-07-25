@@ -258,7 +258,28 @@ jobs:
           if [ -z "$title_source" ] && [ -n "${{ steps.issue.outputs.title }}" ]; then
             title_source="${{ steps.issue.outputs.title }}"
           fi
-          slug=$(echo "$title_source" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//' | cut -c1-50)
+          # Only slugify the human title, not the whole free-text request - a
+          # request commonly reads "<title>, per <doc citation and detail>"
+          # (both VOC-026/P1 and VOC-027/P2 were dispatched this way); take
+          # everything before the first comma when one exists. Found live
+          # 2026-07-25 on VOC-027/P2: without this, "per
+          # docs/product/12-mvp-implementation-plan.md" got slugified into
+          # the package path and truncated mid-word at the 50-char cutoff
+          # ("...per-docs-pro"), a garbled name that the planner itself
+          # (reasonably) declined to use verbatim, writing to a cleaner
+          # self-chosen directory instead and tripping "Verify scope
+          # discipline" - the deterministic path and the planner's own
+          # judgment had silently diverged. Also trim any trailing partial
+          # word if the 50-char cutoff still lands mid-word, so a
+          # truncated slug is never confusing enough to invite that same
+          # "helpful correction" from a future planner run.
+          title_only="${title_source%%,*}"
+          full_slug=$(echo "$title_only" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+          if [ "${#full_slug}" -gt 50 ]; then
+            slug=$(echo "$full_slug" | cut -c1-50 | sed 's/-[^-]*$//')
+          else
+            slug="$full_slug"
+          fi
           branch="plan/$(echo "${{ steps.id.outputs.id }}" | tr '[:upper:]' '[:lower:]')-${slug}"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
