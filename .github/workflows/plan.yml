@@ -377,8 +377,16 @@ jobs:
         continue-on-error: true
         timeout-minutes: 20
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
+          # TEMPORARILY SWAPPED (2026-07-25): the primary account's weekly
+          # OpenCode Go quota ran out mid-VOC-027/P2 - confirmed by the
+          # founder, not just inferred from the symptom (a hard quota cap
+          # apparently blocks the CLI indefinitely with zero output rather
+          # than a clean error, which is why the quota-fallback logic below
+          # never caught it - see this file's Run planner step for that
+          # logic and its own limitation). Using the second account as
+          # primary until the first's weekly quota resets - swap back then.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: |
           set -uo pipefail
           pip install --quiet pyyaml

@@ -192,18 +192,16 @@ reviewer_fast_retry: opencode-go/deepseek-v4-pro
 # execution step was rewritten from openai/codex-action to `opencode run
 # --agent build` the same way implement.yml's was.
 #
-# TEMPORARILY MOVED AGAIN (2026-07-25, same day): glm-5.2 hung with zero
-# progress dispatching VOC-027/P2, 3 attempts in a row, each killed only by
-# plan.yml's new 20-minute step timeout (added same incident - see that
-# file's header comment). The exact same model had drafted VOC-026/P1
-# cleanly just hours earlier (~5-6 min), so this isn't glm-5.2 being weak in
-# general - either a request-specific pathological case (P2's prompt is
-# longer/more document-referencing than P1's) or a vendor-side blip specific
-# to this model today. Rather than keep burning 20-minute timeout cycles,
-# switched to kimi-k2.7-code (implementer's own model, already proven
-# reliable across all 6 of VOC-026/P1's real implement runs this session) -
-# no independence requirement blocks reusing it here. REVISIT: switch back
-# to glm-5.2 once there's a reason to believe the hang was request-specific
-# rather than model-wide (e.g. after confirming glm-5.2 drafts a normal
-# package again on some other request).
-planner: opencode-go/kimi-k2.7-code
+# MISDIAGNOSED, THEN CORRECTED (2026-07-25, same day): glm-5.2 hung with
+# zero progress dispatching VOC-027/P2 - briefly swapped to kimi-k2.7-code
+# on the theory this was glm-5.2-specific, but kimi hung identically
+# (confirmed via a trivial one-line diagnostic dispatch that also hung with
+# zero output). Root cause was neither model: the OPENCODE_API_KEY
+# account's weekly OpenCode Go quota had run out (confirmed by the founder)
+# - a hard cap that apparently blocks the CLI indefinitely instead of
+# returning a clean error, which is also why plan.yml/implement.yml/
+# review.yml's own quota-fallback string-matching never caught it. Fixed at
+# the credentials layer (OPENCODE_API_KEY/OPENCODE_SECOND_API_KEY swapped in
+# all three workflow files, not here) rather than the model layer - reverted
+# back to glm-5.2, the founder's actual choice.
+planner: opencode-go/glm-5.2
