@@ -146,6 +146,21 @@ jobs:
           print(f"Package is adopted and authorized (declared risk: {risk or 'none declared'}) - proceeding.")
           PYEOF
 
+      # On attempt 2+ (a remediate.yml retry), resume the existing
+      # agent/<change>-<slug> branch instead of always branching fresh off
+      # integration_branch. Found live 2026-07-25 on VOC-026-T00 (PR #88):
+      # a review FAIL retry always recreated the branch from develop,
+      # silently discarding attempt 1's entire (mostly-correct, per the
+      # reviewer) implementation - the retry prompt's "prior review
+      # findings" then referenced files that no longer existed in the
+      # working tree. The escalation model (gpt-5.6-sol) correctly refused
+      # to blindly reinvent ~900 lines of migrations/schemas from a review
+      # excerpt rather than guess, which is what surfaced this. Attempt 1
+      # is unaffected (no existing branch to resume from) - this only
+      # changes retry behavior, and only when the branch actually exists.
+      # A human wanting a genuinely fresh restart (see item 31 in the bugs
+      # list - sometimes a clean attempt beats patching a bad one) still
+      # has that path: close the PR and re-dispatch as attempt 1.
       - name: Create implementation branch
         id: branch
         run: |
@@ -154,8 +169,13 @@ jobs:
           change_lower=$(echo "${{ inputs.change_id }}" | tr '[:upper:]' '[:lower:]')
           branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          if [ "${{ inputs.attempt }}" != "1" ] && git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -b "$branch"
+          fi
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git checkout -b "$branch"
 
       # Escalates to config/roles.yml's `implementer_escalation` (if
       # configured) on attempt 2 - the last chance before remediate.yml gives
