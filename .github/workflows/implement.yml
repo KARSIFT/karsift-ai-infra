@@ -293,12 +293,18 @@ jobs:
       # specific failure class, never blindly on any failure).
       # timeout-minutes bounds a real hang, not just a slow run - see
       # plan.yml's identical addition for the live incident that surfaced
-      # this gap (a planner hang, same underlying opencode CLI).
+      # this gap (a planner hang, same underlying opencode CLI). Raised
+      # 20 -> 35 (2026-07-26, matching plan.yml's identical raise the same
+      # day): VOC-028-T05 (a large evaluation/observability task - 200+
+      # synthetic cases, a golden regression set, mock-inventory updates)
+      # hit the 20-minute cap with clean linear progress, no hang symptom -
+      # a genuine capacity shortfall for a big task, same root cause as
+      # plan.yml's VOC-028/P3 timeout increase.
       - name: Run implementer (opencode)
         id: implementer-opencode
         if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
           # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
           # for why: the primary account's weekly OpenCode Go quota ran out.
@@ -531,8 +537,16 @@ jobs:
             --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
             --body "$body"
 
+      # `!= 'success'`, not `== 'failure'` - a step that hits its own
+      # timeout-minutes is cancelled by the runner, and continue-on-error
+      # preserves that as outcome == 'cancelled' (not 'failure'). The old
+      # `== 'failure'` check missed that case entirely: found live on
+      # VOC-028-T05, which hit "Run implementer (opencode)"'s 20-minute
+      # timeout and the job still reported overall success (no PR, no
+      # escalation comment, no job failure - a silent no-op auto-advance
+      # had no way to detect or react to).
       - name: Escalate on final failed attempt
-        if: (steps.implementer.outcome == 'failure' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
+        if: (steps.implementer.outcome != 'success' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -540,5 +554,5 @@ jobs:
             "The implementer failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
 
       - name: Fail job if implementer step failed
-        if: steps.implementer.outcome == 'failure'
+        if: steps.implementer.outcome != 'success'
         run: exit 1
