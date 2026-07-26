@@ -63,10 +63,7 @@ on:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
         required: false
       OPENCODE_API_KEY:
-        description: "Unused while the temporary Claude Haiku 4.5 quota fallback is active (2026-07-26, see config/roles.yml) - kept optional so reverting to OpenCode is a one-line if: flip, not a re-add."
-        required: false
-      CLAUDE_CODE_OAUTH_TOKEN:
-        description: "Used for implementer/implementer_escalation while the temporary Claude Haiku 4.5 fallback is active (2026-07-26) - same subscription OAuth token plan.yml's planner role already uses, not ANTHROPIC_API_KEY (that org is disabled - see plan.yml's own header comment)."
+        description: "Used for both the base implementer and implementer_escalation roles (both OpenCode-backed as of 2026-07-26)."
         required: true
       KARSIFT_BOT_APP_ID:
         description: >
@@ -270,14 +267,8 @@ jobs:
       # revert if OpenAI quota comes back, rather than reconstructing the
       # actor-permission/verbosity workarounds from scratch.
 
-      # DISABLED 2026-07-26 (founder: "i dont have quota for opencode until
-      # tomorow") - OpenCode Go quota exhausted with no second-account
-      # headroom left, see config/roles.yml's matching note. Kept in place
-      # (if: false), not deleted, same convention as the dormant
-      # openai/codex-action step below - flip this back to the role check
-      # and disable the claude-code step below it once quota resets.
       - name: Install opencode
-        if: false
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -311,7 +302,7 @@ jobs:
       # plan.yml's VOC-028/P3 timeout increase.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: false
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
         timeout-minutes: 35
         env:
@@ -340,46 +331,6 @@ jobs:
           fi
           if [ "$exit_code" -ne 0 ]; then
             cat /tmp/opencode-stderr.log >&2
-          fi
-          exit "$exit_code"
-
-      # TEMPORARY QUOTA FALLBACK (2026-07-26, founder: "i dont have quota for
-      # opencode until tomorow") - runs implementer/implementer_escalation on
-      # Claude Haiku 4.5 via the Claude Code CLI instead, using the same
-      # CLAUDE_CODE_OAUTH_TOKEN subscription auth plan.yml's planner already
-      # uses. --allowedTools grants real write/edit/bash access (unlike
-      # review.yml's read-only reviewer agent) since this role has to
-      # actually produce a code change. --output-format json + `-p` reading
-      # from stdin mirrors plan.yml's own invocation exactly (avoids the
-      # ~128KB single-argument exec limit a positional prompt would hit -
-      # see plan.yml's own note on this). No second-account/model fallback
-      # here (unlike opencode's OPENCODE_SECOND_API_KEY) - only one Claude
-      # account is provisioned. Revert: flip this step's `if:` to `false`
-      # and the opencode step above back to the role check once OpenCode Go
-      # quota resets (founder said "tomorrow").
-      - name: Install Claude Code
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Run implementer (claude-code)
-        id: implementer-claude
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
-        continue-on-error: true
-        timeout-minutes: 35
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          set -uo pipefail
-          claude --model "${{ steps.model.outputs.model }}" \
-            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-            --output-format json \
-            -p < /tmp/implement-prompt.txt > /tmp/claude-raw.json 2> /tmp/claude-stderr.log
-          exit_code=$?
-          jq -r '.result // empty' /tmp/claude-raw.json 2>/dev/null || true
-          echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/claude-raw.json 2>/dev/null || true
-          if [ "$exit_code" -ne 0 ]; then
-            cat /tmp/claude-stderr.log >&2
           fi
           exit "$exit_code"
 
@@ -436,13 +387,7 @@ jobs:
         id: implementer
         if: always()
         run: |
-          for outcome in "${{ steps.implementer-claude.outcome }}" "${{ steps.implementer-opencode.outcome }}" "${{ steps.implementer-openai.outcome }}"; do
-            if [ "$outcome" != "skipped" ]; then
-              echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-          echo "outcome=skipped" >> "$GITHUB_OUTPUT"
+          echo "outcome=${{ steps.implementer-opencode.outcome }}" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
         id: commit

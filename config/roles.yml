@@ -98,31 +98,7 @@
 # was genuinely good (see the VOC-025-T00 review evidence above); watch the
 # next several implement runs' CI/review pass rate to confirm minimax-m3
 # holds up on real build/test-constrained code, not just cost less.
-#
-# TEMPORARY QUOTA FALLBACK (2026-07-26, later same day - founder: "i dont
-# have quota for opencode until tomorow"): the OpenCode Go weekly quota
-# (the same hard, silent-hang cap documented in planner's own history
-# above) ran out again, this time with no OPENCODE_SECOND_API_KEY headroom
-# left either. Founder directed a temporary move to Claude Haiku 4.5
-# (`claude-haiku-4-5-20251001`) for implementer, implementer_escalation,
-# AND reviewer all at once, via the Claude Code CLI - not OpenCode at all -
-# using the same CLAUDE_CODE_OAUTH_TOKEN subscription auth planner already
-# uses (see plan.yml's own history for why that's OAuth, not
-# ANTHROPIC_API_KEY). implement.yml/review.yml's opencode execution steps
-# are disabled (if: false), not deleted, same convention as the dormant
-# openai/codex-action step in implement.yml - REVERT all three roles back
-# to their opencode-go/* values above once OpenCode Go quota resets
-# (founder said "tomorrow"), and flip the disabled steps in
-# implement.yml/review.yml back on.
-#
-# NOTE: this collapses implementer/reviewer onto the same vendor AND the
-# same exact model (Haiku 4.5) for as long as this fallback is active - the
-# "same-vendor review isn't independent review" problem this file's header
-# already documents, now at its worst point (same model, not just same
-# vendor). Accepted deliberately as a temporary availability tradeoff, not
-# a quality one - there is no other authenticated provider with quota left
-# today.
-implementer: claude-haiku-4-5-20251001
+implementer: opencode-go/minimax-m3
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -153,16 +129,7 @@ implementer: claude-haiku-4-5-20251001
 # `implementer` itself has moved to minimax-m3 for cost, using kimi here
 # keeps escalation a genuinely different, previously-proven-stronger model
 # rather than retrying with the same tier that already struggled.
-#
-# TEMPORARY QUOTA FALLBACK (2026-07-26): moved to claude-haiku-4-5-20251001
-# alongside implementer/reviewer - see implementer's own note above for why
-# (OpenCode Go quota exhausted, no other authenticated provider available
-# today). This is the weakest version of this role's own purpose (escalation
-# is supposed to be a genuinely different/stronger model than a struggling
-# attempt 1) since it's now IDENTICAL to `implementer` - accepted only
-# because the alternative is no escalation path at all until quota resets.
-# Revert to opencode-go/kimi-k2.7-code once OpenCode Go quota is back.
-implementer_escalation: claude-haiku-4-5-20251001
+implementer_escalation: opencode-go/kimi-k2.7-code
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
@@ -221,17 +188,11 @@ implementer_escalation: claude-haiku-4-5-20251001
 # to catch what a same-vendor compromise would miss is exactly what watching
 # real verdicts here is meant to establish - don't assume it's equivalent to
 # the OpenAI-vs-OpenCode split without evidence.
-# TEMPORARY QUOTA FALLBACK (2026-07-26): moved to claude-haiku-4-5-20251001 -
-# see implementer's own note above (OpenCode Go quota exhausted). This is
-# the worst-case same-vendor/same-model compromise this file's header
-# warns about (reviewer == implementer, exactly), accepted only as a
-# temporary availability tradeoff. Revert to opencode-go/deepseek-v4-pro
-# once OpenCode Go quota is back.
-reviewer: claude-haiku-4-5-20251001
+reviewer: opencode-go/deepseek-v4-pro
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
-reviewer_fast_retry: claude-haiku-4-5-20251001
+reviewer_fast_retry: opencode-go/deepseek-v4-pro
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),

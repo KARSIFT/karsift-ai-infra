@@ -76,10 +76,6 @@ on:
         default: "develop"
     secrets:
       OPENCODE_API_KEY:
-        description: "Unused while the temporary Claude Haiku 4.5 quota fallback is active (2026-07-26, see config/roles.yml) - kept optional so reverting to OpenCode is a one-line if: flip, not a re-add."
-        required: false
-      CLAUDE_CODE_OAUTH_TOKEN:
-        description: "Used for reviewer while the temporary Claude Haiku 4.5 fallback is active (2026-07-26) - same subscription OAuth token plan.yml's planner already uses, not ANTHROPIC_API_KEY (that org is disabled)."
         required: true
 
 jobs:
@@ -222,13 +218,7 @@ jobs:
             cat /tmp/pr.diff
           } > /tmp/review-prompt.txt
 
-      # DISABLED 2026-07-26 (founder: "i dont have quota for opencode until
-      # tomorow") - see config/roles.yml's matching note. Kept in place, not
-      # deleted - revert by flipping this and the two opencode steps below
-      # back to `if: true` (or removing the condition) and disabling the
-      # claude-code steps further down, once OpenCode Go quota resets.
       - name: Install opencode
-        if: false
         run: curl -fsSL https://opencode.ai/install | bash
 
       # Read-only enforcement lives here, not in a CLI flag - see this file's
@@ -237,7 +227,6 @@ jobs:
       # schema (https://opencode.ai/config.json, $defs.PermissionConfig) is
       # set explicitly so nothing falls through to an implicit default.
       - name: Configure opencode
-        if: false
         run: |
           cat > opencode.jsonc <<'EOF'
           {
@@ -317,7 +306,6 @@ jobs:
       # implement.yml's own budget for large diffs.
       - name: Run independent verification
         id: verify
-        if: false
         timeout-minutes: 30
         env:
           # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
@@ -348,48 +336,7 @@ jobs:
           fi
           exit "$exit_code"
 
-      # TEMPORARY QUOTA FALLBACK (2026-07-26, founder: "i dont have quota for
-      # opencode until tomorow") - runs reviewer on Claude Haiku 4.5 via the
-      # Claude Code CLI instead, same CLAUDE_CODE_OAUTH_TOKEN subscription
-      # auth plan.yml's planner already uses. --allowedTools restricts to
-      # Read/Grep/Glob only - the same no-write, no-bash guarantee
-      # opencode.jsonc's `reviewer` agent enforced above, just expressed as
-      # a CLI flag instead of a generated config file. Writes straight to
-      # /tmp/verdict.md (via `.result` from --output-format json) so the
-      # existing "Show verdict"/"Post verification comment" steps below need
-      # no changes - they don't know or care which vendor produced that
-      # file. Revert: flip this and "Install Claude Code" back to `if:
-      # false`, and the three opencode steps above back on, once OpenCode Go
-      # quota resets (founder said "tomorrow").
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Run independent verification (claude-code)
-        id: verify-claude
-        timeout-minutes: 30
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          set -uo pipefail
-          claude --model "${{ steps.model.outputs.model }}" \
-            --allowedTools "Read,Grep,Glob" \
-            --output-format json \
-            -p < /tmp/review-prompt.txt > /tmp/claude-raw.json 2> /tmp/claude-stderr.log
-          exit_code=$?
-          echo "--- cost/cache telemetry ---"
-          jq '{total_cost_usd, usage}' /tmp/claude-raw.json 2>/dev/null || true
-          if [ "$exit_code" -ne 0 ]; then
-            cat /tmp/claude-stderr.log >&2
-            exit "$exit_code"
-          fi
-          jq -r '.result // empty' /tmp/claude-raw.json > /tmp/verdict.md
-          if [ ! -s /tmp/verdict.md ]; then
-            echo "claude produced no text result - see /tmp/claude-raw.json in this job's logs." >&2
-            exit 1
-          fi
-
       - name: Extract verdict text
-        if: false
         run: |
           python3 - <<'PYEOF'
           import json
