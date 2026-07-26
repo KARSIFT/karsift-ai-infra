@@ -162,17 +162,25 @@ jobs:
           # before under new dressing. A different model violating the same
           # explicit prompt instruction is exactly the scenario "instruct it
           # away" doesn't reliably survive - see implement.yml's identical
-          # lesson about git-commit compliance. The regex now tolerates 0-2
-          # leading/trailing '*' around the exact anchor line (covers plain,
-          # *italic*, and **bold**) IN ADDITION TO keeping the prompt
-          # instruction - both together, not one instead of the other. Order
-          # matters: FAIL is checked before either PASS form so a FAIL can
-          # never be misread as a pass.
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL[[:space:]]*\*{0,2}$'; then
+          # lesson about git-commit compliance. A FIFTH occurrence
+          # (2026-07-26, VOC-030-T00 PR #134, same reviewer model) posted
+          # "**VERDICT: FAIL** — H1 (...) blocks. H2 (...)" - a genuine FAIL
+          # with explanatory text trailing the bold-closed token on the same
+          # line, which the then-exact `...\*{0,2}$` end-anchor still
+          # missed even after tolerating the bold wrapping itself. The
+          # end-anchor is now a word boundary instead of end-of-line, so
+          # trailing prose after the verdict token no longer defeats the
+          # match - the anchor only needs to identify which line carries the
+          # verdict token, not consume the entire line. Order still matters:
+          # FAIL is checked before either PASS form so a FAIL can never be
+          # misread as a pass, and PASS WITH NON-BLOCKING FINDINGS is
+          # checked before bare PASS so a findings-verdict line (which bare
+          # PASS's prefix would also match) resolves correctly.
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
             echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS[[:space:]]*\*{0,2}$'; then
+          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS\b'; then
             echo "verdict=PASS_WITH_FINDINGS" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS[[:space:]]*\*{0,2}$'; then
+          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS\b'; then
             echo "verdict=PASS" >> "$GITHUB_OUTPUT"
           else
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
@@ -278,11 +286,13 @@ jobs:
           # design. Require positive proof of PASS instead of absence of a
           # recognized FAIL - same "VERDICT: ..." anchor as report-status,
           # per prompts/review.md.
-          # See report-status's identical note above (2026-07-25, PR #76): a
-          # 0-2-asterisk wrap tolerance was added here too for the same
+          # See report-status's identical note above (2026-07-25, PR #76, and
+          # 2026-07-26, PR #134): a 0-2-asterisk wrap tolerance, and later a
+          # word-boundary end (instead of end-of-line) to survive trailing
+          # prose after the verdict token, were added here too for the same
           # reason - this is the fail-closed merge gate, so it must stay in
           # lockstep with report-status's parsing, not just the display one.
-          if ! echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS([[:space:]]*|[[:space:]]+WITH NON-BLOCKING FINDINGS[[:space:]]*)\*{0,2}$'; then
+          if ! echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS(\b|[[:space:]]+WITH NON-BLOCKING FINDINGS\b)'; then
             echo "No passing independent verification found - not merging."
             exit 1
           fi

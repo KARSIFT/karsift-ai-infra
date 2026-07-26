@@ -116,8 +116,16 @@ jobs:
           # tolerance around the exact anchor IN ADDITION TO the prompt
           # instruction (kept, not replaced) - merge-gate.yml's report-status
           # job carries the identical fix and reasoning; keep both in sync.
+          # A FIFTH occurrence (2026-07-26, VOC-030-T00 PR #134, same
+          # reviewer model) posted "**VERDICT: FAIL** — H1 (...) blocks.
+          # H2 (...)" - a genuine FAIL with explanatory prose trailing the
+          # bold-closed token on the same line, which the exact end-anchor
+          # still missed. Changed the end-anchor to a word boundary instead
+          # of end-of-line so trailing prose no longer defeats the match -
+          # merge-gate.yml's report-status carries the identical fix; keep
+          # both in sync.
           has_fail_verdict=false
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL[[:space:]]*\*{0,2}$'; then
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
             has_fail_verdict=true
           fi
 
