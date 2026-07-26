@@ -294,10 +294,19 @@ jobs:
       # account's quota chasing an unrelated error.
       # timeout-minutes bounds a real hang, not just a slow run - see
       # plan.yml's identical addition for the live incident that surfaced
-      # this gap (a planner hang, same underlying opencode CLI).
+      # this gap (a planner hang, same underlying opencode CLI). Raised
+      # 15 -> 30 (2026-07-26): VOC-030-T00's PR #134 (a large R3 diff - five
+      # new tables plus a full domain module) hit this timeout twice in a
+      # row on the same commit with no error, just ran out of time - and
+      # because remediate.yml's retry decision reads attempt count from the
+      # PR body (which a hand-pushed fix commit doesn't update), a timed-out
+      # review kept re-triggering a redundant attempt-2 implementer dispatch
+      # against findings that were already fixed on the branch, instead of
+      # just needing the review itself to finish. 30 minutes matches
+      # implement.yml's own budget for large diffs.
       - name: Run independent verification
         id: verify
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
           # for why: the primary account's weekly OpenCode Go quota ran out.
