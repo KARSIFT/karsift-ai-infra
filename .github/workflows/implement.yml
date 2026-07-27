@@ -300,11 +300,17 @@ jobs:
       # hit the 20-minute cap with clean linear progress, no hang symptom -
       # a genuine capacity shortfall for a big task, same root cause as
       # plan.yml's VOC-028/P3 timeout increase.
+      # Raised 35 -> 55 (2026-07-27): VOC-031-T07 (Playwright + axe-core
+      # accessibility suite across every core-loop screen, plus wiring a new
+      # CI workflow) hit the 35-minute cap twice in a row, each time mid
+      # linear progress (writing/fixing test files, no repeated identical
+      # tool call or other loop symptom) - same capacity-shortfall pattern
+      # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
         if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 55
         env:
           # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
           # for why: the primary account's weekly OpenCode Go quota ran out.
