@@ -226,6 +226,19 @@ jobs:
       # use instead. Every permission key from OpenCode's own published
       # schema (https://opencode.ai/config.json, $defs.PermissionConfig) is
       # set explicitly so nothing falls through to an implicit default.
+      #
+      # external_directory allows /tmp/* specifically (not a blanket "allow")
+      # because of a live incident (2026-07-27, VOC-031-T05 PR #164): the
+      # CLI's own --file injection truncates a large review-prompt.txt
+      # (diff + full package docs easily exceeds it), and the model then
+      # tries to `read` the same /tmp path itself to get the rest. With
+      # external_directory fully denied that read fails every retry and the
+      # run either hangs past its timeout or dies with a bare exit 1 and zero
+      # stdout/stderr - no verdict, no error text, nothing for remediate.yml
+      # to act on since it only reads FAIL-verdict text, not "review crashed
+      # silently". Reproduced locally (same prompt, same agent config): fully
+      # denied hangs/times out with no output; allowing /tmp/* lets it read
+      # the rest of its own prompt file and finish in under 90s.
       - name: Configure opencode
         run: |
           cat > opencode.jsonc <<'EOF'
@@ -246,7 +259,9 @@ jobs:
                   "websearch": "deny",
                   "task": "deny",
                   "todowrite": "deny",
-                  "external_directory": "deny",
+                  "external_directory": {
+                    "/tmp/*": "allow"
+                  },
                   "question": "deny",
                   "skill": "deny",
                   "lsp": "deny",
