@@ -86,6 +86,15 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+      # A task can legitimately need to add/modify a workflow file (e.g.
+      # VOC-031-T07's accessibility.yml, axe-core + Playwright automation).
+      # GitHub refuses that push without this scope regardless of
+      # contents: write - live failure (2026-07-27, PR push for T07):
+      # "refusing to allow a GitHub App to create or update workflow
+      # `.github/workflows/accessibility.yml` without `workflows`
+      # permission" - the implementer had already committed valid changes,
+      # they just couldn't be pushed.
+      workflows: write
     steps:
       - uses: actions/checkout@v4
         with:
