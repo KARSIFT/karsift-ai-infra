@@ -455,13 +455,57 @@ jobs:
           done
           echo "outcome=skipped" >> "$GITHUB_OUTPUT"
 
+      # `secrets` isn't a recognized context inside a step-level `if:` here
+      # (GitHub Actions rejects it outright: "Unrecognized named-value:
+      # 'secrets'") - route the presence check through a plain env var and
+      # a shell step's output instead, which is the reliable pattern.
+      - name: Check for GitHub App credentials
+        id: has-app
+        if: steps.implementer.outputs.outcome == 'success'
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      # Minted BEFORE "Commit and push" (moved here 2026-07-28, VOC-031-T07a)
+      # - not just for "Open or update PR" as this step's name used to imply.
+      # The default GITHUB_TOKEN structurally can never push a change to
+      # .github/workflows/* regardless of this job's own `permissions:
+      # workflows: write` block - GitHub enforces that at the token-type
+      # level, not the requested-scope level, and rejects the push outright
+      # ("refusing to allow a GitHub App to create or update workflow ...
+      # without workflows permission"). Live failure: VOC-031-T07/T07a, a
+      # task whose own scope was to add a new .github/workflows/*.yml file -
+      # every attempt's implementer succeeded but the push silently failed
+      # after, discarding real completed work. A GitHub App installation
+      # token (if this project has one configured, see has-app above) CAN
+      # carry workflows: write if granted at the App level - using it for
+      # the push, not just PR creation, is the actual fix.
+      - name: Mint App installation token for push and PR creation
+        id: app-token
+        if: steps.implementer.outputs.outcome == 'success' && steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
       - name: Commit and push
         id: commit
         if: steps.implementer.outputs.outcome == 'success'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
+
+          # Overrides actions/checkout's default GITHUB_TOKEN credential for
+          # this push only, when an App token was minted above - see that
+          # step's comment for why this specific push needs it (a task that
+          # adds/modifies .github/workflows/*, which GITHUB_TOKEN can never
+          # push regardless of this job's declared permissions).
+          if [ -n "$APP_TOKEN" ]; then
+            git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
+          fi
 
           # The implementer role's prompt says "commit your changes to the
           # branch" (wording that made sense for Codex, which never touches
@@ -522,32 +566,6 @@ jobs:
             git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
-
-      # `secrets` isn't a recognized context inside a step-level `if:` here
-      # (GitHub Actions rejects it outright: "Unrecognized named-value:
-      # 'secrets'") - route the presence check through a plain env var and
-      # a shell step's output instead, which is the reliable pattern.
-      - name: Check for GitHub App credentials
-        id: has-app
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
-      # PRs created with the default GITHUB_TOKEN land their own resulting
-      # pull_request-triggered workflow runs in "action_required" - GitHub
-      # requires a manual "Approve workflows to run" click every time,
-      # regardless of same-repo or fork (see this file's secrets: block
-      # above for why). Minting a short-lived GitHub App installation token
-      # instead avoids that entirely. Optional and backward-compatible: a
-      # project with no App configured falls straight through to
-      # github.token, unchanged from before.
-      - name: Mint App installation token for PR creation
-        id: app-token
-        if: steps.commit.outputs.has_changes == 'true' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
 
       # On a remediation attempt, the force-push above already updated the
       # existing PR (pushing new commits to a PR's head branch updates it
