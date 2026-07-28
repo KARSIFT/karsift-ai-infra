@@ -579,7 +579,20 @@ jobs:
           # step's comment for why this specific push needs it (a task that
           # adds/modifies .github/workflows/*, which GITHUB_TOKEN can never
           # push regardless of this job's declared permissions).
+          #
+          # actions/checkout persists its own GITHUB_TOKEN credential as a
+          # global `http.https://github.com/.extraheader` config value -
+          # that extraheader takes precedence over whatever credential is
+          # embedded in the remote URL, so `git remote set-url` alone is not
+          # enough: the push silently kept authenticating as the OLD token
+          # even after the URL was changed, and kept hitting the exact same
+          # `workflows` permission rejection despite the App token
+          # confirmed-minted with the right permission. Live failure
+          # (2026-07-28, VOC-031-T07a, 3 repeat failures after the App
+          # permission was actually fixed) - unsetting the extraheader
+          # first is required for the URL-embedded token to actually win.
           if [ -n "$APP_TOKEN" ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
             git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
           fi
 
