@@ -65,6 +65,9 @@ on:
       OPENCODE_API_KEY:
         description: "Used for both the base implementer and implementer_escalation roles (both OpenCode-backed as of 2026-07-26)."
         required: true
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "Used for implementer_escalation only (2026-07-28, VOC-031-T07) - see that step's own comment for why. Optional so a project without this secret configured just skips straight to the opencode-based escalation step instead."
+        required: false
       KARSIFT_BOT_APP_ID:
         description: >
           Optional. GitHub App ID for minting the PR-creation token. Without
@@ -267,8 +270,21 @@ jobs:
       # revert if OpenAI quota comes back, rather than reconstructing the
       # actor-permission/verbosity workarounds from scratch.
 
+      # implementer_escalation scoped OUT of the opencode steps below
+      # (2026-07-28, VOC-031-T07) - both available OpenCode models hung on
+      # this task at attempt 2 (minimax-m3 got stuck debugging a Playwright
+      # visibility flake for 37 straight minutes with no further output;
+      # kimi-k2.7-code, the escalation model, then produced zero output for
+      # the full 55-minute budget) - a real implementer-side hang, not a
+      # capacity/timeout-budget problem (raising timeout-minutes already
+      # didn't help). Founder directive: try the escalation attempt on
+      # Claude Sonnet 5 instead, via the Claude Code CLI - same validated
+      # pattern as the 2026-07-26 temporary Haiku quota-fallback (see git
+      # history for that commit if reviving more of it), narrowed to
+      # implementer_escalation only so the base implementer role (which is
+      # NOT hanging on other tasks) stays on OpenCode untouched.
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer'
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -308,7 +324,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer'
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -337,6 +353,42 @@ jobs:
           fi
           if [ "$exit_code" -ne 0 ]; then
             cat /tmp/opencode-stderr.log >&2
+          fi
+          exit "$exit_code"
+
+      # TEMPORARY escalation-only fallback (2026-07-28, VOC-031-T07) - see
+      # this file's "implementer_escalation scoped OUT" comment above the
+      # opencode steps for why. --allowedTools grants real write/edit/bash
+      # (this role has to actually produce a code change, unlike review.yml's
+      # read-only reviewer). -p reading the prompt from stdin (not a
+      # positional argument) avoids the ~128KB single-argument exec limit a
+      # large prompt can hit - see review.yml's identical fix for the live
+      # failure that surfaced this pattern. No second-account fallback here
+      # (unlike the opencode step's OPENCODE_SECOND_API_KEY) - only one
+      # Claude account is provisioned.
+      - name: Install Claude Code
+        if: steps.model.outputs.role == 'implementer_escalation'
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run implementer (claude-code escalation)
+        id: implementer-claude
+        if: steps.model.outputs.role == 'implementer_escalation'
+        continue-on-error: true
+        timeout-minutes: 55
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          claude --model "claude-sonnet-5" \
+            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
+            --output-format json \
+            -p < /tmp/implement-prompt.txt > /tmp/claude-raw.json 2> /tmp/claude-stderr.log
+          exit_code=$?
+          jq -r '.result // empty' /tmp/claude-raw.json 2>/dev/null || true
+          echo "--- cost/cache telemetry ---"
+          jq '{total_cost_usd, usage}' /tmp/claude-raw.json 2>/dev/null || true
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/claude-stderr.log >&2
           fi
           exit "$exit_code"
 
@@ -393,7 +445,13 @@ jobs:
         id: implementer
         if: always()
         run: |
-          echo "outcome=${{ steps.implementer-opencode.outcome }}" >> "$GITHUB_OUTPUT"
+          for outcome in "${{ steps.implementer-claude.outcome }}" "${{ steps.implementer-opencode.outcome }}" "${{ steps.implementer-openai.outcome }}"; do
+            if [ "$outcome" != "skipped" ]; then
+              echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "outcome=skipped" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
         id: commit
