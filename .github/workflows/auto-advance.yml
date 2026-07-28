@@ -79,7 +79,14 @@ jobs:
           echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
 
           change_id=$(echo "$ISSUE_TITLE" | grep -oP '^[A-Za-z][A-Za-z0-9]*-\d+(?=:)' || true)
-          closed_task_id=$(echo "$ISSUE_TITLE" | grep -oP '(?<=: )[A-Za-z0-9]+-\d+-T\d+' || true)
+          # `T\d+[a-z]?` (not just `T\d+`) so a task split into lettered
+          # sub-tasks (e.g. VOC-031-T07 -> T07a/T07b, 2026-07-28 - see
+          # tasks.md's own note on why) still round-trips through this
+          # regex. Without the `[a-z]?`, "VOC-031-T07a" truncated to
+          # "VOC-031-T07" here, which matched nothing in tasks.json (which
+          # has "T07a"/"T07b", not "T07") - auto-advance silently no-opped
+          # instead of dispatching T07b after T07a's issue closed.
+          closed_task_id=$(echo "$ISSUE_TITLE" | grep -oP '(?<=: )[A-Za-z0-9]+-\d+-T\d+[a-z]?' || true)
           if [ -z "$change_id" ] || [ -z "$closed_task_id" ]; then
             echo "Closed issue title doesn't match '<CHANGE-ID>: <TASK-ID> - ...' - not a tracked task issue, nothing to do."
             exit 0

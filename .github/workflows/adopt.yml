@@ -169,7 +169,11 @@ jobs:
 
           tasks_file, change_id = sys.argv[1:3]
           id_prefix = change_id.rsplit("-", 1)[0]
-          pattern = re.compile(rf'{re.escape(id_prefix)}-\d+-T\d+')
+          # `T\d+[a-z]?` (not just `T\d+`) so a task split into lettered
+          # sub-tasks (e.g. T07 -> T07a/T07b) is recognized the same way
+          # auto-advance.yml's identical pattern needs to be - see that
+          # file's own note for the live gap this caused.
+          pattern = re.compile(rf'{re.escape(id_prefix)}-\d+-T\d+[a-z]?')
           seen = set()
           with open(tasks_file) as f:
               for line in f:
