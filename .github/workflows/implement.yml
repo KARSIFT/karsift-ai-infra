@@ -260,6 +260,9 @@ jobs:
               echo
               cat /tmp/prior-review.txt
             fi
+            echo
+            echo "## Lessons learned (.karsift/lessons.md, if present)"
+            cat .karsift/lessons.md 2>/dev/null || true
           } > /tmp/implement-prompt.txt
 
       # implementer_escalation moved onto OpenCode too (2026-07-26, founder
@@ -336,6 +339,7 @@ jobs:
           OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
           set -uo pipefail
+          source karsift-ai-infra/config/retry-helpers.sh
           run_implementer() {
             OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
               --file /tmp/implement-prompt.txt \
@@ -343,14 +347,21 @@ jobs:
               --model "${{ steps.model.outputs.model }}" \
               --auto 2> /tmp/opencode-stderr.log
           }
-          run_implementer "$OPENCODE_API_KEY"
+          # Transient-failure retry (same account/model, immediate) happens
+          # first; only once THAT is exhausted do we consider this a real
+          # quota-exhaustion signal worth swapping accounts for. See
+          # retry-helpers.sh's header comment for the live incident and the
+          # exact heuristic (fast + content-free failures only - this step's
+          # own 55-minute timeout is unaffected since a near-timeout failure
+          # never matches the short-duration retry branch).
+          retry_if_transient /tmp/opencode-stderr.log -- run_implementer "$OPENCODE_API_KEY"
           exit_code=$?
           if [ "$exit_code" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
              grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
                /tmp/opencode-stderr.log 2>/dev/null; then
             echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
             cat /tmp/opencode-stderr.log >&2
-            run_implementer "$OPENCODE_SECOND_API_KEY"
+            retry_if_transient /tmp/opencode-stderr.log -- run_implementer "$OPENCODE_SECOND_API_KEY"
             exit_code=$?
           fi
           if [ "$exit_code" -ne 0 ]; then
@@ -381,10 +392,17 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -uo pipefail
-          claude --model "claude-sonnet-5" \
-            --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-            --output-format json \
-            -p < /tmp/implement-prompt.txt > /tmp/claude-raw.json 2> /tmp/claude-stderr.log
+          source karsift-ai-infra/config/retry-helpers.sh
+          run_claude_implementer() {
+            claude --model "claude-sonnet-5" \
+              --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
+              --output-format json \
+              -p < /tmp/implement-prompt.txt > /tmp/claude-raw.json 2> /tmp/claude-stderr.log
+          }
+          # No second-account fallback exists here (only one Claude account
+          # is provisioned), so this only adds the transient-retry layer -
+          # see retry-helpers.sh's header comment for the heuristic.
+          retry_if_transient /tmp/claude-raw.json /tmp/claude-stderr.log -- run_claude_implementer
           exit_code=$?
           jq -r '.result // empty' /tmp/claude-raw.json 2>/dev/null || true
           echo "--- cost/cache telemetry ---"

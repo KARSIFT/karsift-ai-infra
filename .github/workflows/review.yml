@@ -216,6 +216,9 @@ jobs:
             echo
             echo "## Diff"
             cat /tmp/pr.diff
+            echo
+            echo "## Lessons learned (.karsift/lessons.md, if present)"
+            cat .karsift/lessons.md 2>/dev/null || true
           } > /tmp/review-prompt.txt
 
       - name: Install opencode
@@ -333,6 +336,7 @@ jobs:
           OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
           set -uo pipefail
+          source karsift-ai-infra/config/retry-helpers.sh
           run_review() {
             OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
               --file /tmp/review-prompt.txt \
@@ -340,14 +344,19 @@ jobs:
               --model "${{ steps.model.outputs.model }}" \
               --format json > /tmp/verdict-events.jsonl 2> /tmp/opencode-stderr.log
           }
-          run_review "$OPENCODE_API_KEY"
+          # Transient-failure retry (same account/model, immediate) happens
+          # first; only once THAT is exhausted do we consider this a real
+          # quota-exhaustion signal worth swapping accounts for. See
+          # retry-helpers.sh's header comment for the live incident and the
+          # exact heuristic (fast + content-free failures only).
+          retry_if_transient /tmp/opencode-stderr.log /tmp/verdict-events.jsonl -- run_review "$OPENCODE_API_KEY"
           exit_code=$?
           if [ "$exit_code" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
              grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
                /tmp/opencode-stderr.log /tmp/verdict-events.jsonl 2>/dev/null; then
             echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
             cat /tmp/opencode-stderr.log >&2
-            run_review "$OPENCODE_SECOND_API_KEY"
+            retry_if_transient /tmp/opencode-stderr.log /tmp/verdict-events.jsonl -- run_review "$OPENCODE_SECOND_API_KEY"
             exit_code=$?
           fi
           if [ "$exit_code" -ne 0 ]; then

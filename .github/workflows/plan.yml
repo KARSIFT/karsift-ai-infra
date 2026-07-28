@@ -349,6 +349,9 @@ jobs:
                 cat "$f"
               fi
             done
+            echo
+            echo "## Lessons learned (.karsift/lessons.md, if present)"
+            cat .karsift/lessons.md 2>/dev/null || true
           } > /tmp/plan-prompt.txt
 
       # NOTE ON HISTORY (correcting an earlier misdiagnosis in this file's own
@@ -412,6 +415,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -uo pipefail
+          source karsift-ai-infra/config/retry-helpers.sh
           pip install --quiet pyyaml
           package_path="${{ steps.branch.outputs.package_path }}"
           prompt_file=/tmp/plan-prompt.txt
@@ -426,7 +430,13 @@ jobs:
           while [ "$attempt" -le "$max_attempts" ]; do
             echo "::group::Planner attempt $attempt/$max_attempts"
             claude_exit=0
-            run_planner || claude_exit=$?
+            # Nested transient-retry (immediate, same model): distinct from
+            # this loop's own outer retry, which handles a *successful*
+            # claude run that wrote invalid YAML. This inner layer instead
+            # catches a claude invocation that didn't complete at all - a
+            # fast, content-free crash. See retry-helpers.sh's header
+            # comment for the live incident and heuristic.
+            retry_if_transient /tmp/planner-raw.json /tmp/claude-stderr.log -- run_planner || claude_exit=$?
             jq -r '.result // empty' /tmp/planner-raw.json 2>/dev/null || true
             echo "--- cost/cache telemetry ---"
             jq '{total_cost_usd, usage}' /tmp/planner-raw.json 2>/dev/null || true
