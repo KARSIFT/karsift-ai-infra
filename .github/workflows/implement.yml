@@ -328,10 +328,12 @@ jobs:
         continue-on-error: true
         timeout-minutes: 55
         env:
-          # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
-          # for why: the primary account's weekly OpenCode Go quota ran out.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
-          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # Reverted (2026-07-28) - swapped 2026-07-25 when the primary
+          # account's weekly OpenCode Go quota ran out; 3 days later, quota
+          # should have reset, so back to the natural primary/fallback
+          # assignment. Same revert applied to review.yml's identical swap.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
           set -uo pipefail
           run_implementer() {
