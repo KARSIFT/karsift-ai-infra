@@ -323,10 +323,14 @@ jobs:
         id: verify
         timeout-minutes: 30
         env:
-          # TEMPORARILY SWAPPED (2026-07-25) - see plan.yml's identical swap
-          # for why: the primary account's weekly OpenCode Go quota ran out.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
-          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          # Reverted (2026-07-28) - see implement.yml's identical revert for
+          # why: swapped 2026-07-25 for a quota issue that should have
+          # reset by now, and the swapped (second) account turned out to be
+          # the one silently hanging on VOC-031-T07a's review (30-minute
+          # timeout, zero output) - same symptom implement.yml had before
+          # its own revert fixed it.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
         run: |
           set -uo pipefail
           run_review() {
