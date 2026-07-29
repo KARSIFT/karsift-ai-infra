@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: "false"
+      review_job_failed:
+        description: "Whether the review job itself errored before posting any verdict (pipeline.yml passes needs.review.result == 'failure'). Distinct from a genuine posted FAIL verdict - see decide step's comment for why this needs its own signal."
+        required: false
+        type: string
+        default: "false"
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false
@@ -72,6 +77,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           GH_REPO: ${{ github.repository }}
           CI_FAILED: ${{ inputs.ci_failed }}
+          REVIEW_JOB_FAILED: ${{ inputs.review_job_failed }}
         run: |
           set -euo pipefail
 
@@ -129,10 +135,25 @@ jobs:
             has_fail_verdict=true
           fi
 
-          if [ "$CI_FAILED" != "true" ] && [ "$has_fail_verdict" = "false" ]; then
+          # Found live on VOC-032-T01 PR #193: review.yml's opencode-install
+          # step failed outright (a transient "Failed to fetch version
+          # information" from opencode.ai) before the reviewer ever ran, so
+          # no verdict comment was posted at all - has_fail_verdict stayed
+          # false, CI_FAILED was false (ci passed), and this step would
+          # otherwise conclude "nothing to remediate" even though the review
+          # job's own conclusion was `failure`. merge-gate.yml correctly
+          # stays fail-closed either way (its `if` only proceeds on
+          # needs.review.result == 'success' or 'skipped', never 'failure'),
+          # but with should_retry=false too, the PR was simply stuck - no
+          # automatic path forward at all. A review job erroring before
+          # producing output is a distinct failure mode from a genuine
+          # posted FAIL verdict (there's no reviewer findings to hand the
+          # implementer as retry context), so it gets its own input rather
+          # than being folded into has_fail_verdict.
+          if [ "$CI_FAILED" != "true" ] && [ "$has_fail_verdict" = "false" ] && [ "$REVIEW_JOB_FAILED" != "true" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
-            echo "No FAIL verdict and CI did not fail - nothing to remediate."
+            echo "No FAIL verdict, CI did not fail, and the review job itself did not error - nothing to remediate."
             exit 0
           fi
 
@@ -150,6 +171,7 @@ jobs:
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             reason="was reviewed and failed"
             [ "$CI_FAILED" = "true" ] && reason="failed CI"
+            [ "$REVIEW_JOB_FAILED" = "true" ] && reason="hit a review-job error (no verdict was produced)"
             gh issue comment "$issue_number" --body \
               "Attempt $attempt of 2 $reason. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
             exit 0
@@ -159,6 +181,8 @@ jobs:
           echo "next_attempt=$next_attempt" >> "$GITHUB_OUTPUT"
           if [ "$CI_FAILED" = "true" ]; then
             echo "CI failed on attempt $attempt - will retry as attempt $next_attempt."
+          elif [ "$REVIEW_JOB_FAILED" = "true" ]; then
+            echo "Review job errored (no verdict) on attempt $attempt - will retry as attempt $next_attempt."
           else
             echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
           fi
@@ -213,6 +237,45 @@ jobs:
             echo '```'
           } > /tmp/ci-failure-comment.md
           gh pr comment "$PR_NUMBER" --body-file /tmp/ci-failure-comment.md
+
+      # Same rationale as the CI-failure step above, for the other case
+      # review never produces a verdict comment: the review job itself
+      # errored (e.g. an install/network failure on the reviewer's own
+      # tooling, not a code-quality finding). Mirrors that step exactly,
+      # just pulling the "review / review" job's log instead of "ci / ci"'s.
+      - name: Attach review-job-error output as retry context, if the review job itself failed
+        if: inputs.review_job_failed == 'true' && steps.parse.outputs.next_attempt != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          review_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q '.jobs[] | select(.name == "review / review") | .databaseId' | head -1)
+
+          if [ -n "$review_job_id" ]; then
+            log_tail=$(gh api "repos/${{ github.repository }}/actions/jobs/$review_job_id/logs" | tail -150)
+          else
+            log_tail="(could not locate the review / review job's log for this run)"
+          fi
+
+          {
+            echo "**Independent verification - review job error, not a reviewer verdict**"
+            echo
+            echo "VERDICT: FAIL"
+            echo
+            echo "The review job itself errored before producing any verdict (e.g. a"
+            echo "transient failure in the reviewer's own tooling, not a finding about"
+            echo "this PR's code). This is very likely unrelated to the implementation -"
+            echo "re-check the log below before assuming your prior change was at fault."
+            echo "Last ~150 lines of the \`review / review\` job's log:"
+            echo
+            echo '```'
+            echo "$log_tail"
+            echo '```'
+          } > /tmp/review-failure-comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/review-failure-comment.md
 
   retry:
     needs: decide

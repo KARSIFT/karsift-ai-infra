@@ -226,6 +226,7 @@ jobs:
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
       integration_branch: "develop"   # match the value used for implement, above
       ci_failed: ${{ needs.ci.result == 'failure' }}
+      review_job_failed: ${{ needs.review.result == 'failure' }}
     secrets: inherit
 
   # `needs: review` + the `always()` guard below fixes a real race: on a
