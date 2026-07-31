@@ -318,10 +318,19 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # same incident driving implementer/reviewer's own moves, though planner
 # itself was on Claude Code (not OpenCode) so wasn't directly affected -
 # this is the founder's explicit consolidation choice, not a planner-side
-# failure. `composer-2.5` is Cursor's own in-house model, distinct from
-# implementer's OpenAI-Codex family and reviewer's xAI pick - still no
-# independence requirement to satisfy here (see this role's own paragraph
-# above), so the choice is purely a cost/quality one. plan.yml's execution
-# step was rewritten from the Claude Code CLI to cursor-agent (prompt via
-# stdin either way, so the argv-length fix carries over unchanged).
-planner: cursor/composer-2.5
+# failure. FIRST PICK: composer-2.5 (Cursor's own in-house model, distinct
+# from implementer's OpenAI-Codex family and reviewer's xAI pick).
+#
+# CORRECTED (2026-07-31, same day, founder: "choose sonnet-5 from cursor for
+# planner"): cursor/claude-sonnet-5-low. Matches this role's own pre-
+# migration history (planner ran on plain claude-sonnet-5 via the Claude
+# Code CLI through 2026-07-26, see this role's git-history note above) -
+# the founder's own prior choice of model family, now reachable through
+# Cursor instead of a direct Anthropic subscription. `-low` is the
+# cost-effective tier per the same directive (the full live catalog also
+# has `-medium`/`-high`/`-xhigh`/`-max` and several `-thinking` variants -
+# verified via a disposable diagnostic `agent models` dispatch against the
+# real account, not assumed). Still no cross-vendor independence
+# requirement for this role (see its own paragraph above) - this is a
+# quality/cost/founder-preference choice, not a cross-checking one.
+planner: cursor/claude-sonnet-5-low
