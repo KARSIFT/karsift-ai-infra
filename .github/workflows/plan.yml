@@ -396,6 +396,20 @@ jobs:
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # Verify the install actually worked before proceeding - found live
+          # (VOC-035-T03's evidence PR #242) that cursor.com/install can
+          # return a transient HTTP 500, and the `curl | bash` one-liner did
+          # NOT fail this step outright when that happened (bash on the
+          # right side of the pipe received truncated/empty input and still
+          # exited 0) - the job silently continued into the next step, which
+          # then failed with a cryptic, hard-to-diagnose "agent: command not
+          # found" / exit 127 instead of a clear install-failure message.
+          # This check fails loudly and immediately at the actual point of
+          # failure instead.
+          if ! "$HOME/.local/bin/agent" --version >/dev/null 2>&1; then
+            echo "::error::Cursor CLI install failed - agent binary not found/working at \$HOME/.local/bin/agent after install. This is usually a transient issue with cursor.com/install itself (e.g. an HTTP 500 from their endpoint, seen live) - rerun the job." >&2
+            exit 1
+          fi
 
       # Bounded self-correcting retry (max 2 attempts), unchanged in shape
       # from the OpenCode-era version - see item 33 in the bugs-fixed
