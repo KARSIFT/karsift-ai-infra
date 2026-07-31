@@ -51,13 +51,79 @@ name: review (reusable)
 # and planner stay on openai/codex-action; do not extend this pattern to
 # those roles without a separate explicit decision.
 #
-# Needs OPENCODE_API_KEY (NOT OPENCODE_ZEN_API_KEY - an earlier version of
-# this pilot used that name, tied to OpenCode Zen's separate pay-as-you-go
-# balance, which is unfunded; the Go-subscription key is OPENCODE_API_KEY)
-# as a repo/org secret on the calling project - same Free-plan-org
-# private-repo caveat as OPENAI_API_KEY documented in the project template's
-# pipeline.yml (org secrets can silently not reach a private repo; set at
-# repo level too if so).
+# MOVED (2026-07-31): rewritten a third time, reviewer-only, from the raw
+# `opencode` CLI to the raw `cursor-agent` CLI (cursor.com - Cursor's own
+# headless agent CLI, not a wrapper action). Founder's explicit reason: the
+# OpenCode Go account behind OPENCODE_API_KEY looked exhausted/degraded
+# live - every model on the account (including this role's own
+# opencode-go/deepseek-v4-pro) either timed out or errored in a same-day
+# bounded probe on a different package's task (VOC-032-T10's live-evaluation
+# evidence), and the review job on VOC-032's own T09 PR (#231) was stuck for
+# ~30 minutes with zero verdict as a direct result - not a one-off flake.
+# Founder has a pre-existing Cursor Pro+ subscription ($60/month, includes a
+# monthly credit pool that covers CLI/API usage) - see cursor.com/dashboard
+# for the API key, `agent models` for the live account-specific model
+# catalog (don't trust a fetched pricing/model page without cross-checking
+# this - see config/roles.yml's own correction note for exactly this mistake
+# with a different vendor).
+#
+# Every claim below was checked against the real installed CLI
+# (`agent --version` reported 2026.07.23-e383d2b at migration time) in a
+# disposable sandbox, not assumed from fetched documentation - config/
+# roles.yml's own correction note and this file's own 2026-07-25 `opencode
+# run --permissions` history are exactly the failure mode this avoided
+# repeating:
+#
+# - `--mode plan` is a first-class, documented CLI flag ("read-only/
+#   planning (analyze, propose plans, no edits)"), not something built out
+#   of a generated permission-profile file the way OpenCode's `reviewer`
+#   agent in `opencode.jsonc` needed. Verified live: asked directly, in
+#   plain language, to create a new file and delete an existing one "now,
+#   using your tools, do not just describe it", the CLI's own response
+#   refused ("this session is in plan-only mode, which blocks creating/
+#   deleting files with tools") and the working directory was provably
+#   unchanged afterward (the file to be deleted still existed, the file to
+#   be created did not). This is the equivalent of OpenCode's `reviewer`
+#   agent config / codex-action's `:read-only` profile - no "Configure
+#   opencode"-equivalent step is needed here.
+# - A fresh, never-before-seen working directory is workspace-untrusted by
+#   default and the CLI blocks waiting on an interactive trust prompt it can
+#   never receive non-interactively - reproduced live (exit 1, "Workspace
+#   Trust Required... Pass --trust, --yolo, or -f if you trust this
+#   directory"). This is the same *class* of bug as OpenCode's
+#   unenumerated-permission-key hang documented earlier in this file's
+#   history (a CI job silently stuck on a prompt it can't answer) - `--trust`
+#   is required every run for this reason. `--trust` only answers that one
+#   prompt; verified it grants no additional write permission on its own
+#   (still refuses file writes exactly as above) - `--mode plan` is what
+#   keeps the read-only guarantee, not `--trust`.
+# - The prompt is piped via stdin (`< /tmp/review-prompt.txt`), not passed as
+#   a positional argument - this sidesteps the exact `execve()` argument-
+#   length crash (`MAX_ARG_STRLEN`, "Argument list too long") documented
+#   below for `opencode run`'s old inline-argument form; a large real review
+#   prompt (full diff + every package doc) would hit the same OS limit here
+#   too if passed as an argument instead of via stdin. Verified live: a
+#   prompt piped via stdin with no positional prompt argument reaches the
+#   model normally (confirmed by an authentication-error response, i.e. it
+#   got past argument parsing, not a usage/argv error).
+# - `--output-format json` (non-streaming) is a single JSON object on stdout
+#   (`{"type":"result","subtype":...,"is_error":bool,"result":"<the actual
+#   response text>","session_id":...,"usage":{...}}`), not OpenCode's
+#   nd-JSON per-event stream - the "Extract verdict text" step below reads
+#   the whole file as one JSON document and pulls `.result` directly; no
+#   line-by-line event filtering is needed.
+#
+# implementer and planner stay on their existing roles for now - migrating
+# them to Cursor too is a separate, not-yet-done follow-up; do not assume
+# they've moved without checking their own workflow files' execution steps.
+#
+# Needs CURSOR_API_KEY as a repo/org secret on the calling project - same
+# Free-plan-org private-repo caveat documented elsewhere in this repo for
+# OPENAI_API_KEY/OPENCODE_API_KEY (org secrets can silently not reach a
+# private repo; set at repo level too if so). No second-account fallback
+# exists for Cursor the way OPENCODE_SECOND_API_KEY did - not needed yet,
+# add one only if a real quota-exhaustion incident on this account shows it
+# is.
 
 on:
   workflow_call:
@@ -75,7 +141,7 @@ on:
         type: string
         default: "develop"
     secrets:
-      OPENCODE_API_KEY:
+      CURSOR_API_KEY:
         required: true
 
 jobs:
@@ -221,146 +287,65 @@ jobs:
             cat .karsift/lessons.md 2>/dev/null || true
           } > /tmp/review-prompt.txt
 
-      - name: Install opencode
-        run: curl -fsSL https://opencode.ai/install | bash
-
-      # Read-only enforcement lives here, not in a CLI flag - see this file's
-      # header comment for why `run` has no `--permissions`/`--quiet` flag to
-      # use instead. Every permission key from OpenCode's own published
-      # schema (https://opencode.ai/config.json, $defs.PermissionConfig) is
-      # set explicitly so nothing falls through to an implicit default.
-      #
-      # external_directory allows /tmp/* specifically (not a blanket "allow")
-      # because of a live incident (2026-07-27, VOC-031-T05 PR #164): the
-      # CLI's own --file injection truncates a large review-prompt.txt
-      # (diff + full package docs easily exceeds it), and the model then
-      # tries to `read` the same /tmp path itself to get the rest. With
-      # external_directory fully denied that read fails every retry and the
-      # run either hangs past its timeout or dies with a bare exit 1 and zero
-      # stdout/stderr - no verdict, no error text, nothing for remediate.yml
-      # to act on since it only reads FAIL-verdict text, not "review crashed
-      # silently". Reproduced locally (same prompt, same agent config): fully
-      # denied hangs/times out with no output; allowing /tmp/* lets it read
-      # the rest of its own prompt file and finish in under 90s.
-      - name: Configure opencode
+      - name: Install Cursor CLI
         run: |
-          cat > opencode.jsonc <<'EOF'
-          {
-            "$schema": "https://opencode.ai/config.json",
-            "agent": {
-              "reviewer": {
-                "description": "Independent read-only reviewer - never edits or executes",
-                "mode": "primary",
-                "permission": {
-                  "read": "allow",
-                  "grep": "allow",
-                  "glob": "allow",
-                  "list": "allow",
-                  "edit": "deny",
-                  "bash": "deny",
-                  "webfetch": "deny",
-                  "websearch": "deny",
-                  "task": "deny",
-                  "todowrite": "deny",
-                  "external_directory": {
-                    "/tmp/*": "allow"
-                  },
-                  "question": "deny",
-                  "skill": "deny",
-                  "lsp": "deny",
-                  "doom_loop": "deny"
-                }
-              }
-            }
-          }
-          EOF
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # No allow-bot-users equivalent needed: opencode has no actor-permission
-      # gate the way codex-action does (that check was specific to resolving
-      # a GitHub Actions actor identity against repo-collaborator permissions
-      # before running - opencode has no such concept, it just runs with
-      # whatever credentials/permissions the active agent config grants).
+      # No allow-bot-users equivalent needed: cursor-agent has no
+      # actor-permission gate the way codex-action does (that check was
+      # specific to resolving a GitHub Actions actor identity against
+      # repo-collaborator permissions before running).
       #
-      # --format json gives nd-JSON events instead of decorated text (see
-      # header comment) - "Extract verdict text" below pulls the actual
-      # response out of it. No --auto flag: every permission the `reviewer`
-      # agent could need is already explicitly allow/deny above, so nothing
-      # should ever hit an "ask" prompt this run could hang on; --auto would
-      # only paper over a permission key I forgot to enumerate, which is
-      # exactly the failure mode worth surfacing (a hang/timeout), not
-      # silently auto-approving.
-      # The prompt used to be spliced in as a single positional argument
-      # (`opencode run "$(cat ...)"`) - fine for a small package but Linux's
-      # execve() rejects any single argument over ~128KB (MAX_ARG_STRLEN)
-      # regardless of the much larger overall ARG_MAX, and a real review
-      # prompt (full diff + task files + acceptance criteria) crosses that
-      # on anything but a trivial PR. Found live 2026-07-25 on VOC-026-T00
-      # (a migration/schema-heavy PR, PR #88): failed in 8s with "Argument
-      # list too long", exit 126, before ever reaching the model. Fixed by
-      # attaching the prompt as a file (`-f`/`--file`, which the CLI reads
-      # itself rather than the shell placing it on the exec argv) instead of
-      # inlining its content into the command line.
-      # Falls back to a second OpenCode account (OPENCODE_SECOND_API_KEY,
-      # unset unless the calling project defines it - a per-project cost
-      # decision, not a karsift-ai-infra default) if the primary account's
-      # own run fails with what looks like quota/balance exhaustion, rather
-      # than failing the whole review outright. Only retries on that
-      # specific failure class (matched against stderr/stdout by the
-      # vendor's own wording, e.g. "Insufficient balance" per the OpenCode
-      # pilot's item 26/27) - any other failure (a real prompt/model/CLI
-      # bug) fails normally instead of silently burning the second
-      # account's quota chasing an unrelated error.
-      # timeout-minutes bounds a real hang, not just a slow run - see
-      # plan.yml's identical addition for the live incident that surfaced
-      # this gap (a planner hang, same underlying opencode CLI). Raised
-      # 15 -> 30 (2026-07-26): VOC-030-T00's PR #134 (a large R3 diff - five
-      # new tables plus a full domain module) hit this timeout twice in a
-      # row on the same commit with no error, just ran out of time - and
-      # because remediate.yml's retry decision reads attempt count from the
-      # PR body (which a hand-pushed fix commit doesn't update), a timed-out
-      # review kept re-triggering a redundant attempt-2 implementer dispatch
-      # against findings that were already fixed on the branch, instead of
-      # just needing the review itself to finish. 30 minutes matches
-      # implement.yml's own budget for large diffs.
+      # --mode plan is the read-only enforcement (see header comment for the
+      # live verification of this) - no generated permission-profile file is
+      # needed the way OpenCode's `opencode.jsonc` was. --trust is required
+      # every run because a fresh runner workspace is untrusted by default
+      # and would otherwise block on an unanswerable interactive prompt (see
+      # header comment) - it does not grant write access on its own.
+      # --output-format json gives a single JSON object, not a per-event
+      # stream - see header comment; "Extract verdict text" below reads it
+      # as one document. The prompt is piped via stdin, not passed as a
+      # positional argument, for the same execve()-argument-length reason
+      # `opencode run` needed `--file` instead of an inline argument (see
+      # header comment; verified live this repo's own review prompt - full
+      # diff plus every package doc - can exceed the ~128KB single-argument
+      # limit on anything but a trivial PR).
+      #
+      # No second-account fallback exists for Cursor yet (see header
+      # comment) - if a real quota-exhaustion incident on this account shows
+      # one is needed, add it the same way OPENCODE_SECOND_API_KEY was
+      # added here, don't build it speculatively now.
+      #
+      # timeout-minutes bounds a real hang, not just a slow run - kept at 30
+      # to match this step's own prior OpenCode-era budget and
+      # implement.yml's large-diff budget; not yet re-tuned against real
+      # Cursor run durations, revisit if this proves too tight or too loose.
       - name: Run independent verification
         id: verify
         timeout-minutes: 30
         env:
-          # Reverted (2026-07-28) - see implement.yml's identical revert for
-          # why: swapped 2026-07-25 for a quota issue that should have
-          # reset by now, and the swapped (second) account turned out to be
-          # the one silently hanging on VOC-031-T07a's review (30-minute
-          # timeout, zero output) - same symptom implement.yml had before
-          # its own revert fixed it.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          OPENCODE_SECOND_API_KEY: ${{ secrets.OPENCODE_SECOND_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -uo pipefail
           source karsift-ai-infra/config/retry-helpers.sh
+          MODEL="${{ steps.model.outputs.model }}"
+          MODEL="${MODEL#cursor/}"
           run_review() {
-            OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
-              --file /tmp/review-prompt.txt \
-              --agent reviewer \
-              --model "${{ steps.model.outputs.model }}" \
-              --format json > /tmp/verdict-events.jsonl 2> /tmp/opencode-stderr.log
+            agent -p --trust --mode plan \
+              --model "$MODEL" \
+              --output-format json \
+              < /tmp/review-prompt.txt \
+              > /tmp/verdict-response.json 2> /tmp/cursor-stderr.log
           }
-          # Transient-failure retry (same account/model, immediate) happens
-          # first; only once THAT is exhausted do we consider this a real
-          # quota-exhaustion signal worth swapping accounts for. See
-          # retry-helpers.sh's header comment for the live incident and the
-          # exact heuristic (fast + content-free failures only).
-          retry_if_transient /tmp/opencode-stderr.log /tmp/verdict-events.jsonl -- run_review "$OPENCODE_API_KEY"
+          # Transient-failure retry (same account/model, immediate) - see
+          # retry-helpers.sh's header comment for the live OpenCode incident
+          # this was originally built for; the heuristic (fast or
+          # content-free failures only) applies identically here.
+          retry_if_transient /tmp/cursor-stderr.log /tmp/verdict-response.json -- run_review
           exit_code=$?
-          if [ "$exit_code" -ne 0 ] && [ -n "${OPENCODE_SECOND_API_KEY:-}" ] && \
-             grep -qiE "insufficient balance|quota exceeded|rate.?limit|too many requests|429|payment required|402" \
-               /tmp/opencode-stderr.log /tmp/verdict-events.jsonl 2>/dev/null; then
-            echo "::warning::Primary OpenCode account looks quota-exhausted - retrying with the second account."
-            cat /tmp/opencode-stderr.log >&2
-            retry_if_transient /tmp/opencode-stderr.log /tmp/verdict-events.jsonl -- run_review "$OPENCODE_SECOND_API_KEY"
-            exit_code=$?
-          fi
           if [ "$exit_code" -ne 0 ]; then
-            cat /tmp/opencode-stderr.log >&2
+            cat /tmp/cursor-stderr.log >&2
           fi
           exit "$exit_code"
 
@@ -369,24 +354,28 @@ jobs:
           python3 - <<'PYEOF'
           import json
 
-          chunks = []
-          with open("/tmp/verdict-events.jsonl") as f:
-              for line in f:
-                  line = line.strip()
-                  if not line:
-                      continue
-                  event = json.loads(line)
-                  if event.get("type") == "text":
-                      chunks.append(event["part"]["text"])
+          with open("/tmp/verdict-response.json") as f:
+              raw = f.read().strip()
 
-          if not chunks:
+          if not raw:
               raise SystemExit(
-                  "opencode produced no text response - see /tmp/verdict-events.jsonl "
-                  "in this job's logs for the raw event stream (likely an error event)."
+                  "cursor-agent produced no output - see /tmp/cursor-stderr.log "
+                  "in this job's logs."
               )
 
+          event = json.loads(raw)
+          if event.get("is_error"):
+              raise SystemExit(
+                  "cursor-agent reported an application-level error "
+                  f"(subtype={event.get('subtype')!r}): {event.get('result')!r}"
+              )
+
+          result = event.get("result", "")
+          if not result:
+              raise SystemExit("cursor-agent response had no 'result' text.")
+
           with open("/tmp/verdict.md", "w") as f:
-              f.write("".join(chunks))
+              f.write(result)
           PYEOF
 
       - name: Show verdict
