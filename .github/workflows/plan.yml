@@ -100,11 +100,14 @@ on:
         default: "develop"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
-        description: "Used for the planner role (Claude Code CLI, restored 2026-07-26). Subscription OAuth, not ANTHROPIC_API_KEY - the org behind that metered key is disabled (confirmed live the same day, see the karsift_ai_infra_overview memory), so this authenticates against the founder's own personal Claude Code subscription instead."
-        required: true
-      OPENCODE_API_KEY:
-        description: "Unused by planner as of 2026-07-26 (moved back to Claude Code) - kept optional in case plan.yml's OpenCode execution is ever restored."
+        description: "Unused since planner moved to Cursor (2026-07-31) - kept optional in case Claude Code CLI is ever restored for this role."
         required: false
+      OPENCODE_API_KEY:
+        description: "Unused by planner - kept optional in case plan.yml's OpenCode execution is ever restored."
+        required: false
+      CURSOR_API_KEY:
+        description: "Used for the planner role (cursor-agent CLI, 2026-07-31) - see 'Run planner' step's own comment for why."
+        required: true
       KARSIFT_BOT_APP_ID:
         description: "Optional. See implement.yml's secrets block for what this removes (the manual 'Approve workflows to run' click on bot-created PRs)."
         required: false
@@ -376,8 +379,23 @@ jobs:
       # the invocation style from). If Claude access is ever disabled
       # again, config/roles.yml's own header comments document the same
       # revert-to-OpenCode path.
-      - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+      # MOVED TO CURSOR (2026-07-31): the OpenCode Go account behind
+      # OPENCODE_API_KEY looked exhausted/degraded across every model tried
+      # the same day (see review.yml/implement.yml's identical migration and
+      # header comments for the full incident) - founder directive to move
+      # every role, including planner (previously on Claude Code, not
+      # OpenCode, so this isn't the same incident that hit those two roles
+      # directly, just the same founder-driven consolidation onto one
+      # subscription). Every claim about the Cursor CLI's real flags/
+      # behavior was verified against the actually-installed CLI in a
+      # disposable sandbox, not fetched docs - see review.yml's header
+      # comment for the specific checks. `--force` (not `--mode plan`) is
+      # used because the planner has to actually write the draft package's
+      # files, the same reason implement.yml's implementer role uses it.
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # Bounded self-correcting retry (max 2 attempts), unchanged in shape
       # from the OpenCode-era version - see item 33 in the bugs-fixed
@@ -412,7 +430,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 35
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -uo pipefail
           source karsift-ai-infra/config/retry-helpers.sh
@@ -421,30 +439,35 @@ jobs:
           prompt_file=/tmp/plan-prompt.txt
           max_attempts=2
           attempt=1
+          MODEL="${{ steps.model.outputs.model }}"
+          MODEL="${MODEL#cursor/}"
           run_planner() {
-            claude --model "${{ steps.model.outputs.model }}" \
-              --allowedTools "Read,Write,Edit,Bash,Grep,Glob" \
-              --output-format json \
-              -p < "$prompt_file" > /tmp/planner-raw.json 2> /tmp/claude-stderr.log
+            agent -p --trust --force --model "$MODEL" --output-format json \
+              < "$prompt_file" > /tmp/planner-raw.json 2> /tmp/cursor-stderr.log
           }
           while [ "$attempt" -le "$max_attempts" ]; do
             echo "::group::Planner attempt $attempt/$max_attempts"
-            claude_exit=0
+            cursor_exit=0
             # Nested transient-retry (immediate, same model): distinct from
             # this loop's own outer retry, which handles a *successful*
-            # claude run that wrote invalid YAML. This inner layer instead
-            # catches a claude invocation that didn't complete at all - a
+            # cursor-agent run that wrote invalid YAML. This inner layer
+            # instead catches an invocation that didn't complete at all - a
             # fast, content-free crash. See retry-helpers.sh's header
             # comment for the live incident and heuristic.
-            retry_if_transient /tmp/planner-raw.json /tmp/claude-stderr.log -- run_planner || claude_exit=$?
+            retry_if_transient /tmp/planner-raw.json /tmp/cursor-stderr.log -- run_planner || cursor_exit=$?
             jq -r '.result // empty' /tmp/planner-raw.json 2>/dev/null || true
-            echo "--- cost/cache telemetry ---"
-            jq '{total_cost_usd, usage}' /tmp/planner-raw.json 2>/dev/null || true
+            echo "--- usage telemetry ---"
+            jq '.usage' /tmp/planner-raw.json 2>/dev/null || true
             echo "::endgroup::"
-            if [ "$claude_exit" -ne 0 ]; then
-              cat /tmp/claude-stderr.log >&2
-              echo "claude run itself failed (exit $claude_exit)" >&2
-              exit "$claude_exit"
+            if [ "$cursor_exit" -ne 0 ]; then
+              cat /tmp/cursor-stderr.log >&2
+              echo "cursor-agent run itself failed (exit $cursor_exit)" >&2
+              exit "$cursor_exit"
+            fi
+            if jq -e '.is_error == true' /tmp/planner-raw.json >/dev/null 2>&1; then
+              cat /tmp/cursor-stderr.log >&2
+              echo "cursor-agent reported an application-level error: $(jq -r '.result' /tmp/planner-raw.json)" >&2
+              exit 1
             fi
 
             if [ -f ".karsift-plan-needs-info.md" ]; then
