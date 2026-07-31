@@ -28,6 +28,33 @@ name: implement (reusable)
 # back to a single real execution step ("Run implementer (opencode)"), same
 # as review.yml/plan.yml. The openai/codex-action step is disabled
 # (if: false), not deleted - see that step's own comment for why.
+#
+# MOVED TO CURSOR (2026-07-31): the OpenCode Go account behind
+# OPENCODE_API_KEY looked exhausted/degraded across every model tried
+# (VOC-032-T10's live-evaluation evidence; review.yml's own reviewer job was
+# stuck ~30 minutes with zero output on the same day for the same reason -
+# see that file's header comment for the full incident). Founder directive:
+# move every role - implementer, implementer_escalation, reviewer, planner -
+# to Cursor (a pre-existing Pro+ subscription), using a different,
+# cost-effective model per role rather than one model everywhere. Both the
+# base implementer and the escalation tier now run through the single "Run
+# implementer (cursor-agent)" step below, collapsing the old
+# opencode/claude-code-escalation split into one execution path the same way
+# review.yml's migration did - the two are still just different config/
+# roles.yml values (`implementer` vs `implementer_escalation`), only the
+# model differs, not the CLI. The opencode and claude-code-escalation steps
+# below are disabled (if: false), not deleted, for the same one-line-revert
+# reason the openai/codex-action step already documents.
+#
+# Every claim about the Cursor CLI's real flags/behavior here was verified
+# against the actually-installed CLI in a disposable sandbox, not assumed
+# from fetched docs - see review.yml's header comment for the specific
+# checks (workspace-trust blocking, --mode plan's real read-only guarantee,
+# stdin prompt input avoiding the execve() argument-length limit, the
+# single-JSON-object --output-format json shape). The one difference here:
+# the implementer role needs real write access, so `--force`/`--yolo` is
+# used instead of `--mode plan` - equivalent to opencode's `--auto` /
+# claude's unrestricted `--allowedTools` for this same role.
 
 on:
   workflow_call:
@@ -63,11 +90,14 @@ on:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
         required: false
       OPENCODE_API_KEY:
-        description: "Used for both the base implementer and implementer_escalation roles (both OpenCode-backed as of 2026-07-26)."
-        required: true
-      CLAUDE_CODE_OAUTH_TOKEN:
-        description: "Used for implementer_escalation only (2026-07-28, VOC-031-T07) - see that step's own comment for why. Optional so a project without this secret configured just skips straight to the opencode-based escalation step instead."
+        description: "Unused since implementer/implementer_escalation moved to Cursor (2026-07-31) - kept optional in case the opencode step is ever re-enabled, see this file's header comment."
         required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "Unused since implementer_escalation moved to Cursor (2026-07-31) - kept optional in case the claude-code-escalation step is ever re-enabled, see this file's header comment."
+        required: false
+      CURSOR_API_KEY:
+        description: "Used for both the base implementer and implementer_escalation roles (both Cursor-backed as of 2026-07-31, see this file's header comment)."
+        required: true
       KARSIFT_BOT_APP_ID:
         description: >
           Optional. GitHub App ID for minting the PR-creation token. Without
@@ -287,7 +317,7 @@ jobs:
       # implementer_escalation only so the base implementer role (which is
       # NOT hanging on other tasks) stays on OpenCode untouched.
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' && false
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -327,7 +357,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' && false
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -380,12 +410,12 @@ jobs:
       # (unlike the opencode step's OPENCODE_SECOND_API_KEY) - only one
       # Claude account is provisioned.
       - name: Install Claude Code
-        if: steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation' && false
         run: npm install -g @anthropic-ai/claude-code
 
       - name: Run implementer (claude-code escalation)
         id: implementer-claude
-        if: steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation' && false
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -456,16 +486,62 @@ jobs:
           # rather than assuming medium is universal.
           codex-args: '["-c", "model_verbosity=\"medium\""]'
 
-      # Normalizes both branches' outcome into one `steps.implementer.outputs
+      # Both implementer and implementer_escalation now run through this
+      # single step - see this file's header comment for why. --trust is
+      # required non-interactively (a fresh runner workspace is untrusted by
+      # default and would otherwise block on an unanswerable prompt - see
+      # review.yml's header comment for the live verification of this).
+      # --force/--yolo grants real write/shell access, the equivalent of
+      # opencode's --auto or claude's unrestricted --allowedTools for this
+      # role - unlike review.yml's reviewer, which deliberately omits this
+      # and uses --mode plan instead. Prompt piped via stdin, not a
+      # positional argument, for the same execve()-argument-length reason
+      # documented on the opencode step above and in review.yml's header
+      # comment.
+      - name: Install Cursor CLI
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run implementer (cursor-agent)
+        id: implementer-cursor
+        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        continue-on-error: true
+        timeout-minutes: 55
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -uo pipefail
+          source karsift-ai-infra/config/retry-helpers.sh
+          MODEL="${{ steps.model.outputs.model }}"
+          MODEL="${MODEL#cursor/}"
+          run_implementer() {
+            agent -p --trust --force --model "$MODEL" --output-format json \
+              < /tmp/implement-prompt.txt \
+              > /tmp/cursor-response.json 2> /tmp/cursor-stderr.log
+          }
+          retry_if_transient /tmp/cursor-stderr.log /tmp/cursor-response.json -- run_implementer
+          exit_code=$?
+          if [ "$exit_code" -eq 0 ] && [ -s /tmp/cursor-response.json ] && jq -e '.is_error == true' /tmp/cursor-response.json >/dev/null 2>&1; then
+            echo "cursor-agent reported an application-level error: $(jq -r '.result' /tmp/cursor-response.json)" >&2
+            exit_code=1
+          fi
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/cursor-stderr.log >&2
+          fi
+          exit "$exit_code"
+
+      # Normalizes every branch's outcome into one `steps.implementer.outputs
       # .outcome` the rest of this job (which doesn't know or shouldn't need
       # to know which vendor ran) checks - always() so it runs even though
       # each branch above uses continue-on-error and only one of them ran at
-      # all (the other's outcome is 'skipped', not 'failure').
+      # all (the others' outcome is 'skipped', not 'failure').
       - name: Normalize implementer outcome
         id: implementer
         if: always()
         run: |
-          for outcome in "${{ steps.implementer-claude.outcome }}" "${{ steps.implementer-opencode.outcome }}" "${{ steps.implementer-openai.outcome }}"; do
+          for outcome in "${{ steps.implementer-cursor.outcome }}" "${{ steps.implementer-claude.outcome }}" "${{ steps.implementer-opencode.outcome }}" "${{ steps.implementer-openai.outcome }}"; do
             if [ "$outcome" != "skipped" ]; then
               echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
               exit 0
