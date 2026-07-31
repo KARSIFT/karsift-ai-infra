@@ -168,12 +168,28 @@ jobs:
           import sys
 
           tasks_file, change_id = sys.argv[1:3]
-          id_prefix = change_id.rsplit("-", 1)[0]
-          # `T\d+[a-z]?` (not just `T\d+`) so a task split into lettered
-          # sub-tasks (e.g. T07 -> T07a/T07b) is recognized the same way
-          # auto-advance.yml's identical pattern needs to be - see that
-          # file's own note for the live gap this caused.
-          pattern = re.compile(rf'{re.escape(id_prefix)}-\d+-T\d+[a-z]?')
+          # Scoped to THIS package's own change_id (e.g. "VOC-035"), not a
+          # bare org-wide prefix (e.g. "VOC") - an earlier version of this
+          # pattern stripped the package's own number off via
+          # `change_id.rsplit("-", 1)[0]`, intending something like a
+          # cross-package-agnostic prefix, but that made the regex
+          # (`VOC-\d+-T\d+`) match ANY package's task ID, not just this
+          # package's own. tasks.md prose routinely cross-references other
+          # packages' tasks by ID (e.g. "mirrors VOC-034-T01's own..." or
+          # "VOC-032-T10's own EV-22 evidence") - those inline mentions were
+          # being scanned as if they were this package's own roster entries,
+          # opening real tracking issues and roster rows for another
+          # package's task ID. Found live adopting VOC-035 (PR #232):
+          # `.karsift/tasks.json` came out with `VOC-034-T01` and
+          # `VOC-032-T10` spliced into VOC-035's own roster, both from
+          # cross-reference prose, neither a real VOC-035 task - auto-advance
+          # would have tried to dispatch an implementer against a task_id
+          # that doesn't exist in this package's own tasks.md. `T\d+[a-z]?`
+          # (not just `T\d+`) so a task split into lettered sub-tasks (e.g.
+          # T07 -> T07a/T07b) is still recognized the same way
+          # auto-advance.yml's own pattern needs to be - see that file's own
+          # note for the live gap this caused.
+          pattern = re.compile(rf'{re.escape(change_id)}-T\d+[a-z]?')
           seen = set()
           with open(tasks_file) as f:
               for line in f:
