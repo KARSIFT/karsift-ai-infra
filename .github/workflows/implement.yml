@@ -532,6 +532,20 @@ jobs:
           fi
           exit "$exit_code"
 
+      # Unconditional visibility into the model's own text response - added
+      # after a real live incident (VOC-035-T02, first attempt) where the
+      # CLI exited 0, is_error was false, but "Commit implementer's work"
+      # found nothing staged (a genuine no-op, not a crash) and the run gave
+      # no way to see WHY the model didn't write anything, since the
+      # previous version of this step only printed output on a non-zero
+      # exit or an is_error response. Mirrors review.yml's "Show verdict"
+      # step for the same reason - always show the model's own explanation,
+      # not just on failure.
+      - name: Show implementer response (diagnostic)
+        if: always() && (steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation')
+        run: |
+          jq -r '.result // "(no result field)"' /tmp/cursor-response.json 2>/dev/null || echo "(no parseable response)"
+
       # Normalizes every branch's outcome into one `steps.implementer.outputs
       # .outcome` the rest of this job (which doesn't know or shouldn't need
       # to know which vendor ran) checks - always() so it runs even though
