@@ -98,7 +98,22 @@
 # was genuinely good (see the VOC-025-T00 review evidence above); watch the
 # next several implement runs' CI/review pass rate to confirm minimax-m3
 # holds up on real build/test-constrained code, not just cost less.
-implementer: opencode-go/minimax-m3
+#
+# MOVED TO CURSOR (2026-07-31, founder directive: consolidate every role
+# onto the pre-existing Cursor Pro+ subscription, "different model for
+# different role, also use cost-effective models"): the OpenCode Go account
+# looked exhausted/degraded across every model tried the same day - see
+# reviewer's own note below for the full incident. `gpt-5.3-codex-low` is
+# OpenAI's coding-tuned tier at Cursor's lowest effort setting for that
+# model family - picked as the cost-conscious default for the base
+# implementer role, which runs on every attempt-1 dispatch (the highest-
+# frequency call site in the whole pipeline, same reasoning that has driven
+# every prior cost-based implementer swap in this file). Cursor's own
+# `agent models` output lists names only, no per-model price (same
+# limitation review.yml's migration note already flags) - "low" is a naming
+# signal, not a verified cost figure; watch real credit-pool consumption
+# and adjust, the same as every other pick in this file.
+implementer: cursor/gpt-5.3-codex-low
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -129,7 +144,28 @@ implementer: opencode-go/minimax-m3
 # `implementer` itself has moved to minimax-m3 for cost, using kimi here
 # keeps escalation a genuinely different, previously-proven-stronger model
 # rather than retrying with the same tier that already struggled.
-implementer_escalation: opencode-go/kimi-k2.7-code
+#
+# MOVED TO CURSOR (2026-07-31), FIRST PICK: gpt-5.3-codex-high, same OpenAI
+# family as `implementer` but a higher effort tier. Founder pushed back
+# same day: pick cost-effective models from a DIFFERENT company per role,
+# not just a different tier of the same one.
+#
+# CORRECTED (2026-07-31, same day): cursor/claude-opus-5-medium. This
+# actually restores the ORIGINAL escalation philosophy this file had before
+# OpenCode collapsed everything onto one vendor (see the 2026-07-26 "no more
+# quota in codex" entry above lamenting that "that property is gone now") -
+# escalation was always meant to be "not just cost, a real different-
+# infrastructure second opinion" for the one retry that matters most, not
+# just a stronger tier of the SAME model the first attempt already used.
+# Cursor's multi-model access makes that genuinely possible again: Anthropic
+# is a different company from implementer's OpenAI-Codex family. "medium",
+# not "low", because a retry means the task already proved harder than the
+# cheaper tier could handle - the escalation tier should actually be
+# stronger, not just differently-branded; not "high"/"thinking" because
+# escalation is capped at one retry by remediate.yml, not a standing cost
+# center, but still not the cheapest tier available for the one attempt
+# that matters most.
+implementer_escalation: cursor/claude-opus-5-medium
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
@@ -205,22 +241,30 @@ implementer_escalation: opencode-go/kimi-k2.7-code
 # `agent models` for the live, account-specific catalog - same
 # don't-trust-a-fetched-page caveat as above, verified this time by actually
 # running the CLI in a disposable sandbox, not by fetching a page at all).
-# claude-opus-5-high is Anthropic's current flagship reasoning tier via
-# Cursor - picked for real cross-lab independence against whatever
-# implementer ends up on (still an OpenCode/DeepSeek-or-Moonshot-family model
-# at the time of this edit) and because review quality directly gates what
-# merges - NOT picked on a verified cost basis (Cursor's `agent models`
-# output lists names only, no per-model price - unlike OpenCode's `opencode
-# models`). review.yml's own job runs on every implement attempt plus every
-# retry, the exact call pattern that has driven past cost-based swaps
-# (Claude -> OpenAI -> OpenCode) in this same file - watch real Cursor
-# credit-pool consumption and swap to a cheaper tier the same way if it
-# proves too expensive; don't assume this pick is the permanent one.
-reviewer: cursor/claude-opus-5-high
+# FIRST PICK (2026-07-31, same edit as above): claude-opus-5-high, on a
+# quality-first basis (Anthropic's flagship reasoning tier, cross-lab
+# independence against implementer's OpenAI-Codex family, review quality
+# directly gates what merges). Founder pushed back same day: "use cost-
+# effective models" for every role, not just implementer/planner - the
+# exact same pattern as the 2026-07-24 gpt-5.6-sol -> luna swap earlier in
+# this file (flagship-first, then cost correction once called out).
+#
+# MOVED (2026-07-31, same day): claude-opus-5-high -> cursor-grok-4.5-medium.
+# Still genuinely cross-lab from implementer (xAI vs OpenAI-Codex) and from
+# planner (Cursor's own composer-2.5) - independence doesn't require the
+# most expensive tier of a lab, just a different one. "medium" (not "low")
+# because review quality is what actually gates merges and review.yml has
+# no retry-of-the-reviewer-itself safety net the way implement.yml's
+# escalation does - a too-weak reviewer missing real findings is a worse
+# failure mode here than a too-weak implementer (which still gets caught by
+# review). Cursor's `agent models` output lists names only, no per-model
+# price - "medium" is a naming signal, not a verified cost figure; watch
+# real credit-pool consumption and adjust.
+reviewer: cursor/cursor-grok-4.5-medium
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
-reviewer_fast_retry: cursor/claude-opus-5-high
+reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
@@ -268,4 +312,16 @@ reviewer_fast_retry: cursor/claude-opus-5-high
 # plan.yml's execution step was rewritten back from `opencode run` to the
 # Claude Code CLI (prompt via stdin, not `-p` as a CLI argument - avoids
 # the same argv-length class of bug documented for OpenCode).
-planner: claude-sonnet-5
+#
+# MOVED TO CURSOR (2026-07-31, founder directive: consolidate every role,
+# "different model for different role, also use cost-effective models"):
+# same incident driving implementer/reviewer's own moves, though planner
+# itself was on Claude Code (not OpenCode) so wasn't directly affected -
+# this is the founder's explicit consolidation choice, not a planner-side
+# failure. `composer-2.5` is Cursor's own in-house model, distinct from
+# implementer's OpenAI-Codex family and reviewer's xAI pick - still no
+# independence requirement to satisfy here (see this role's own paragraph
+# above), so the choice is purely a cost/quality one. plan.yml's execution
+# step was rewritten from the Claude Code CLI to cursor-agent (prompt via
+# stdin either way, so the argv-length fix carries over unchanged).
+planner: cursor/composer-2.5
