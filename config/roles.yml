@@ -188,11 +188,39 @@ implementer_escalation: opencode-go/kimi-k2.7-code
 # to catch what a same-vendor compromise would miss is exactly what watching
 # real verdicts here is meant to establish - don't assume it's equivalent to
 # the OpenAI-vs-OpenCode split without evidence.
-reviewer: opencode-go/deepseek-v4-pro
+#
+# MOVED (2026-07-31): opencode-go/deepseek-v4-pro itself became unusable -
+# every model tried on the OpenCode Go account (including this exact one)
+# either timed out or errored in a same-day live bounded probe (VOC-032-T10's
+# live-evaluation evidence), and this role's own real job was stuck ~30
+# minutes with zero verdict on VOC-032-T09's PR #231 as a direct
+# consequence - not a one-off flake, the whole account looked exhausted/
+# degraded. Founder has a pre-existing Cursor Pro+ subscription ($60/month)
+# and directed a move to Cursor for reviewer (also implementer/planner,
+# tracked as a separate not-yet-done follow-up - check implement.yml/plan.yml's
+# own execution steps before assuming they've moved too). `cursor/` is a
+# roles.yml-only convention marking the vendor for readability, exactly like
+# `opencode-go/` above - review.yml's execution step strips it before
+# passing the rest to `--model`; the CLI itself expects the bare id (see
+# `agent models` for the live, account-specific catalog - same
+# don't-trust-a-fetched-page caveat as above, verified this time by actually
+# running the CLI in a disposable sandbox, not by fetching a page at all).
+# claude-opus-5-high is Anthropic's current flagship reasoning tier via
+# Cursor - picked for real cross-lab independence against whatever
+# implementer ends up on (still an OpenCode/DeepSeek-or-Moonshot-family model
+# at the time of this edit) and because review quality directly gates what
+# merges - NOT picked on a verified cost basis (Cursor's `agent models`
+# output lists names only, no per-model price - unlike OpenCode's `opencode
+# models`). review.yml's own job runs on every implement attempt plus every
+# retry, the exact call pattern that has driven past cost-based swaps
+# (Claude -> OpenAI -> OpenCode) in this same file - watch real Cursor
+# credit-pool consumption and swap to a cheaper tier the same way if it
+# proves too expensive; don't assume this pick is the permanent one.
+reviewer: cursor/claude-opus-5-high
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
-reviewer_fast_retry: opencode-go/deepseek-v4-pro
+reviewer_fast_retry: cursor/claude-opus-5-high
 
 # planner has no cross-vendor independence requirement the way implementer/reviewer
 # do - its output is a DRAFT change package a human reviews and adopts (or doesn't),
