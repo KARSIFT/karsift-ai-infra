@@ -79,6 +79,12 @@ through its own governance documents and through inputs to `merge-gate.yml`:
   `pull-requests: read & write`) to remove that friction - `implement.yml` mints a short-lived
   installation token and uses it instead, automatically, whenever those two secrets are present.
   Without them, behavior is unchanged from before.
+- **Release PR identity and checks**: `release.yml` requires those same GitHub App credentials for
+  promotion PRs. It creates and merges the PR as the App identity so GitHub does not pause the PR's
+  workflows for maintainer approval, waits fail-closed for every registered PR check, and only then
+  merges the integration branch into the production branch. Release PRs declare the conservative R4
+  risk class because the promotion updates the production branch, even though deployment remains out
+  of scope.
 - **Independent review**: `review.yml` runs the reviewer role with **read-only** tools only. It can
   read the diff and the package and post one comment - nothing else. Findings are Critical / High /
   Medium / Low; the verdict is one of `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or `FAIL`, bound to

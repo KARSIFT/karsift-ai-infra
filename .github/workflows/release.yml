@@ -33,6 +33,16 @@ on:
         required: false
         type: string
         default: "main"
+    secrets:
+      KARSIFT_BOT_APP_ID:
+        description: >
+          Required. GitHub App ID used to create and merge the promotion PR.
+          The default GITHUB_TOKEN is deliberately not used because GitHub
+          requires manual workflow approval on PRs it creates or updates.
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
+        description: "Required, paired with KARSIFT_BOT_APP_ID."
+        required: true
 
 jobs:
   # Fires on every issue closing. Cheap to no-op: most closed issues aren't a
@@ -157,6 +167,8 @@ jobs:
       startsWith(github.event.issue.title, 'Release: ')
     runs-on: ubuntu-latest
     permissions:
+      actions: read
+      checks: read
       contents: write
       pull-requests: write
       issues: write
@@ -177,6 +189,21 @@ jobs:
             exit 1
           fi
 
+      # A GitHub App token is mandatory on this path. PRs created by the
+      # default GITHUB_TOKEN require a maintainer to click "Approve workflows
+      # to run", even when the branch lives in the same repository. That is
+      # exactly what stalled vocanova-platform-sandbox's release PR #362.
+      # Using the already-installed KARSIFT bot identity lets the PR's checks
+      # start normally without weakening the repository's protection for
+      # genuine first-time external contributors.
+      - name: Mint App installation token for promotion
+        id: app-token
+        if: steps.check.outcome == 'success'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
       # If two release-approval issues land close together (e.g. two
       # packages both merged to the integration branch before either
       # release was approved), the first approval's promotion already
@@ -193,28 +220,101 @@ jobs:
       # error - required a manual close after manually confirming main
       # already had VOC-021's real content. Now detected and treated as the
       # success it actually is, not a failure.
-      - name: Open or reuse the promotion PR, then merge it
+      - name: Open or reuse the promotion PR
+        id: promotion-pr
         if: steps.check.outcome == 'success'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          RELEASE_ISSUE_TITLE: ${{ github.event.issue.title }}
         run: |
           set -euo pipefail
+          promotion_body="$(cat <<EOF
+          Promotion requested and approved by the configured founder via issue #$RELEASE_ISSUE_NUMBER (\`$RELEASE_ISSUE_TITLE\`).
+
+          Risk classification: R4
+
+          This PR promotes the already-reviewed integration branch to the production branch. It does not deploy production infrastructure, but it remains fail-closed: every PR check must pass before this workflow merges it.
+          EOF
+          )"
           existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" --state open --json number -q '.[0].number' || true)
           if [ -z "$existing" ] || [ "$existing" = "null" ]; then
             create_output=$(gh pr create \
               --base "${{ inputs.production_branch }}" \
               --head "${{ inputs.integration_branch }}" \
               --title "Release: promote ${{ inputs.integration_branch }} to ${{ inputs.production_branch }}" \
-              --body "Promotion requested and approved via issue #${{ github.event.issue.number }} (\`${{ github.event.issue.title }}\`)." 2>&1) \
+              --body "$promotion_body" 2>&1) \
               || {
                 if echo "$create_output" | grep -qi "No commits between"; then
                   gh issue close ${{ github.event.issue.number }} --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrently-approved release most likely already brought this package's changes in. No new promotion PR was needed."
+                  echo "pr_number=" >> "$GITHUB_OUTPUT"
                   exit 0
                 fi
                 echo "$create_output" >&2
                 exit 1
               }
             existing=$(echo "$create_output" | grep -oP '\d+$')
+          else
+            # A retry may reuse a PR created by an earlier failed release
+            # run. Refresh its metadata so the conservative risk declaration
+            # and current approval evidence cannot remain stale.
+            gh pr edit "$existing" --body "$promotion_body"
           fi
-          gh pr merge "$existing" --merge
-          gh issue close ${{ github.event.issue.number }} --comment "Promoted via PR #$existing."
+          echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
+
+      # Use the workflow token only for read-only check inspection. The App
+      # intentionally needs contents/issues/pull-requests write permission,
+      # not broad Actions/Checks access. A short registration wait closes the
+      # race where `gh pr checks --watch` is called before GitHub has created
+      # any check runs for the just-opened PR.
+      - name: Wait for every promotion PR check
+        id: promotion-checks
+        if: steps.promotion-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.promotion-pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          previous_count=0
+          stable_count=0
+          while true; do
+            check_count=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup | length')
+            if [ "$check_count" -gt 0 ] && [ "$check_count" -eq "$previous_count" ]; then
+              stable_count=$((stable_count + 1))
+            else
+              stable_count=0
+            fi
+            if [ "$stable_count" -ge 2 ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Promotion PR #$PR_NUMBER checks did not register and stabilize within 5 minutes - refusing to merge." >&2
+              exit 1
+            fi
+            previous_count=$check_count
+            sleep 10
+          done
+          gh pr checks "$PR_NUMBER" --watch --fail-fast --interval 10
+          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+          checks_ok=$(gh pr checks "$PR_NUMBER" --json bucket -q \
+            'map(.bucket) | all(. == "pass" or . == "skipping")')
+          if [ "$checks_ok" != "true" ]; then
+            echo "Promotion PR #$PR_NUMBER is not fully green after watch completed - refusing to merge." >&2
+            exit 1
+          fi
+          echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Merge checked promotion PR and close release issue
+        if: steps.promotion-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.promotion-pr.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.promotion-checks.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # Bind the merge to the exact revision whose checks passed. If
+          # develop advances between the check watch and this command,
+          # GitHub rejects the merge instead of releasing an unchecked tip.
+          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
+          gh issue close ${{ github.event.issue.number }} --comment "Promoted via PR #$PR_NUMBER."
