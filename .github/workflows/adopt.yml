@@ -2,11 +2,12 @@ name: adopt (reusable)
 
 # The other half of plan.yml's split: plan.yml only ever drafts a package and
 # opens a PR for it - this workflow is what actually opens the per-task
-# tracking issues that carry real implementation authority, and it only does
-# that once a human has adopted the draft (merged a "plan/"-branch PR whose
-# change.yaml no longer says "draft"). Moving issue-creation here, out of
-# plan.yml, means a proposal nobody has agreed to yet never has a real,
-# numbered issue attached to it - only an adopted package does.
+# tracking issues that carry real implementation authority, records their
+# sequential dependency edges, and starts the root task. It only does that
+# once a human has adopted the draft (merged a "plan/"-branch PR whose
+# change.yaml no longer says "draft"). Moving issue-creation and first-task
+# dispatch here means a proposal nobody has agreed to yet never has a real,
+# numbered issue or implementation run attached to it.
 #
 # Refuses to open anything if the merged PR's change.yaml is still in draft
 # state (status == "draft" or implementation.authorized != true) - a human
@@ -44,6 +45,16 @@ on:
         required: true
         type: string
     secrets:
+      CURSOR_API_KEY:
+        required: true
+      OPENAI_API_KEY:
+        required: false
+      OPENCODE_API_KEY:
+        required: false
+      OPENCODE_SECOND_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
       KARSIFT_BOT_APP_ID:
         required: false
       KARSIFT_BOT_PRIVATE_KEY:
@@ -56,6 +67,12 @@ jobs:
       contents: write
       issues: write
       pull-requests: read
+    outputs:
+      integration_branch: ${{ steps.target.outputs.branch }}
+      package_path: ${{ steps.locate.outputs.package_path }}
+      change_id: ${{ steps.issues.outputs.change_id }}
+      first_task_id: ${{ steps.issues.outputs.first_task_id }}
+      first_issue_number: ${{ steps.issues.outputs.first_issue_number }}
     steps:
       # Determined before checkout, without needing one: a plan/-branch PR
       # can merge into "develop" or "main" or anything else a project uses as
@@ -212,6 +229,9 @@ jobs:
             --force
 
           count=0
+          previous_task_id=""
+          first_task_id=""
+          first_issue_number=""
           echo "[" > /tmp/roster.json
           while IFS=$'\t' read -r task_id title; do
             [ -z "$task_id" ] && continue
@@ -231,8 +251,19 @@ jobs:
           EOF
           )")
             issue_number=$(basename "$issue_url")
+            if [ "$count" -eq 1 ]; then
+              first_task_id="$task_id"
+              first_issue_number="$issue_number"
+            fi
             [ "$count" -gt 1 ] && echo "," >> /tmp/roster.json
-            printf '{"task_id": %s, "issue": %s}' "$(jq -Rn --arg v "$task_id" '$v')" "$issue_number" >> /tmp/roster.json
+            if [ -n "$previous_task_id" ]; then
+              depends_on=$(jq -cn --arg dependency "$previous_task_id" '[$dependency]')
+            else
+              depends_on='[]'
+            fi
+            printf '{"task_id": %s, "issue": %s, "depends_on": %s}' \
+              "$(jq -Rn --arg v "$task_id" '$v')" "$issue_number" "$depends_on" >> /tmp/roster.json
+            previous_task_id="$task_id"
           done < /tmp/tasks.tsv
           echo "]" >> /tmp/roster.json
 
@@ -241,6 +272,9 @@ jobs:
             exit 1
           fi
           echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
+          echo "first_task_id=$first_task_id" >> "$GITHUB_OUTPUT"
+          echo "first_issue_number=$first_issue_number" >> "$GITHUB_OUTPUT"
           echo "Opened $count task issue(s)."
           jq . /tmp/roster.json
 
@@ -310,3 +344,20 @@ jobs:
           set -euo pipefail
           gh issue comment "${{ steps.verify.outputs.source_issue }}" --body \
             "Adopted. ${{ steps.issues.outputs.count }} task issue(s) opened from the finalized package - see this repository's issue list for \`$(basename "${{ steps.locate.outputs.package_path }}" | grep -oP '^[A-Z]+-\d+')\`."
+
+  # Adoption is the authorization event for the entire ordered roster. Start
+  # its root task immediately; later tasks are released one at a time by
+  # auto-advance after the preceding task's PR actually merges and closes its
+  # issue. This removes the manual gap that encouraged dispatching every task
+  # in parallel and makes the safe path the automatic path.
+  implement-first-task:
+    needs: adopt
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
+    with:
+      change_id: ${{ needs.adopt.outputs.change_id }}
+      package_path: ${{ needs.adopt.outputs.package_path }}
+      task_id: ${{ needs.adopt.outputs.first_task_id }}
+      issue_number: ${{ needs.adopt.outputs.first_issue_number }}
+      attempt: "1"
+      integration_branch: ${{ needs.adopt.outputs.integration_branch }}
+    secrets: inherit
