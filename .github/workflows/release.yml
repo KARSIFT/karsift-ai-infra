@@ -33,6 +33,24 @@ on:
         required: false
         type: string
         default: "main"
+      auto_release_enabled:
+        description: >
+          "true" to promote automatically the moment a package's roster is
+          complete, with no founder "approved" comment - the release-approval
+          issue is still opened for audit visibility, but check-and-open
+          closes it itself immediately after a successful promotion instead
+          of waiting for a comment event. Defaults to "false" (the original,
+          founder-approval-required behavior via the separate `promote` job
+          below, which stays exactly as-is and remains the retry path if an
+          auto-promotion attempt fails checks or errors). Mirrors
+          merge-gate.yml's own auto_merge_enabled opt-in pattern - same
+          per-project, explicit, fail-closed-by-default convention. Added
+          2026-08-08 at the founder's explicit, twice-confirmed request for
+          vocanova-platform-sandbox specifically - see that repo's own
+          AGENTS.md for the authorization record.
+        required: false
+        type: string
+        default: "false"
     secrets:
       KARSIFT_BOT_APP_ID:
         description: >
@@ -120,6 +138,8 @@ jobs:
     permissions:
       issues: write
       contents: read
+    outputs:
+      release_issue_number: ${{ steps.open-issue.outputs.issue_number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -143,6 +163,7 @@ jobs:
           echo "all_closed=$all_closed" >> "$GITHUB_OUTPUT"
 
       - name: Open the release-approval issue, if complete and not already requested
+        id: open-issue
         if: steps.completion.outputs.all_closed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -152,10 +173,11 @@ jobs:
           package_path="${{ needs.identify.outputs.package_path }}"
           title="Release: $change_id"
 
-          existing=$(gh issue list --state open --search "in:title \"$title\"" --json title -q \
-            "[.[] | select(.title == \"$title\")] | length")
-          if [ "$existing" != "0" ]; then
-            echo "A '$title' issue is already open - not opening a second one."
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number,title -q \
+            "[.[] | select(.title == \"$title\")] | .[0].number")
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            echo "A '$title' issue (#$existing) is already open - not opening a second one."
+            echo "issue_number=$existing" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -170,7 +192,12 @@ jobs:
             --description "System-generated release-approval gate - not a planning request" \
             --force
 
-          gh issue create \
+          approval_sentence="requires exactly one human decision - reply \`approved\` (as the configured founder identity) on this issue to open and merge that promotion pull request."
+          if [ "${{ inputs.auto_release_enabled }}" = "true" ]; then
+            approval_sentence="promotes automatically now that this package's roster is complete (auto_release_enabled) - no founder comment needed. This issue exists for audit visibility and closes itself once promotion succeeds."
+          fi
+
+          issue_url=$(gh issue create \
             --title "$title" \
             --label "karsift:release" \
             --body "$(cat <<EOF
@@ -179,14 +206,129 @@ jobs:
           $roster_summary
 
           This package is complete. Promoting \`${{ inputs.integration_branch }}\` to
-          \`${{ inputs.production_branch }}\` requires exactly one human decision -
-          reply \`approved\` (as the configured founder identity) on this issue to
-          open and merge that promotion pull request.
+          \`${{ inputs.production_branch }}\` $approval_sentence
 
           **Deploy is out of scope here.** This only promotes the branch; any hosted
-          deployment is a separate, not-yet-built step.
+          deployment is a separate step.
+          EOF
+          )")
+          echo "issue_number=$(basename "$issue_url")" >> "$GITHUB_OUTPUT"
+
+  # Only runs when the calling project opted into auto_release_enabled.
+  # Duplicates promote's own promotion-PR/wait-for-checks/merge steps
+  # rather than sharing them, because this job runs in the SAME workflow
+  # run as check-and-open (it already knows the issue number check-and-open
+  # just created/found, with no need to wait for a second issue_comment
+  # event) - promote's own job stays untouched as the founder-approval path
+  # for any calling project that hasn't opted in, and as this job's own
+  # manual retry path if an auto-promotion attempt below fails checks or
+  # errors outright (a human can still comment `approved` afterward).
+  auto-promote:
+    needs: [identify, check-and-open]
+    if: inputs.auto_release_enabled == 'true' && needs.check-and-open.outputs.release_issue_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mint App installation token for promotion
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      # See promote's own "Open or reuse the promotion PR" step for the
+      # "No commits between" race explanation - identical reasoning here.
+      - name: Open or reuse the promotion PR
+        id: promotion-pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_ISSUE_NUMBER: ${{ needs.check-and-open.outputs.release_issue_number }}
+        run: |
+          set -euo pipefail
+          promotion_body="$(cat <<EOF
+          Auto-promoted (auto_release_enabled) once issue #$RELEASE_ISSUE_NUMBER's package roster completed - no founder approval comment required for this project.
+
+          Risk classification: R4
+
+          This PR promotes the already-reviewed integration branch to the production branch. It does not deploy production infrastructure itself, but it remains fail-closed: every PR check must pass before this workflow merges it.
           EOF
           )"
+          existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" --state open --json number -q '.[0].number' || true)
+          if [ -z "$existing" ] || [ "$existing" = "null" ]; then
+            create_output=$(gh pr create \
+              --base "${{ inputs.production_branch }}" \
+              --head "${{ inputs.integration_branch }}" \
+              --title "Release: promote ${{ inputs.integration_branch }} to ${{ inputs.production_branch }}" \
+              --body "$promotion_body" 2>&1) \
+              || {
+                if echo "$create_output" | grep -qi "No commits between"; then
+                  gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrently-approved release most likely already brought this package's changes in. No new promotion PR was needed."
+                  echo "pr_number=" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "$create_output" >&2
+                exit 1
+              }
+            existing=$(echo "$create_output" | grep -oP '\d+$')
+          else
+            gh pr edit "$existing" --body "$promotion_body"
+          fi
+          echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for every promotion PR check
+        id: promotion-checks
+        if: steps.promotion-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.promotion-pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          previous_count=0
+          stable_count=0
+          while true; do
+            check_count=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup | length')
+            if [ "$check_count" -gt 0 ] && [ "$check_count" -eq "$previous_count" ]; then
+              stable_count=$((stable_count + 1))
+            else
+              stable_count=0
+            fi
+            if [ "$stable_count" -ge 2 ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Promotion PR #$PR_NUMBER checks did not register and stabilize within 5 minutes - refusing to merge." >&2
+              exit 1
+            fi
+            previous_count=$check_count
+            sleep 10
+          done
+          gh pr checks "$PR_NUMBER" --watch --fail-fast --interval 10
+          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+          checks_ok=$(gh pr checks "$PR_NUMBER" --json bucket -q \
+            'map(.bucket) | all(. == "pass" or . == "skipping")')
+          if [ "$checks_ok" != "true" ]; then
+            echo "Promotion PR #$PR_NUMBER is not fully green after watch completed - refusing to merge." >&2
+            exit 1
+          fi
+          echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Merge checked promotion PR and close release issue
+        if: steps.promotion-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.promotion-pr.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.promotion-checks.outputs.head_sha }}
+          RELEASE_ISSUE_NUMBER: ${{ needs.check-and-open.outputs.release_issue_number }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
+          gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Auto-promoted via PR #$PR_NUMBER (auto_release_enabled - no founder comment required)."
 
   # Fires on the human "approved" comment. Same approval-signal pattern as
   # merge-gate.yml's approve-and-merge - see that step for the injection-
