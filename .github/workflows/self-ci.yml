@@ -1,0 +1,57 @@
+name: self-ci
+
+# Lints this repository's OWN files - the reusable workflows/scripts calling
+# projects (vocanova-platform-sandbox and any future one) `uses:` directly.
+# Nothing here runs against a calling project; that's ci.yml's job. This repo
+# had no self-validation of its own before 2026-08-08 - a bug in a workflow
+# YAML file, a shell script, or a change-package YAML schema could only be
+# caught by a calling project's real run failing, not by anything in this
+# repo's own PRs. Deliberately narrow: actionlint (workflow YAML + embedded
+# shell), shellcheck (standalone scripts under config/), and a plain YAML
+# parse pass - not a full test suite, since this repo has no fixture caller
+# to exercise the actual reusable-workflow logic against yet.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -fsS https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+
+      - name: Run actionlint
+        run: ./actionlint -color
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck on config/*.sh
+        run: shellcheck config/*.sh
+
+  yaml-parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse every YAML file
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" "$f" || {
+              echo "::error file=$f::invalid YAML"
+              fail=1
+            }
+          done < <(find . \( -name "*.yml" -o -name "*.yaml" \) -print0)
+          exit "$fail"
