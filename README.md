@@ -143,6 +143,25 @@ nowhere until a human happened to notice.
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet (with CI still green) are all no-ops -
 this only ever acts on an explicit `FAIL` or a CI failure.
 
+## Ordered autonomous task execution
+
+Adoption starts the first task automatically. The adopted roster records an explicit
+`depends_on` edge from every later task to its predecessor, and `auto-advance.yml` releases the
+next task only after the preceding task's implementation PR merges and its tracking issue closes.
+Implementer jobs are serialized per change package.
+
+`implement.yml` enforces the same ordering independently, including for direct
+`workflow_dispatch` calls: the dispatched task and issue must match the adopted roster, every
+dependency issue must be closed, the dependency's bot PR must be merged, and that merge must be an
+ancestor of the integration branch checked out for the new task. This makes a manual or duplicated
+dispatch fail before a branch or PR is created instead of allowing dependent tasks to race.
+
+Remediation attempts fetch and rebase onto the current integration branch before the implementer
+runs. If upstream changes make the old branch conflict, the workflow preserves the old revision as
+a remote reference and restarts the retry from the current integration tip, with that fact included
+in the implementer prompt. Stale sibling-task state therefore cannot silently consume the final
+attempt.
+
 ## Drafting and issue-creation are two separate steps
 
 `plan.yml` only ever drafts a package and opens a PR for it - it does not open any tracking issues.
@@ -172,7 +191,8 @@ is done. Exactly one human approval per completed package, never per task and ne
 batch count.
 
 A package's task roster is fixed once, at adoption time: `adopt.yml` writes
-`<package_path>/.karsift/tasks.json` (`[{"task_id": ..., "issue": <number>}, ...]`) once it opens the
+`<package_path>/.karsift/tasks.json`
+(`[{"task_id": ..., "issue": <number>, "depends_on": [...]}, ...]`) once it opens the
 per-task issues. `release.yml` never re-parses a project's own `tasks.md` prose to determine
 completion - that was tried for issue-opening itself and broke against a real house-style mismatch
 (see `adopt.yml`'s task-parser comments, carried over from where this logic used to live in

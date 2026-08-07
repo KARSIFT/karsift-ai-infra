@@ -15,8 +15,8 @@ name: pipeline
 # clarifying question back on the issue itself if there isn't enough to go on
 # yet, but a bare issue never becomes implementation authority on its own -
 # adoption is still the one required human decision point. Once a package is
-# adopted, `implement` (dispatched per task, same as before) carries on from
-# there.
+# adopted, `adopt.yml` starts the root task automatically and `auto-advance.yml`
+# releases each later task only after its predecessor merges.
 #
 # Copy this file into a project repo and fill in:
 #   - founder_username below (whose "approved" comment is a valid merge decision)
@@ -141,12 +141,10 @@ jobs:
       integration_branch: "develop"   # match the value used for implement, above
     secrets: inherit
 
-  # The other half of plan.yml's split: opens the real per-task tracking
-  # issues (and, if this package traces back to an originating issue, closes
-  # the loop on it) only once a "plan/"-branch PR actually merges - i.e. only
-  # once a human has adopted the draft. See adopt.yml's header comment for
-  # why this is a separate step from drafting rather than happening at PR-open
-  # time.
+  # The other half of plan.yml's split: opens the ordered per-task tracking
+  # issues and immediately starts only the root task once a "plan/"-branch PR
+  # merges. Later tasks are started by auto-advance after their predecessor
+  # merges. See adopt.yml for the dependency and direct-dispatch guards.
   adopt:
     if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'plan/')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/adopt.yml@main
