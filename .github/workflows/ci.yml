@@ -3,6 +3,12 @@ name: ci (reusable)
 # Generic application-level checks only. vocanova-platform's own
 # governance-policy.yml / repository-governance.yml workflows already run the
 # governance/risk-classification checks in-repo - this does not duplicate them.
+#
+# The actual check logic lives in karsift-ai-infra/config/run-app-checks.sh,
+# not inline here - implement.yml's pre-push validation step runs the exact
+# same script before the implementer's work is ever pushed, so a pre-push
+# pass is a real predictor of this job passing rather than a hand-maintained
+# approximation that can silently drift from what this job actually checks.
 
 on:
   workflow_call: {}
@@ -13,31 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout karsift-ai-infra
+        uses: actions/checkout@v4
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
+
       - name: Detect and run pnpm checks
         shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ ! -f package.json ] || [ ! -f pnpm-lock.yaml ]; then
-            echo "no pnpm workspace yet - nothing this generic CI step knows how to run"
-            exit 0
-          fi
-
-          corepack enable
-          pnpm install --frozen-lockfile
-
-          run_script_if_present() {
-            local script="$1"
-            if pnpm run 2>/dev/null | grep -qE "^\s+$script$"; then
-              echo "== pnpm run $script =="
-              pnpm run "$script"
-            else
-              echo "== no '$script' script - skipping =="
-            fi
-          }
-
-          run_script_if_present format:check
-          run_script_if_present lint
-          run_script_if_present typecheck
-          run_script_if_present test
-          run_script_if_present build
+        run: bash karsift-ai-infra/config/run-app-checks.sh

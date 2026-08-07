@@ -766,6 +766,10 @@ jobs:
           # Removing the directory before staging is more robust than a
           # pathspec exclusion on git add - it can't regress if someone later
           # adds another `git add` call downstream.
+          #
+          # The checks script is copied out first so "Pre-push validation"
+          # below can still run it after this directory is gone.
+          cp karsift-ai-infra/config/run-app-checks.sh /tmp/run-app-checks.sh
           rm -rf karsift-ai-infra
 
           git add -A
@@ -776,6 +780,89 @@ jobs:
             git commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} (attempt ${{ inputs.attempt }})"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # Best-effort, not a gate: this never blocks the push below (both
+      # steps below are continue-on-error / unconditional on outcome) and
+      # the real gate remains ci.yml running post-push plus remediate.yml's
+      # existing 2-attempt-then-escalate contract. Point is to catch the
+      # common, cheap-to-fix case (formatting, an obvious lint/type error,
+      # a broken test) before spending a full CI round-trip and, on
+      # failure, a whole extra remediate.yml attempt to learn about it -
+      # exactly the gap the VOC-046-T03 live run exposed (attempt 1 failed
+      # CI purely on stale/format-shaped issues a local check would have
+      # caught immediately). Uses the exact same script ci.yml itself
+      # runs (config/run-app-checks.sh) so a pass here is a real predictor
+      # of ci.yml passing, not a hand-maintained approximation of it.
+      - name: Pre-push validation
+        id: prepush
+        if: steps.commit.outputs.has_changes == 'true'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if bash /tmp/run-app-checks.sh > /tmp/prepush-checks.log 2>&1; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat /tmp/prepush-checks.log
+
+      # One bounded self-correction round, same model/CLI as the base
+      # implementer run, operating on the same on-disk working tree (not a
+      # fresh checkout) so it can see and fix the actual failing files.
+      # Deliberately not a loop to convergence - a single round catches the
+      # common case (the model left a lint/format/obvious-typecheck issue)
+      # without risking an implementer stuck re-fixing its own regressions
+      # indefinitely inside one job. If this round doesn't fully fix it,
+      # the pushed PR still goes through review/CI/remediate.yml exactly
+      # as before - this step only ever narrows what reaches that point.
+      - name: Self-correct failed pre-push validation
+        id: selfcorrect
+        if: steps.prepush.outputs.passed == 'false'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -uo pipefail
+          MODEL="${{ steps.model.outputs.model }}"
+          MODEL="${MODEL#cursor/}"
+          {
+            echo "Your previous changes on this branch failed this project's own CI checks - the same format/lint/typecheck/test/build commands GitHub Actions will run on this exact diff. Fix every failure below without changing scope beyond what's needed to pass. Do not revert or discard unrelated work already committed on this branch."
+            echo
+            echo "## Failing check output"
+            echo '```'
+            cat /tmp/prepush-checks.log
+            echo '```'
+          } > /tmp/selfcorrect-prompt.txt
+          agent -p --trust --force --model "$MODEL" --output-format json \
+            < /tmp/selfcorrect-prompt.txt \
+            > /tmp/cursor-selfcorrect-response.json 2> /tmp/cursor-selfcorrect-stderr.log
+          exit_code=$?
+          jq -r '.result // "(no result field)"' /tmp/cursor-selfcorrect-response.json 2>/dev/null || true
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/cursor-selfcorrect-stderr.log >&2
+          fi
+          exit "$exit_code"
+
+      - name: Re-commit self-corrected work
+        if: steps.selfcorrect.outcome == 'success'
+        run: |
+          set -euo pipefail
+          rm -rf karsift-ai-infra
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Self-correction produced no additional changes."
+          else
+            git commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} (attempt ${{ inputs.attempt }}, pre-push self-correction)"
+          fi
+
+      # Diagnostic only (continue-on-error, output unused downstream) - lets
+      # the run's logs show whether self-correction actually worked without
+      # gating anything further on it.
+      - name: Re-run pre-push validation after self-correction
+        if: steps.selfcorrect.outcome == 'success'
+        continue-on-error: true
+        run: bash /tmp/run-app-checks.sh
 
       # A GitHub Actions job cannot resume mid-job on rerun - a failed job
       # reruns from step 1 on a brand-new runner, and everything on the old
