@@ -1010,6 +1010,40 @@ jobs:
       # check, a push-only failure (the `workflows` permission gap that hit
       # VOC-031-T07/T07a repeatedly) would satisfy neither existing
       # condition and silently skip the escalation comment on attempt 2.
+      # Attempt-1 counterpart to "Escalate on final failed attempt" below,
+      # for exactly the case that condition's `inputs.attempt >= '2'` guard
+      # deliberately excludes: the implementer itself ran successfully but
+      # chose not to change anything (has_changes == 'false') - not a crash,
+      # a deliberate decision (e.g. a blocked precondition it explained in
+      # its own response). Before this step existed, that outcome left the
+      # job reporting a bare `success` with zero trace anywhere except this
+      # run's own logs - neither "Escalate on final failed attempt" nor
+      # "Fail job if implementer step failed" fires for it on attempt 1
+      # (outcome IS 'success', so both conditions are false), so the task
+      # issue just sat open with no visible explanation and no automatic
+      # retry trigger. Found live on VOC-049-T01 (vocanova-platform-sandbox,
+      # see KARSIFT/karsift-ai-infra#15): the implementer correctly refused
+      # to promote against stale evidence, but nothing said so anywhere a
+      # human would see without digging through Actions logs - required a
+      # manual close with a written justification to unblock. This doesn't
+      # retry or resolve anything automatically (that's still #15's own
+      # open question) - it just makes "nothing happened, and here's why"
+      # observable on the issue itself instead of silent.
+      - name: Comment implementer's own explanation when no changes were made (attempt 1)
+        if: steps.implementer.outputs.outcome == 'success' && steps.commit.outputs.has_changes == 'false' && inputs.attempt == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          response=$(jq -r '.result // "(no result field)"' /tmp/cursor-response.json 2>/dev/null || echo "(no parseable response)")
+          gh issue comment ${{ inputs.issue_number }} --body "$(cat <<EOF
+          The implementer ran successfully on attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`, but made no changes - no PR was opened. This is not a failure and the job did not stop; it may retry on attempt 2 if this task is dispatched again, or a human may need to look at why below before that happens.
+
+          Implementer's own explanation:
+
+          $response
+          EOF
+          )"
+
       - name: Escalate on final failed attempt
         if: (steps.implementer.outputs.outcome != 'success' || steps.commit.outputs.has_changes == 'false' || steps.push.outcome == 'failure') && inputs.attempt >= '2'
         env:
