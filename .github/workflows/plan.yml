@@ -137,7 +137,12 @@ jobs:
         id: has-app
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Mint App installation token
         id: app-token
@@ -491,12 +496,12 @@ jobs:
             fi
 
             yaml_error=""
-            for f in $(find "$package_path" -type f \( -name '*.yaml' -o -name '*.yml' \) 2>/dev/null); do
+            while IFS= read -r -d '' f; do
               err=$(python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$f" 2>&1) || {
                 yaml_error="$f: $err"
                 break
               }
-            done
+            done < <(find "$package_path" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
 
             if [ -z "$yaml_error" ]; then
               exit 0
