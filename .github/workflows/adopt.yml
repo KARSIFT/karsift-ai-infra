@@ -66,7 +66,7 @@ jobs:
     permissions:
       contents: write
       issues: write
-      pull-requests: read
+      pull-requests: write
     outputs:
       integration_branch: ${{ steps.target.outputs.branch }}
       package_path: ${{ steps.locate.outputs.package_path }}
@@ -320,13 +320,28 @@ jobs:
       # release.yml's fixed roster of record - see plan.yml's former version
       # of this same step for the full rationale (a project's own tasks.md
       # prose is not something release.yml re-parses to determine
-      # completion). Committed directly to the integration branch, not
-      # through another PR - this is bookkeeping about issues that already
-      # exist, not a content change needing its own review cycle.
-      - name: Commit task roster
+      # completion).
+      #
+      # PR-based, not a direct push - this used to push straight to the
+      # integration branch (bookkeeping about issues that already exist,
+      # the reasoning went, not a content change needing its own review
+      # cycle). That broke the moment a calling project added branch
+      # protection requiring a PR (vocanova-platform-sandbox's
+      # require-pr-and-checks ruleset): the push was never actually
+      # authenticating as the App despite minting a token (see
+      # KARSIFT/karsift-ai-infra#13's own fix commit, since superseded by
+      # this one), and the project-side fix at the time was a broad,
+      # unconditional ruleset bypass for the App's identity - a bigger
+      # blast radius than this one narrow step actually needed. Opening a
+      # real PR (same pattern release.yml already uses for its own
+      # promotion PR) means this step needs no bypass authority at all -
+      # it goes through the same required-checks gate as any other change,
+      # and a calling project's branch protection no longer needs a
+      # special case for this identity.
+      - name: Commit task roster to a branch
+        id: commit
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           package_path="${{ steps.locate.outputs.package_path }}"
@@ -369,37 +384,110 @@ jobs:
               yaml.safe_dump(data, f, sort_keys=False, default_flow_style=False)
           PYEOF
 
+          change_id="${{ steps.issues.outputs.change_id }}"
+          branch="karsift/roster-$(echo "$change_id" | tr '[:upper:]' '[:lower:]')"
+
           git config user.name "karsift-ai-infra-bot"
           git config user.email "actions@users.noreply.github.com"
+          git checkout -b "$branch"
           git add "$package_path/.karsift/tasks.json" "$package_path/change.yaml"
           git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster and authority_issue"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-          # actions/checkout persists its own GITHUB_TOKEN credential as a
-          # global `http.https://github.com/.extraheader` config value, which
-          # takes precedence over whatever credential is embedded in the
-          # remote URL - `git remote set-url` alone is not enough, the push
-          # silently keeps authenticating as the plain GITHUB_TOKEN
-          # (github-actions[bot]) even after the URL is changed. Same fix as
-          # implement.yml's "Push branch" step (see that step's own comment
-          # for the original 2026-07-28 live incident this pattern fixes) -
-          # needed here too once a calling project adds branch protection
-          # requiring a PR: a plain GITHUB_TOKEN push from github-actions[bot]
-          # doesn't carry this App's bypass authority, so it gets rejected
-          # exactly like any other direct push, even though this step's own
-          # error message used to blame "branch protection allows this bot
-          # identity" as if the identity itself were the problem - it was
-          # never using the App identity to begin with. Found live adopting
-          # VOC-049 (vocanova-platform-sandbox) once that repo's own
-          # require-pr-and-checks ruleset went active - see
-          # KARSIFT/karsift-ai-infra#12 for the sibling task-title bug this
-          # same incident also surfaced.
+      # Same extraheader-precedence fix implement.yml's "Push branch" step
+      # documents (2026-07-28 incident) - actions/checkout's own persisted
+      # GITHUB_TOKEN credential takes precedence over whatever's embedded in
+      # the remote URL unless explicitly unset first.
+      - name: Push roster branch
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
           if [ -n "$APP_TOKEN" ]; then
             git config --local --unset-all http.https://github.com/.extraheader || true
             git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
           fi
+          git push -u origin "${{ steps.commit.outputs.branch }}"
 
-          git push origin HEAD:${{ steps.target.outputs.branch }} || \
-            (echo "Could not push directly to ${{ steps.target.outputs.branch }} - check KARSIFT_BOT_APP_ID/KARSIFT_BOT_PRIVATE_KEY are set (a plain GITHUB_TOKEN push cannot bypass branch protection), or push manually." >&2; exit 1)
+      # Same "No commits between" race release.yml's own promotion-PR step
+      # documents - harmless here too (nothing left to record if a
+      # concurrent roster-commit already covered this exact content), just
+      # not expected in practice since each package's branch name is unique.
+      - name: Open roster PR
+        id: roster-pr
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          pr_url=$(gh pr create \
+            --base "${{ steps.target.outputs.branch }}" \
+            --head "${{ steps.commit.outputs.branch }}" \
+            --title "${{ steps.issues.outputs.change_id }}: record task-issue roster and authority_issue" \
+            --body "$(cat <<EOF
+          Deterministic bookkeeping, not a content change - records the task
+          issue roster this adoption run just opened (\`.karsift/tasks.json\`)
+          and the resulting \`implementation.authority_issue\`/
+          \`repository_adoption_status\`/\`adoption_pr\`/\`adoption_evidence\`
+          fields in \`change.yaml\`. No application, workflow, or governance
+          content is authored by this PR.
+
+          Risk classification: R1
+          EOF
+          )")
+          pr_number=$(basename "$pr_url")
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      # Same registration-then-watch pattern release.yml's own "Wait for
+      # every promotion PR check" step uses - see that step's own comment
+      # for why the stabilization wait is needed before `gh pr checks
+      # --watch` (a fresh PR's checks haven't registered yet, and watching
+      # too early sees zero checks and returns immediately as if nothing
+      # was required).
+      - name: Wait for roster PR checks
+        id: roster-checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          previous_count=0
+          stable_count=0
+          while true; do
+            check_count=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup | length')
+            if [ "$check_count" -gt 0 ] && [ "$check_count" -eq "$previous_count" ]; then
+              stable_count=$((stable_count + 1))
+            else
+              stable_count=0
+            fi
+            if [ "$stable_count" -ge 2 ]; then
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Roster PR #$PR_NUMBER checks did not register and stabilize within 5 minutes - refusing to merge." >&2
+              exit 1
+            fi
+            previous_count=$check_count
+            sleep 10
+          done
+          gh pr checks "$PR_NUMBER" --watch --fail-fast --interval 10
+          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+          checks_ok=$(gh pr checks "$PR_NUMBER" --json bucket -q \
+            'map(.bucket) | all(. == "pass" or . == "skipping")')
+          if [ "$checks_ok" != "true" ]; then
+            echo "Roster PR #$PR_NUMBER is not fully green after watch completed - refusing to merge." >&2
+            exit 1
+          fi
+          echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Merge checked roster PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
+          CHECKED_HEAD_SHA: ${{ steps.roster-checks.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
 
       - name: Close the loop back to the originating issue, if any
         if: steps.verify.outputs.source_issue != ''
