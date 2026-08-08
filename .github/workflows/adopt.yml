@@ -211,17 +211,31 @@ jobs:
           # T07 -> T07a/T07b) is still recognized the same way
           # auto-advance.yml's own pattern needs to be - see that file's own
           # note for the live gap this caused.
-          pattern = re.compile(rf'{re.escape(change_id)}-T\d+[a-z]?')
+          #
+          # Anchored to an actual markdown HEADING line (`#+` at the start,
+          # then the task ID immediately after), not "any line containing
+          # the task ID substring" - the previous version matched a task's
+          # own ID wherever it first appeared in the file, including a
+          # forward-reference to it in an EARLIER task's own prose (e.g.
+          # T00's body saying "...as authoritative for what VOC-049-T01 (if
+          # needed at all) actually promotes..."). Since dedup keeps only
+          # the first match per ID, that prose mention - not T01's real
+          # `## VOC-049-T01 — ...` heading further down - won, producing a
+          # garbled title. Found live adopting VOC-049
+          # (vocanova-platform-sandbox#379). Anchoring to the heading marker
+          # means a same-package cross-reference in body prose can never
+          # win over the task's own heading, however far below it appears.
+          pattern = re.compile(rf'^#+\s+({re.escape(change_id)}-T\d+[a-z]?)\b')
           seen = set()
           with open(tasks_file) as f:
               for line in f:
-                  m = pattern.search(line)
-                  if not m or m.group(0) in seen:
+                  m = pattern.match(line)
+                  if not m or m.group(1) in seen:
                       continue
-                  seen.add(m.group(0))
+                  seen.add(m.group(1))
                   title = line[m.end():].strip()
-                  title = re.sub(r'^[\s\-–—:.]+', '', title) or m.group(0)
-                  print(f"{m.group(0)}\t{title[:100]}")
+                  title = re.sub(r'^[\s\-–—:.]+', '', title) or m.group(1)
+                  print(f"{m.group(1)}\t{title[:100]}")
           PYEOF
 
           # Labeled at creation so plan.yml's issue-triggered planning never
@@ -241,10 +255,29 @@ jobs:
           while IFS=$'\t' read -r task_id title; do
             [ -z "$task_id" ] && continue
             count=$((count + 1))
-            issue_url=$(gh issue create \
-              --title "$change_id: $task_id - $title" \
-              --label "karsift:task" \
-              --body "$(cat <<EOF
+            expected_title="$change_id: $task_id - $title"
+
+            # Idempotency guard: without this, a retried run (e.g. `gh run
+            # rerun` after an earlier failure in a LATER step, like the
+            # "Commit task roster" push) re-executes this whole job from
+            # the top, including issue creation, with nothing to stop it
+            # opening a second (or third) issue for the same task - `gh
+            # issue create` has no built-in dedup. Same pattern
+            # release.yml's own check-and-open job already uses for its
+            # "Release: X" issue. Found live adopting VOC-049
+            # (vocanova-platform-sandbox) - two retries produced four
+            # orphaned duplicate task issues (#380-383) alongside the two
+            # real, roster-recognized ones (#378/#379).
+            existing=$(gh issue list --state open --search "in:title \"$expected_title\"" --json number,title -q \
+              "[.[] | select(.title == \"$expected_title\")] | .[0].number")
+            if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+              echo "Issue for $task_id already exists (#$existing) - reusing it, not creating a duplicate."
+              issue_number="$existing"
+            else
+              issue_url=$(gh issue create \
+                --title "$expected_title" \
+                --label "karsift:task" \
+                --body "$(cat <<EOF
           Task \`$task_id\` from adopted package \`$change_id\` (\`$package_path\`).
 
           Dispatch \`implement.yml\` with:
@@ -255,7 +288,8 @@ jobs:
           - issue_number: this issue's number
           EOF
           )")
-            issue_number=$(basename "$issue_url")
+              issue_number=$(basename "$issue_url")
+            fi
             if [ "$count" -eq 1 ]; then
               first_task_id="$task_id"
               first_issue_number="$issue_number"
