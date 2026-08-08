@@ -65,6 +65,23 @@ reviewable in one pull request by the existing implementer/reviewer loop - small
 ordered, each with clear requirement/acceptance-criteria references, matching
 whatever task-list convention the template and recent packages already use.
 
+**If the request is to promote/sync the integration branch's current state to the
+production branch** (not a request for new application/workflow content - the work
+is already merged into the integration branch, this package's only job is to get it
+onto the production branch through a governed path): do not draft a task whose job
+is to snapshot the current commit gap as evidence and land that snapshot as a commit
+on the integration branch, gated on a later task re-checking for drift against it.
+That snapshot commit is itself a new commit to the integration branch the moment it
+merges, which invalidates itself before the later task can ever run - a real,
+reproducible failure mode (see KARSIFT/karsift-ai-infra#15). If a re-verification
+task is genuinely needed, its own instructions must say explicitly that a commit
+under this package's own directory does not count as drift for that check - it's
+the task's own bookkeeping, not new unreviewed scope. Prefer, if the calling
+project's release mechanism supports it, a package with no such snapshot-then-check
+task at all: one task that confirms the promotion's preconditions and whose own
+issue closing is what triggers promotion (see the project's own release
+documentation for whether closing a task issue does this).
+
 Propose a risk classification using the project's own scheme if it has one. This is
 a **draft proposal for a human to review at adoption time, never a determination**.
 The project's own deterministic, path-based risk floor (if it has one, e.g. a
