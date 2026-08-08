@@ -28,8 +28,41 @@ jobs:
           set -euo pipefail
           bash <(curl -fsS https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
+      # -ignore entries are specific, narrow known false positives, verified
+      # against the real thing before being silenced here - not a blanket
+      # noise-suppression habit. Re-verify each one still applies before
+      # adding more, and remove one the moment it stops being a false
+      # positive (e.g. actionlint's bundled popular-actions database catches
+      # up, or the underlying repo condition changes).
+      #
+      # 2026-08-08: actionlint ships a bundled, static snapshot of popular
+      # actions' input schemas rather than querying GitHub live - that
+      # snapshot is stale for openai/codex-action@v1 specifically. Verified
+      # directly against the live action.yml at that exact tag (`gh api
+      # repos/openai/codex-action/contents/action.yml?ref=v1`): both
+      # `permission-profile` and `allow-bot-users` genuinely are valid inputs
+      # on the real @v1 today, contrary to actionlint's complaint.
+      #
+      # 2026-08-08: implement.yml's disabled openai/codex-action escalation
+      # step uses `if: false` deliberately (kept, not deleted, for a one-line
+      # revert if OpenAI quota is ever restored - see that step's own header
+      # comment) - not stale prose actionlint should suggest removing.
+      #
+      # The last -ignore is a deliberate SEVERITY filter, not a false-positive
+      # suppression: shellcheck's own "info"/"style" tier findings (cosmetic
+      # suggestions like "consider grouping redirects") are real but
+      # low-value - failing every PR on them trains people to ignore this
+      # check. "warning"/"error" tier shellcheck findings still fail the
+      # build; the 2026-08-08 first real run found one of each (SC2070
+      # error, SC2044 warning) and both were fixed at the source, not
+      # ignored here - see those commits for what they were.
       - name: Run actionlint
-        run: ./actionlint -color
+        run: |
+          ./actionlint -color \
+            -ignore 'input "permission-profile" is not defined' \
+            -ignore 'input "allow-bot-users" is not defined' \
+            -ignore 'constant expression "false" in condition' \
+            -ignore 'shellcheck reported issue.*:(info|style):'
 
   shellcheck:
     runs-on: ubuntu-latest

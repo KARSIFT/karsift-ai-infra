@@ -705,7 +705,12 @@ jobs:
         if: steps.implementer.outputs.outcome == 'success'
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Minted BEFORE "Commit and push" (moved here 2026-07-28, VOC-031-T07a)
       # - not just for "Open or update PR" as this step's name used to imply.
