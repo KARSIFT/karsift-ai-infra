@@ -47,12 +47,22 @@ jobs:
       # step uses `if: false` deliberately (kept, not deleted, for a one-line
       # revert if OpenAI quota is ever restored - see that step's own header
       # comment) - not stale prose actionlint should suggest removing.
+      #
+      # The last -ignore is a deliberate SEVERITY filter, not a false-positive
+      # suppression: shellcheck's own "info"/"style" tier findings (cosmetic
+      # suggestions like "consider grouping redirects") are real but
+      # low-value - failing every PR on them trains people to ignore this
+      # check. "warning"/"error" tier shellcheck findings still fail the
+      # build; the 2026-08-08 first real run found one of each (SC2070
+      # error, SC2044 warning) and both were fixed at the source, not
+      # ignored here - see those commits for what they were.
       - name: Run actionlint
         run: |
           ./actionlint -color \
             -ignore 'input "permission-profile" is not defined' \
             -ignore 'input "allow-bot-users" is not defined' \
-            -ignore 'constant expression "false" in condition'
+            -ignore 'constant expression "false" in condition' \
+            -ignore 'shellcheck reported issue.*:(info|style):'
 
   shellcheck:
     runs-on: ubuntu-latest
