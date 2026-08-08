@@ -8,21 +8,11 @@ name: plan (reusable)
 # resolved from THIS repo's own config/roles.yml, same convention as
 # implement.yml/review.yml.
 #
-# TEMPORARY (2026-07-24): rewritten from Claude Code CLI to openai/codex-action
-# because the Anthropic Console org behind ANTHROPIC_API_KEY was disabled with
-# no fallback Claude access available - see config/roles.yml's header comment
-# for the full same-vendor-compromise rationale (planner has no independence
-# requirement the way implementer/reviewer do, so this swap is lower-stakes
-# than review.yml's, but it's still the same underlying provider outage).
-#
-# PILOT (2026-07-25): rewritten a second time, to a raw `opencode` CLI
-# invocation (opencode-go/qwen3.7-max - see config/roles.yml). Same reasoning
-# as implement.yml/review.yml's own OpenCode moves - see their header
-# comments for the CLI-specific details (no --permissions/--quiet flags,
-# agent-based permission config, OPENCODE_API_KEY vs OPENCODE_ZEN_API_KEY).
-# Planner uses OpenCode's built-in `build` agent (full read/write access,
-# same as implement.yml) since it needs to create real files, not the
-# restricted read-only `reviewer` agent review.yml defines.
+# Current state (as of 2026-07-31): runs via the Cursor CLI, same
+# consolidation move as implement.yml/review.yml. Full execution-mechanism
+# history (Claude Code -> openai/codex-action -> OpenCode -> Claude Code ->
+# Cursor, and why each move happened) lives in CHANGELOG.md's "plan.yml"
+# section, not here.
 #
 # The request can come from three places, mutually exclusive per run:
 #   - `request`: free text, written directly for this dispatch.

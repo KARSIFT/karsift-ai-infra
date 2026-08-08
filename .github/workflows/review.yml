@@ -12,67 +12,21 @@ name: review (reusable)
 # roles.yml - full run-time provider abstraction isn't built yet. Don't claim
 # more decoupling than exists.
 #
-# TEMPORARY (2026-07-24): rewritten from Claude Code CLI to openai/codex-action
-# because the Anthropic Console org behind ANTHROPIC_API_KEY was disabled with
-# no fallback Claude access available - see config/roles.yml's header comment
-# for the full same-vendor-compromise rationale and the explicit note to
-# revert this once Claude access is restored.
-#
-# PILOT (2026-07-25): rewritten a second time, reviewer-only, from
-# openai/codex-action to a raw `opencode` CLI invocation (OpenCode -
-# opencode.ai - a model-agnostic coding-agent client, not itself a vendor).
-# Founder's explicit reason: cost - an existing OpenCode Go subscription
-# ($10/month) unlocks a set of `opencode-go/`-prefixed models, letting the
-# reviewer role run on a coding-tuned model (opencode-go/kimi-k2.7-code)
-# without paying OpenAI's own per-token tiers. There is no official reusable
-# action for this the way openai/codex-action or anthropics/claude-code-action
-# exist - OpenCode's own `anomalyco/opencode/github@latest` Action is built
-# for interactive `/opencode` PR-comment mentions, not a workflow_call/
-# one-shot dispatch like this job, so it isn't used here.
-#
-# `opencode run` (the actual installed CLI, v1.18.5 as of this pilot) has NO
-# `--permissions` or `--quiet` flag - an earlier version of this same step
-# assumed both existed (from web-fetched docs that turned out unreliable -
-# see config/roles.yml's correction note) and every run hard-failed
-# immediately on the rejected `--permissions` flag, never even reaching a
-# model. Real read-only enforcement is agent-based: a `reviewer` agent is
-# defined in a generated `opencode.jsonc` (see "Configure opencode" step
-# below) with every permission key explicitly `allow` (read/grep/glob/list)
-# or `deny` (everything else - edit, bash, webfetch, websearch, task,
-# todowrite, external_directory, question, skill, lsp, doom_loop) - this is
-# what preserves the no-write, no-merge guarantee for this role, the
-# equivalent of codex-action's `:read-only` profile. `--format json` gives
-# structured nd-JSON events instead of the default formatted output (which
-# mixes in ANSI color codes and decorative tool-call trace lines even when
-# stdout isn't a TTY) - the "Extract verdict text" step below pulls out only
-# `type: "text"` events' `part.text`, the model's actual response.
-#
-# This pilot is reviewer-only by explicit founder instruction - implementer
-# and planner stay on openai/codex-action; do not extend this pattern to
-# those roles without a separate explicit decision.
-#
-# MOVED (2026-07-31): rewritten a third time, reviewer-only, from the raw
-# `opencode` CLI to the raw `cursor-agent` CLI (cursor.com - Cursor's own
-# headless agent CLI, not a wrapper action). Founder's explicit reason: the
-# OpenCode Go account behind OPENCODE_API_KEY looked exhausted/degraded
-# live - every model on the account (including this role's own
-# opencode-go/deepseek-v4-pro) either timed out or errored in a same-day
-# bounded probe on a different package's task (VOC-032-T10's live-evaluation
-# evidence), and the review job on VOC-032's own T09 PR (#231) was stuck for
-# ~30 minutes with zero verdict as a direct result - not a one-off flake.
-# Founder has a pre-existing Cursor Pro+ subscription ($60/month, includes a
-# monthly credit pool that covers CLI/API usage) - see cursor.com/dashboard
-# for the API key, `agent models` for the live account-specific model
-# catalog (don't trust a fetched pricing/model page without cross-checking
-# this - see config/roles.yml's own correction note for exactly this mistake
-# with a different vendor).
+# Current state (as of 2026-07-31): runs via a raw `cursor-agent` CLI
+# invocation (cursor.com - Cursor's own headless agent CLI, not a wrapper
+# action), reviewer-only - implementer and planner have their own separate
+# execution steps in their own files, moved to Cursor independently (see
+# their own files). Full execution-mechanism history (Claude Code ->
+# openai/codex-action -> OpenCode -> Cursor, and exactly why each move
+# happened - including the OpenCode-account incident that forced the last
+# one) lives in CHANGELOG.md's "review.yml" section, not here.
 #
 # Every claim below was checked against the real installed CLI
 # (`agent --version` reported 2026.07.23-e383d2b at migration time) in a
 # disposable sandbox, not assumed from fetched documentation - config/
-# roles.yml's own correction note and this file's own 2026-07-25 `opencode
-# run --permissions` history are exactly the failure mode this avoided
-# repeating:
+# roles.yml's own correction note and CHANGELOG.md's "review.yml" section
+# (the 2026-07-25 `opencode run --permissions` incident) document exactly
+# the failure mode this avoided repeating:
 #
 # - `--mode plan` is a first-class, documented CLI flag ("read-only/
 #   planning (analyze, propose plans, no edits)"), not something built out
@@ -91,8 +45,8 @@ name: review (reusable)
 #   never receive non-interactively - reproduced live (exit 1, "Workspace
 #   Trust Required... Pass --trust, --yolo, or -f if you trust this
 #   directory"). This is the same *class* of bug as OpenCode's
-#   unenumerated-permission-key hang documented earlier in this file's
-#   history (a CI job silently stuck on a prompt it can't answer) - `--trust`
+#   unenumerated-permission-key hang documented in CHANGELOG.md's "review.yml"
+#   section (a CI job silently stuck on a prompt it can't answer) - `--trust`
 #   is required every run for this reason. `--trust` only answers that one
 #   prompt; verified it grants no additional write permission on its own
 #   (still refuses file writes exactly as above) - `--mode plan` is what
