@@ -80,7 +80,7 @@ jobs:
       verdict: ${{ steps.status.outputs.verdict }}
       automatic_merge_allowed: ${{ steps.status.outputs.automatic_merge_allowed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Determine risk class, checks, and verification status
         id: status
@@ -231,7 +231,7 @@ jobs:
       checks: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       # COMMENT_BODY and COMMENT_AUTHOR go through env:, never interpolated
       # directly into the script via ${{ }} - a comment body is arbitrary
@@ -329,7 +329,7 @@ jobs:
       - name: Mint App installation token
         id: app-token
         if: steps.check.outcome == 'success' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
@@ -377,7 +377,7 @@ jobs:
       contents: write
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       # --delete-branch: same reasoning as approve-and-merge's Merge step
       # above - always a throwaway agent/plan-prefixed branch here, never
       # the integration branch.
@@ -402,7 +402,7 @@ jobs:
       - name: Mint App installation token
         id: app-token
         if: steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
