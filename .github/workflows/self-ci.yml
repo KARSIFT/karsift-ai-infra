@@ -28,8 +28,31 @@ jobs:
           set -euo pipefail
           bash <(curl -fsS https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
 
+      # -ignore entries are specific, narrow known false positives, verified
+      # against the real thing before being silenced here - not a blanket
+      # noise-suppression habit. Re-verify each one still applies before
+      # adding more, and remove one the moment it stops being a false
+      # positive (e.g. actionlint's bundled popular-actions database catches
+      # up, or the underlying repo condition changes).
+      #
+      # 2026-08-08: actionlint ships a bundled, static snapshot of popular
+      # actions' input schemas rather than querying GitHub live - that
+      # snapshot is stale for openai/codex-action@v1 specifically. Verified
+      # directly against the live action.yml at that exact tag (`gh api
+      # repos/openai/codex-action/contents/action.yml?ref=v1`): both
+      # `permission-profile` and `allow-bot-users` genuinely are valid inputs
+      # on the real @v1 today, contrary to actionlint's complaint.
+      #
+      # 2026-08-08: implement.yml's disabled openai/codex-action escalation
+      # step uses `if: false` deliberately (kept, not deleted, for a one-line
+      # revert if OpenAI quota is ever restored - see that step's own header
+      # comment) - not stale prose actionlint should suggest removing.
       - name: Run actionlint
-        run: ./actionlint -color
+        run: |
+          ./actionlint -color \
+            -ignore 'input "permission-profile" is not defined' \
+            -ignore 'input "allow-bot-users" is not defined' \
+            -ignore 'constant expression "false" in condition'
 
   shellcheck:
     runs-on: ubuntu-latest
