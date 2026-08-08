@@ -312,7 +312,12 @@ jobs:
         id: has-app
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # An app-minted token, not github.token: closing the issue below must
       # be attributed to an identity other than the default GITHUB_TOKEN, or
@@ -385,7 +390,12 @@ jobs:
         id: has-app
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Same app-token reasoning as approve-and-merge above: github.token
       # would close the issue but silently never trigger release.yml.

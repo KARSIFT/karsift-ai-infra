@@ -97,7 +97,12 @@ jobs:
         id: has-app
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: echo "configured=$([ -n \"$APP_ID\" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Mint App installation token
         id: app-token
