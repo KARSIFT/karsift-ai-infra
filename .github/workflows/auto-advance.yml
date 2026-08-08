@@ -60,7 +60,7 @@ jobs:
       task_id: ${{ steps.next.outputs.task_id }}
       issue_number: ${{ steps.next.outputs.issue_number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
 

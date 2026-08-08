@@ -129,13 +129,13 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
           fetch-depth: 0
 
       - name: Checkout karsift-ai-infra
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
@@ -571,7 +571,7 @@ jobs:
       - name: Run implementer (openai/codex-action escalation)
         id: implementer-openai
         if: false
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@b11346a6fa031e2e164ab4b7c7ea201afffd7d59
         continue-on-error: true
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -729,7 +729,7 @@ jobs:
       - name: Mint App installation token for push and PR creation
         id: app-token
         if: steps.implementer.outputs.outcome == 'success' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
@@ -892,7 +892,7 @@ jobs:
 
       - name: Upload recovery artifact
         if: steps.commit.outputs.has_changes == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: implement-${{ inputs.change_id }}-${{ inputs.task_id }}-attempt${{ inputs.attempt }}
           path: /tmp/implementer-work.bundle

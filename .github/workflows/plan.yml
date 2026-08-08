@@ -123,12 +123,12 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
 
       - name: Checkout karsift-ai-infra
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
@@ -147,7 +147,7 @@ jobs:
       - name: Mint App installation token
         id: app-token
         if: steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
