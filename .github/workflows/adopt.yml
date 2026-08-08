@@ -292,6 +292,7 @@ jobs:
       - name: Commit task roster
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           package_path="${{ steps.locate.outputs.package_path }}"
@@ -338,8 +339,33 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add "$package_path/.karsift/tasks.json" "$package_path/change.yaml"
           git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster and authority_issue"
+
+          # actions/checkout persists its own GITHUB_TOKEN credential as a
+          # global `http.https://github.com/.extraheader` config value, which
+          # takes precedence over whatever credential is embedded in the
+          # remote URL - `git remote set-url` alone is not enough, the push
+          # silently keeps authenticating as the plain GITHUB_TOKEN
+          # (github-actions[bot]) even after the URL is changed. Same fix as
+          # implement.yml's "Push branch" step (see that step's own comment
+          # for the original 2026-07-28 live incident this pattern fixes) -
+          # needed here too once a calling project adds branch protection
+          # requiring a PR: a plain GITHUB_TOKEN push from github-actions[bot]
+          # doesn't carry this App's bypass authority, so it gets rejected
+          # exactly like any other direct push, even though this step's own
+          # error message used to blame "branch protection allows this bot
+          # identity" as if the identity itself were the problem - it was
+          # never using the App identity to begin with. Found live adopting
+          # VOC-049 (vocanova-platform-sandbox) once that repo's own
+          # require-pr-and-checks ruleset went active - see
+          # KARSIFT/karsift-ai-infra#12 for the sibling task-title bug this
+          # same incident also surfaced.
+          if [ -n "$APP_TOKEN" ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
+            git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
+          fi
+
           git push origin HEAD:${{ steps.target.outputs.branch }} || \
-            (echo "Could not push directly to ${{ steps.target.outputs.branch }} - check branch protection allows this bot identity, or push manually." >&2; exit 1)
+            (echo "Could not push directly to ${{ steps.target.outputs.branch }} - check KARSIFT_BOT_APP_ID/KARSIFT_BOT_PRIVATE_KEY are set (a plain GITHUB_TOKEN push cannot bypass branch protection), or push manually." >&2; exit 1)
 
       - name: Close the loop back to the originating issue, if any
         if: steps.verify.outputs.source_issue != ''
