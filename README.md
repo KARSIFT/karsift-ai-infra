@@ -9,38 +9,28 @@ Vocanova-specific; only the project wiring was. Any KARSIFT project can call the
 
 Every AI step in this pipeline is a **role**, not a vendor commitment:
 
-| Role | What it does | Current occupant |
-|---|---|---|
-| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. | `opencode run --agent build` (OpenCode Go, `glm-5.2`) |
-| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. | `opencode run --agent build` (OpenCode Go, `kimi-k2.7-code`); escalation stays on `openai/codex-action` (`gpt-5.6-sol`) |
-| `reviewer` | Independent, read-only verification (a generated `opencode.jsonc` with an explicit-deny-by-default `reviewer` agent). Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. | `opencode run --agent reviewer` (OpenCode Go, `deepseek-v4-pro`) |
+| Role | What it does |
+|---|---|
+| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. |
+| `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. |
+| `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. |
 
-**The only file that names a specific model or vendor is `config/roles.yml`.** Swapping any role
-to a different model/provider means editing that one file plus the relevant workflow's execution
-step (`implement.yml`'s "Run implementer" step, `review.yml`'s/`plan.yml`'s "Run independent
-verification"/"Run planner" step). Nothing else in this repo, and nothing in a calling project's own
-workflow, should need to change.
+**This README deliberately never names which model or vendor currently fills any role** - that
+information changes often (this repo's git history includes moves across at least four different
+CLIs/vendors so far) and a hardcoded table here has gone stale every single time it changed. **The
+only file that names a specific model or vendor is `config/roles.yml`** - read that file directly for
+the current occupant of each role, why it's there, and the full history of what it replaced. Swapping
+any role to a different model/provider means editing that one file plus the relevant workflow's
+execution step (`implement.yml`'s "Run implementer" step, `review.yml`'s/`plan.yml`'s "Run
+independent verification"/"Run planner" step) - nothing else in this repo, and nothing in a calling
+project's own workflow, should need to change. `CHANGELOG.md` covers the parallel history of *which
+CLI/execution mechanism* each role's workflow step invokes, independent of which model sits behind it.
 
 **Reviewer and implementer are supposed to stay different vendors** - independent review that shares
-a vendor with the implementer isn't independent, it's self-review. **That principle was violated, on
-purpose and temporarily** (as of 2026-07-24): the Anthropic Console org this repo's Claude access ran
-under was disabled (a billing/account issue, not a karsift-ai-infra bug), with no fallback Claude
-access available (no subscription auth, no Bedrock/Vertex set up) at the time, so all three roles ran
-on `openai/codex-action` for a stretch.
-
-**As of 2026-07-25, all three roles run through OpenCode** (an OpenCode Go subscription) instead,
-each on a different underlying model: `implementer` on `kimi-k2.7-code` (Moonshot AI), `reviewer` on
-`deepseek-v4-pro` (DeepSeek), `planner` on `glm-5.2` (Alibaba/Qwen). This is genuine cross-*model*
-independence between implementer and reviewer (different labs, different checkpoints), but it is
-**not** cross-*vendor* independence the way the OpenAI-vs-Claude split used to be - both roles now go
-through the same `opencode` CLI and the same OpenCode Go billing/account. `implementer_escalation`
-(the last-retry fallback) deliberately stayed on `openai/codex-action` (`gpt-5.6-sol`) as the one
-genuinely separate infrastructure stack, reserved for the attempt that matters most. Don't treat a
-`PASS` verdict as a long-settled guarantee here - this whole configuration is freshly built and still
-being verified against real runs, not a finished state. See `config/roles.yml`'s and each workflow's
-own header comments for the full reasoning, the real OpenCode CLI details (no `--permissions`/
-`--quiet` flags, agent-based permission config, `OPENCODE_API_KEY` vs `OPENCODE_ZEN_API_KEY`), and a
-correction note about an earlier fabricated model/pricing table this pilot briefly relied on.
+a vendor with the implementer isn't independent, it's self-review. Check `config/roles.yml`'s actual
+current values before assuming that holds at any given moment; it has been temporarily violated more
+than once when a vendor outage or quota exhaustion left no better option, always documented there
+when it happens.
 
 ## What this is not
 
