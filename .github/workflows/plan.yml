@@ -214,6 +214,24 @@ jobs:
           # numeric counter needs, using nothing but git itself. The ref
           # otherwise carries no meaning (it just points at this run's base
           # commit) and is never read back - it exists purely as a claim.
+          #
+          # That CAS assumption itself breaks when two runs share the exact
+          # same base commit (the common case for two plan-from-issue runs
+          # dispatched seconds apart, before either has diverged): pushing
+          # HEAD:refs/karsift-ids/<id> a second time isn't creating a
+          # divergent ref, it's pushing the identical SHA to a ref that
+          # already points at that identical SHA - git treats that as
+          # "everything up-to-date" (exit 0, no rejection), not a collision,
+          # so the second run silently "wins" the same ID too. Found live,
+          # 2026-08-08: issues #391/#392 on vocanova-platform-sandbox, both
+          # allocated VOC-050 (karsift-ai-infra#20). Committing an
+          # empty, run-ID-tagged commit before claiming makes this run's
+          # HEAD genuinely unique even when two runs share the same base -
+          # a second run's push then really is a different SHA racing for
+          # the same ref name, which git actually rejects.
+          git config user.name "karsift-ai-infra-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit --allow-empty -m "claim package ID (run ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT})" --quiet
           candidate=$((highest + 1))
           claimed=""
           for _ in $(seq 1 50); do
@@ -230,6 +248,14 @@ jobs:
             exit 1
           fi
           echo "id=${claimed}" >> "$GITHUB_OUTPUT"
+
+          # The claim commit above must never become part of this run's own
+          # package branch/PR - it exists purely to make the pushed ref
+          # unique, and its message means nothing to a human reading this
+          # package's history. Drop it from the local branch now that the
+          # claim itself has already reached the remote ref; every later
+          # step in this job builds the real branch from a clean base.
+          git reset --hard HEAD~1 --quiet
 
       # Deterministic slug, not model output - same rationale as above. The
       # title source is whichever of these is present, in order: free-text
