@@ -408,8 +408,27 @@ jobs:
       # history for that commit if reviving more of it), narrowed to
       # implementer_escalation only so the base implementer role (which is
       # NOT hanging on other tasks) stays on OpenCode untouched.
+      # MOVED BACK TO OPENCODE (2026-08-09, live incident, issue #452):
+      # cursor-agent started failing every implement dispatch (VOC-053-T00) -
+      # exit 1, near-empty output, consistent across two completely
+      # different pinned models (gpt-5.3-codex-low AND the escalation tier
+      # claude-opus-5-medium) and after rotating CURSOR_API_KEY - ruling out
+      # both a single deprecated model and a bad/expired key. `agent models`
+      # run live confirms both pinned models are still valid, listed entries
+      # on this account, so this isn't a naming/deprecation issue either.
+      # planner (also Cursor, same agent CLI, same invocation shape) keeps
+      # working fine with a short prompt - the base implementer role's
+      # prompt is much larger (full task/spec/acceptance-criteria/prior-
+      # review-findings) - a Cursor-specific size/content limit is the
+      # leading unconfirmed theory. Root cause not yet found; opencode was
+      # confirmed working end-to-end with this exact task (real PR opened,
+      # passed pre-push validation) via a live diagnostic swap, so the base
+      # implementer role moved back here rather than staying blocked.
+      # implementer_escalation stays on Cursor below (untested against this
+      # failure at time of writing) - only the highest-frequency, attempt-1
+      # call site was moved.
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer'  # DIAGNOSTIC: temporarily enabled to test whether cursor-agent's failure is Cursor-specific (VOC-053-T00, issue #452) - revert to '&& false' after
+        if: steps.model.outputs.role == 'implementer'
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -449,7 +468,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer'  # DIAGNOSTIC: see Install opencode step's comment
+        if: steps.model.outputs.role == 'implementer'
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -466,7 +485,7 @@ jobs:
             OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
               --file /tmp/implement-prompt.txt \
               --agent build \
-              --model "opencode-go/minimax-m3" \
+              --model "${{ steps.model.outputs.model }}" \
               --auto 2> /tmp/opencode-stderr.log
           }
           # Transient-failure retry (same account/model, immediate) happens
@@ -591,7 +610,7 @@ jobs:
       # documented on the opencode step above and in review.yml's header
       # comment.
       - name: Install Cursor CLI
-        if: steps.model.outputs.role == 'implementer_escalation'  # DIAGNOSTIC: base implementer temporarily routed to opencode, see above
+        if: steps.model.outputs.role == 'implementer_escalation'  # base implementer role moved to opencode above (2026-08-09, see that step's comment) - only escalation still uses Cursor
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -612,7 +631,7 @@ jobs:
 
       - name: Run implementer (cursor-agent)
         id: implementer-cursor
-        if: steps.model.outputs.role == 'implementer_escalation'  # DIAGNOSTIC: see Install opencode step's comment
+        if: steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
         timeout-minutes: 55
         env:

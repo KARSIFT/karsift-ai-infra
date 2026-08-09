@@ -113,7 +113,22 @@
 # limitation review.yml's migration note already flags) - "low" is a naming
 # signal, not a verified cost figure; watch real credit-pool consumption
 # and adjust, the same as every other pick in this file.
-implementer: cursor/gpt-5.3-codex-low
+#
+# MOVED BACK TO OPENCODE (2026-08-09, live incident): cursor-agent started
+# failing every implement dispatch with exit 1 and near-empty output
+# (VOC-053-T00, issue #452) - confirmed NOT a deprecated-model or bad-key
+# issue (both gpt-5.3-codex-low and the escalation tier claude-opus-5-medium
+# fail identically; CURSOR_API_KEY was rotated and the failure persisted;
+# `agent models` run live still lists both as valid). Leading theory is a
+# Cursor-specific limit on this role's much larger prompt (planner, same
+# CLI/invocation shape, keeps working fine with its short prompt) - not yet
+# confirmed. opencode-go/minimax-m3 was live-diagnostic-tested against this
+# exact task and completed end-to-end (real PR, passed pre-push validation)
+# - moved the base implementer role back to it rather than staying blocked.
+# implementer_escalation (below) stays on Cursor for now - only this
+# highest-frequency, attempt-1 call site was moved. Revert once the real
+# Cursor cause is found and fixed.
+implementer: opencode-go/minimax-m3
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
