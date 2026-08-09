@@ -114,21 +114,22 @@
 # signal, not a verified cost figure; watch real credit-pool consumption
 # and adjust, the same as every other pick in this file.
 #
-# MOVED BACK TO OPENCODE (2026-08-09, live incident): cursor-agent started
-# failing every implement dispatch with exit 1 and near-empty output
+# MOVED BACK TO OPENCODE, THEN BACK TO CURSOR AGAIN (2026-08-09): cursor-agent
+# started failing every implement dispatch with exit 1 and near-empty output
 # (VOC-053-T00, issue #452) - confirmed NOT a deprecated-model or bad-key
 # issue (both gpt-5.3-codex-low and the escalation tier claude-opus-5-medium
-# fail identically; CURSOR_API_KEY was rotated and the failure persisted;
+# failed identically; CURSOR_API_KEY was rotated and the failure persisted;
 # `agent models` run live still lists both as valid). Leading theory is a
 # Cursor-specific limit on this role's much larger prompt (planner, same
 # CLI/invocation shape, keeps working fine with its short prompt) - not yet
-# confirmed. opencode-go/minimax-m3 was live-diagnostic-tested against this
-# exact task and completed end-to-end (real PR, passed pre-push validation)
-# - moved the base implementer role back to it rather than staying blocked.
-# implementer_escalation (below) stays on Cursor for now - only this
-# highest-frequency, attempt-1 call site was moved. Revert once the real
-# Cursor cause is found and fixed.
-implementer: opencode-go/minimax-m3
+# confirmed, not yet fixed. opencode-go/minimax-m3 covered the base
+# implementer role in the meantime (real PRs merged on it, e.g. VOC-053-T00/
+# T01). Founder made an explicit model call the same day, moving both
+# implementer roles back to Cursor - implement.yml's routing was reverted to
+# Cursor-primary (opencode step gated `&& false` again) to match. If the
+# same cursor-agent failure recurs, the underlying cause above is still
+# unresolved, not disproven by this move.
+implementer: cursor/gpt-5.6-luna-max
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -180,7 +181,17 @@ implementer: opencode-go/minimax-m3
 # escalation is capped at one retry by remediate.yml, not a standing cost
 # center, but still not the cheapest tier available for the one attempt
 # that matters most.
-implementer_escalation: cursor/claude-opus-5-medium
+#
+# MOVED (2026-08-09, founder's explicit model pick): cursor/composer-2.5 -
+# Cursor's own in-house model, a genuinely different lab from `implementer`'s
+# OpenAI-Codex family. NOTE: claude-opus-5-medium (the prior pick) was one
+# of the two models directly confirmed to fail identically on cursor-agent's
+# real VOC-053-T00/T01 retry dispatches (empty output, exit 1, ~260 bytes,
+# same signature both times) - that failure is not model-specific, so this
+# swap alone is not expected to fix it if the same underlying (likely
+# prompt-size) limit applies to composer-2.5 too. Watch the next real
+# escalation-tier dispatch to confirm either way.
+implementer_escalation: cursor/composer-2.5
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
@@ -275,7 +286,12 @@ implementer_escalation: cursor/claude-opus-5-medium
 # review). Cursor's `agent models` output lists names only, no per-model
 # price - "medium" is a naming signal, not a verified cost figure; watch
 # real credit-pool consumption and adjust.
-reviewer: cursor/cursor-grok-4.5-medium
+#
+# MOVED (2026-08-09, founder's explicit model pick): cursor/cursor-grok-4.5-high.
+# Same model family as the prior pick, higher effort tier - still cross-lab
+# from `implementer` (OpenAI-Codex, gpt-5.6-luna-max) and
+# `implementer_escalation` (Cursor's own composer-2.5).
+reviewer: cursor/cursor-grok-4.5-high
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
