@@ -409,7 +409,7 @@ jobs:
       # implementer_escalation only so the base implementer role (which is
       # NOT hanging on other tasks) stays on OpenCode untouched.
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer' && false
+        if: steps.model.outputs.role == 'implementer'  # DIAGNOSTIC: temporarily enabled to test whether cursor-agent's failure is Cursor-specific (VOC-053-T00, issue #452) - revert to '&& false' after
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -449,7 +449,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer' && false
+        if: steps.model.outputs.role == 'implementer'  # DIAGNOSTIC: see Install opencode step's comment
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -466,7 +466,7 @@ jobs:
             OPENCODE_API_KEY="$1" opencode run "Follow the instructions in the attached file exactly." \
               --file /tmp/implement-prompt.txt \
               --agent build \
-              --model "${{ steps.model.outputs.model }}" \
+              --model "opencode-go/minimax-m3" \
               --auto 2> /tmp/opencode-stderr.log
           }
           # Transient-failure retry (same account/model, immediate) happens
@@ -591,7 +591,7 @@ jobs:
       # documented on the opencode step above and in review.yml's header
       # comment.
       - name: Install Cursor CLI
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation'  # DIAGNOSTIC: base implementer temporarily routed to opencode, see above
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -612,7 +612,7 @@ jobs:
 
       - name: Run implementer (cursor-agent)
         id: implementer-cursor
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation'  # DIAGNOSTIC: see Install opencode step's comment
         continue-on-error: true
         timeout-minutes: 55
         env:
