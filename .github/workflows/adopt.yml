@@ -268,8 +268,15 @@ jobs:
             # (vocanova-platform-sandbox) - two retries produced four
             # orphaned duplicate task issues (#380-383) alongside the two
             # real, roster-recognized ones (#378/#379).
-            existing=$(gh issue list --state open --search "in:title \"$expected_title\"" --json number,title -q \
-              "[.[] | select(.title == \"$expected_title\")] | .[0].number")
+            # $title is free-form planner-authored prose from tasks.md and
+            # can contain jq-significant characters (e.g. a literal `"` -
+            # found live adopting VOC-051, karsift-ai-infra#21). `gh ...
+            # -q`/`--jq` only accepts a raw filter string with no separate
+            # argument-binding mechanism, so get the raw JSON first and
+            # filter it through a real `jq --arg`-bound invocation instead
+            # of splicing the title into filter text.
+            existing=$(gh issue list --state open --search "in:title \"$expected_title\"" --json number,title \
+              | jq --arg t "$expected_title" '[.[] | select(.title == $t)] | .[0].number')
             if [ -n "$existing" ] && [ "$existing" != "null" ]; then
               echo "Issue for $task_id already exists (#$existing) - reusing it, not creating a duplicate."
               issue_number="$existing"
