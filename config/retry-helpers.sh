@@ -62,8 +62,18 @@ retry_if_transient() {
 
   while true; do
     start=$(date +%s)
-    "$@"
-    rc=$?
+    # Do not let a bare `"$@"; rc=$?` catch this failure: call sites source
+    # this file under GitHub Actions' default `bash -e` shell, and a plain
+    # failing command outside any if/while/&&/|| test trips `set -e` and
+    # kills the whole script before `rc=$?` is ever reached - silently
+    # skipping every retry this function exists to perform. Wrapping the
+    # call in an if/else keeps the failure inside a tested context, which
+    # `set -e` treats as handled.
+    if "$@"; then
+      rc=0
+    else
+      rc=$?
+    fi
     end=$(date +%s)
     duration=$((end - start))
 
