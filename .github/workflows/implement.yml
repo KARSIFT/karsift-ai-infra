@@ -427,7 +427,7 @@ jobs:
       # documented above is still unresolved, not fixed - opencode is a
       # known-working fallback (this step, `&& false` gates it off).
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer' && false
+        if: steps.model.outputs.role == 'implementer'
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -467,7 +467,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer' && false
+        if: steps.model.outputs.role == 'implementer'
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -609,7 +609,7 @@ jobs:
       # documented on the opencode step above and in review.yml's header
       # comment.
       - name: Install Cursor CLI
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation'
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -630,7 +630,7 @@ jobs:
 
       - name: Run implementer (cursor-agent)
         id: implementer-cursor
-        if: steps.model.outputs.role == 'implementer' || steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation'
         continue-on-error: true
         timeout-minutes: 55
         env:
