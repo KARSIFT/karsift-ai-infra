@@ -432,12 +432,6 @@ jobs:
             exit 1
           fi
 
-      - name: DIAGNOSTIC - list live Cursor models
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          agent models || echo "agent models exited non-zero"
-
       # Bounded self-correcting retry (max 2 attempts), unchanged in shape
       # from the OpenCode-era version - see item 33 in the bugs-fixed
       # memory for why this exists (three consecutive planner runs each
