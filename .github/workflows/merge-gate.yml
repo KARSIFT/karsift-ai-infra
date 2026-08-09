@@ -92,7 +92,9 @@ jobs:
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          body=$(gh pr view "$pr_number" --json body -q .body)
+          pr_json=$(gh pr view "$pr_number" --json body,author)
+          body=$(echo "$pr_json" | jq -r '.body')
+          pr_author=$(echo "$pr_json" | jq -r '.author.login')
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
@@ -144,6 +146,25 @@ jobs:
             '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
             || echo "false")
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
+
+          # Bot-authored PRs (Dependabot etc.) never get a `review` job run
+          # against them - that job is gated to the agent/task-authored
+          # pipeline, by design (a version bump has no implementation for a
+          # reviewer to verify; CI passing is the verification). Searching
+          # for an "**Independent verification" comment that structurally
+          # can never exist made every such PR permanently resolve to
+          # PENDING, so neither this path nor auto-merge could ever
+          # complete for them regardless of how clean CI was or how
+          # explicitly a human approved - found live, 2026-08-09,
+          # vocanova-platform-sandbox PRs #421-#430. Treat "no review
+          # applies because the author is a recognized bot" as distinct
+          # from "review hasn't finished yet": CI green is the whole
+          # verification for a dependency bump with no code for a human or
+          # agent to have written.
+          if [ "$pr_author" = "dependabot[bot]" ]; then
+            echo "verdict=PASS" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
             --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
@@ -249,7 +270,14 @@ jobs:
           COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
           FOUNDER_USERNAME: ${{ inputs.founder_username }}
         run: |
-          if [ "$COMMENT_BODY" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
+          # Trimmed before comparing: a founder comment of "approved " (a
+          # trailing space, e.g. from a mobile keyboard's auto-space-on-send)
+          # otherwise fails this exact match silently - the job just exits
+          # 1 with no comment posted back explaining why, so a human
+          # reasonably believes their approval worked when it didn't. Found
+          # live, 2026-08-09, vocanova-platform-sandbox PRs #425/#428/#430.
+          trimmed_body="$(echo "$COMMENT_BODY" | xargs)"
+          if [ "$trimmed_body" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
             echo "approved"
           else
             echo "not approved (author=$COMMENT_AUTHOR, body='$COMMENT_BODY')"
@@ -275,6 +303,15 @@ jobs:
             exit 1
           fi
 
+          # Same bot-authored short-circuit as report-status above: a
+          # Dependabot PR never gets a review verdict because no review
+          # job runs against it, so this founder-approved merge must not
+          # block on a comment that will never exist.
+          pr_author=$(gh pr view "$pr_number" --json author -q .author.login)
+          if [ "$pr_author" = "dependabot[bot]" ]; then
+            echo "PR authored by dependabot[bot] - no independent-review verdict applies; CI green is sufficient."
+          else
+
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
             --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
 
@@ -295,6 +332,7 @@ jobs:
           if ! echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS(\b|[[:space:]]+WITH NON-BLOCKING FINDINGS\b)'; then
             echo "No passing independent verification found - not merging."
             exit 1
+          fi
           fi
 
       # --delete-branch: these are always throwaway agent/plan-prefixed task
