@@ -135,7 +135,26 @@
 # (cursor/composer-2.5, below) since escalation itself has not yet been
 # re-tested against this specific failure with the new model - if it also
 # fails, the same fallback applies there too.
-implementer: opencode-go/minimax-m3
+#
+# MOVED TO CURSOR (2026-08-10, founder's explicit directive: "just cursor
+# models for planner, implementer, ..."): cursor/composer-2.5. The
+# founder's Cursor Pro+ plan hit a hard monthly cap on "Other Models"
+# usage-based spend (confirmed live: both cursor/claude-sonnet-5-low and
+# cursor/gpt-5.6-terra-high failed identically on the planner role with
+# "ActionRequiredError: You've hit your usage limit"), but Cursor's own
+# in-house models draw from a separate, NOT-exhausted pool - confirmed
+# live via a disposable planner dispatch on composer-2.5, which produced a
+# real draft PR (#472, closed as test-only) rather than erroring.
+# implement.yml's execution step was generalized the same day to route the
+# `implementer` role by the resolved model's vendor prefix instead of
+# always assuming opencode, so this value alone is sufficient - no
+# workflow-logic change needed for future model swaps between opencode-*
+# and cursor/* here. NOTE this reintroduces the exact 2026-08-09 exit-1
+# risk documented above for gpt-5.3-codex-low specifically - composer-2.5
+# was not one of the three models confirmed to fail that way, but it has
+# not been proven immune either; watch the next real implement dispatch.
+# opencode-go/minimax-m3 (above) remains the known-working fallback.
+implementer: cursor/composer-2.5
 
 # implementer_escalation (2026-07-24): used ONLY on a remediate.yml retry
 # (attempt 2 - implement.yml's own last attempt before it gives up and
@@ -197,7 +216,20 @@ implementer: opencode-go/minimax-m3
 # swap alone is not expected to fix it if the same underlying (likely
 # prompt-size) limit applies to composer-2.5 too. Watch the next real
 # escalation-tier dispatch to confirm either way.
-implementer_escalation: cursor/composer-2.5
+#
+# MOVED (2026-08-10): cursor/cursor-grok-4.5-high. `implementer` (above)
+# just moved onto composer-2.5 itself for the base attempt - keeping
+# escalation on the same model would mean a retry is just re-running the
+# identical model that already struggled, the exact failure mode this
+# role exists to avoid (see the 2026-07-31 entry above: "not just a
+# stronger tier of the SAME model the first attempt already used").
+# cursor-grok-4.5-high is xAI, a genuinely different lab from both
+# `implementer`'s Composer (Cursor's own) and stays distinct from
+# `reviewer`'s own use of the same model family below - escalation isn't
+# reviewed independently the way implementer output is, so sharing a
+# model with `reviewer` doesn't create a self-review problem the way
+# implementer==reviewer would.
+implementer_escalation: cursor/cursor-grok-4.5-high
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
@@ -390,4 +422,19 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # before its own later moves (see that role's own history above); "high"
 # effort since planner output is a draft a human reviews, not something
 # needing the cheapest tier.
+#
+# CORRECTED, SAME DAY: gpt-5.6-terra-high hit the identical
+# ActionRequiredError immediately after this swap - "Switch to a different
+# model ... to continue with this model" (not "Sonnet" this time),
+# revealing the cap above was misdiagnosed as Sonnet-specific. It is
+# actually a hard monthly cap on Cursor's "Other Models" usage-based spend
+# pool - i.e. ANY third-party frontier model (OpenAI/Anthropic/xAI)
+# proxied through Cursor, not one model family. Cursor's own in-house
+# models draw from a separate, not-exhausted pool - confirmed live via a
+# disposable planner dispatch on composer-2.5 (produced real draft PR
+# #472 on vocanova-platform-sandbox, closed as test-only). Moved to
+# cursor/composer-2.5 as a result, matching the founder's same-day
+# directive to use Cursor's own models across every role while the
+# Other-Models pool is exhausted (resets 2026-08-31, or a spend limit
+# fixes it sooner).
 planner: cursor/composer-2.5
