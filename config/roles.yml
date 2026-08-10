@@ -437,4 +437,4 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # directive to use Cursor's own models across every role while the
 # Other-Models pool is exhausted (resets 2026-08-31, or a spend limit
 # fixes it sooner).
-planner: cursor/composer-2.5
+planner: cursor/auto
