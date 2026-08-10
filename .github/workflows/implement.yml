@@ -426,8 +426,27 @@ jobs:
       # that direction. If the same failure recurs, the underlying cause
       # documented above is still unresolved, not fixed - opencode is a
       # known-working fallback (this step, `&& false` gates it off).
+      # GENERALIZED (2026-08-10): the `implementer` role's opencode/cursor
+      # branches below are now selected by the resolved MODEL's own vendor
+      # prefix (`startsWith(..., 'cursor/')`), not hardcoded to always run
+      # opencode the way this step used to be. Trigger: the founder's
+      # Cursor Pro+ plan hit a hard monthly cap specifically on "Other
+      # Models" usage-based spend (third-party frontier models proxied
+      # through Cursor - confirmed live: cursor/claude-sonnet-5-low AND
+      # cursor/gpt-5.6-terra-high both failed identically with
+      # "ActionRequiredError: You've hit your usage limit"), but Cursor's
+      # own in-house models (composer-2.5, cursor-grok-4.5) draw from a
+      # separate pool that was NOT exhausted (confirmed live via a
+      # disposable planner dispatch on composer-2.5, which produced a real
+      # draft PR - see karsift_bugs_fixed/founder-gate session history).
+      # implementer moved to cursor/composer-2.5 in config/roles.yml as a
+      # result. This generalization (branch on model prefix, not role name)
+      # means implementer can move back to an opencode-* model in the
+      # future by editing roles.yml alone, with no workflow-logic change -
+      # matching how plan.yml/review.yml already resolve vendor from the
+      # model string instead of a hardcoded step condition.
       - name: Install opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' && !startsWith(steps.model.outputs.model, 'cursor/')
         run: curl -fsSL https://opencode.ai/install | bash
 
       # --agent build uses OpenCode's own built-in full-access agent (real
@@ -467,7 +486,7 @@ jobs:
       # as VOC-028-T05, just a bigger task.
       - name: Run implementer (opencode)
         id: implementer-opencode
-        if: steps.model.outputs.role == 'implementer'
+        if: steps.model.outputs.role == 'implementer' && !startsWith(steps.model.outputs.model, 'cursor/')
         continue-on-error: true
         timeout-minutes: 55
         env:
@@ -609,7 +628,7 @@ jobs:
       # documented on the opencode step above and in review.yml's header
       # comment.
       - name: Install Cursor CLI
-        if: steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation' || (steps.model.outputs.role == 'implementer' && startsWith(steps.model.outputs.model, 'cursor/'))
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -630,7 +649,7 @@ jobs:
 
       - name: Run implementer (cursor-agent)
         id: implementer-cursor
-        if: steps.model.outputs.role == 'implementer_escalation'
+        if: steps.model.outputs.role == 'implementer_escalation' || (steps.model.outputs.role == 'implementer' && startsWith(steps.model.outputs.model, 'cursor/'))
         continue-on-error: true
         timeout-minutes: 55
         env:
