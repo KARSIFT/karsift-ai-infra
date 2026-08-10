@@ -370,4 +370,24 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # real account, not assumed). Still no cross-vendor independence
 # requirement for this role (see its own paragraph above) - this is a
 # quality/cost/founder-preference choice, not a cross-checking one.
-planner: cursor/claude-sonnet-5-low
+#
+# MOVED (2026-08-10, founder's explicit model pick): cursor/gpt-5.6-terra-high.
+# cursor/claude-sonnet-5-low started hard-failing every plan-from-issue/plan
+# dispatch with "ActionRequiredError: You've hit your usage limit ... Switch
+# to a different model or set a Spend Limit to continue with Sonnet" -
+# confirmed live, repeatably (two consecutive plan-from-issue dispatches
+# against issue #471, both failing identically at the "Run planner" step).
+# This is a hard monthly cap on the founder's Cursor Pro+ plan specifically
+# for Sonnet-family models ("Your usage limits will reset ... 8/31/2026"),
+# not a transient error, so any model on a different family unblocks it
+# without waiting for the reset. gpt-5.6-terra-high verified to exist in
+# the live account's `agent models` catalog (a disposable diagnostic step
+# added to this repo's plan.yml, dispatched via a throwaway
+# workflow_dispatch plan run on vocanova-platform-sandbox, then reverted -
+# same verify-before-assuming pattern this file has used for every prior
+# model pick, see the note above this one). "Terra" is the same
+# cost-effective-but-capable GPT-5.6 tier `implementer` used successfully
+# before its own later moves (see that role's own history above); "high"
+# effort since planner output is a draft a human reviews, not something
+# needing the cheapest tier.
+planner: cursor/gpt-5.6-terra-high
