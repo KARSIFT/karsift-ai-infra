@@ -229,7 +229,19 @@ implementer: cursor/composer-2.5
 # reviewed independently the way implementer output is, so sharing a
 # model with `reviewer` doesn't create a self-review problem the way
 # implementer==reviewer would.
-implementer_escalation: cursor/cursor-grok-4.5-high
+#
+# MOVED (2026-08-10, founder's explicit model pick, same session):
+# cursor/auto ("Auto Intelligence" in Cursor's UI - the CLI/API surface
+# this pipeline actually calls only exposes one generic `auto` id, not
+# separately-named Auto presets; verified live via a disposable planner
+# dispatch on cursor/auto, which produced a real draft PR rather than
+# erroring - see planner's own note below for the same verification).
+# Escalation is capped at one retry by remediate.yml, so Auto's own
+# internal model selection getting it "the right amount of strength" for
+# whatever the task needs is a reasonable fit for this specific role, even
+# though (unlike a pinned model) which underlying model actually served
+# a given call isn't visible from this pipeline's own logs.
+implementer_escalation: cursor/auto
 
 # reviewer: gpt-5.6-sol, not gpt-5.6-terra (implementer's own model) - using
 # the exact same model for both would mean the reviewer never catches
@@ -329,7 +341,14 @@ implementer_escalation: cursor/cursor-grok-4.5-high
 # Same model family as the prior pick, higher effort tier - still cross-lab
 # from `implementer` (OpenAI-Codex, gpt-5.6-luna-max) and
 # `implementer_escalation` (Cursor's own composer-2.5).
-reviewer: cursor/cursor-grok-4.5-high
+#
+# MOVED (2026-08-10, founder's explicit model pick): cursor/cursor-grok-4.5-medium.
+# One tier down from -high, founder's own cost call now that every role has
+# moved onto Cursor's in-house/still-available models for the Other-Models
+# quota exhaustion (see implementer/implementer_escalation/planner's own
+# notes above). Still cross-lab from `implementer` (Cursor's own Composer)
+# and `implementer_escalation`/`planner` (cursor/auto).
+reviewer: cursor/cursor-grok-4.5-medium
 
 # reviewer_fast_retry: same value as reviewer - see reviewer's own note for
 # why a separate "even cheaper for retries" tier isn't being pulled here.
