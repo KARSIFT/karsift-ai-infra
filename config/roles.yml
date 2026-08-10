@@ -390,4 +390,4 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # before its own later moves (see that role's own history above); "high"
 # effort since planner output is a draft a human reviews, not something
 # needing the cheapest tier.
-planner: cursor/gpt-5.6-terra-high
+planner: cursor/composer-2.5
