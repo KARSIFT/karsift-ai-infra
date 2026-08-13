@@ -1,0 +1,222 @@
+name: plan-review (reusable)
+
+# Runs the "plan_reviewer" role: independent, read-only verification of a DRAFT
+# change package proposal (a "plan/"-branch PR opened by plan.yml or
+# plan-from-issue), before a human adopts it. Closes the gap where plan PRs
+# previously got no independent verification at all - review.yml's "review"
+# job only ever ran on "agent/"-branch implementation PRs (see pipeline.yml's
+# own job conditions), so a plan PR's verdict stayed permanently PENDING and
+# could never satisfy merge-gate.yml's approve-and-merge or auto-merge paths,
+# regardless of risk class or automatic_merge_allowed. Every plan PR therefore
+# needed a direct manual merge, with no automated safety net checking the
+# proposal itself for soundness first. Added 2026-08-14 (founder-requested
+# fix: "reviewer should review plan too").
+#
+# Deliberately a SEPARATE reusable workflow from review.yml, not a mode flag
+# on it: review.yml judges a diff against an ALREADY-ADOPTED package (it reads
+# change.yaml/specification.md/etc as the source of truth the diff is checked
+# against, and scopes to one task_id at a time). A plan PR has no adopted
+# package to diff against - the PR's own diff IS the entire proposed package,
+# freshly created, all tasks at once. The prompt-building content and what
+# "correct" even means are different enough that folding this into review.yml
+# would mean threading an is_plan_review flag through most of its steps -
+# a second file is more legible than that.
+#
+# Posts the same "**Independent verification - bound to commit `<sha>`**" ...
+# "VERDICT: ..." comment shape review.yml uses, so merge-gate.yml's existing
+# verdict-parsing (report-status and approve-and-merge both grep for a
+# comment starting with that literal string, then anchor on the VERDICT
+# line) picks this up with NO changes needed there. A plan PR that passes
+# this review is therefore eligible for the founder's "approved" comment
+# to actually merge it, and - if the package's own automatic_merge_allowed
+# is true - genuinely auto-merge, the same as any implementation PR. Adoption
+# itself remains a separate, later human decision this review does not
+# substitute for; a merged plan PR is still just a draft in the tree until a
+# human (or founder-delegate) flips its change.yaml to adopted.
+#
+# See review.yml's own header comment for the Cursor CLI execution-mechanism
+# details (--mode plan, --trust, stdin prompt, --output-format json) - this
+# file's execution step is copied from there verbatim; if that mechanism
+# changes, update both files.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+    secrets:
+      CURSOR_API_KEY:
+        required: true
+
+jobs:
+  plan-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Fetch PR diff, metadata, and exact SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
+          echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
+
+          # plan.yml's own "Open pull request" step always writes this exact
+          # line into the PR body - same convention adopt.yml's "Locate the
+          # adopted package" step already relies on. Fail loudly rather than
+          # guess if a PR reaches this job without it (e.g. a plan/-prefixed
+          # branch opened by something other than plan.yml).
+          package_path=$(jq -r .body /tmp/pr.json | grep -oP '(?<=New package directory: `)[^`]+' | head -1)
+          if [ -z "$package_path" ]; then
+            echo "::error::No 'New package directory: \`...\`' line in PR #${{ inputs.pr_number }}'s body - not a plan.yml-authored PR, or its format changed. Refusing to guess." >&2
+            exit 1
+          fi
+          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
+
+      # Checks out the PR's own reviewed commit, not the integration branch -
+      # same reasoning as review.yml's identical step (see that file's own
+      # comment for the live incident this avoids repeating).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+
+      - name: Checkout karsift-ai-infra
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
+
+      - name: Resolve plan_reviewer model
+        id: model
+        run: |
+          set -euo pipefail
+          MODEL=$(bash karsift-ai-infra/config/resolve-model.sh plan_reviewer karsift-ai-infra/config/roles.yml)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt
+        run: |
+          pkg="${{ steps.pr.outputs.package_path }}"
+          {
+            cat karsift-ai-infra/prompts/plan-review.md
+            echo
+            echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
+            echo
+            echo "## Draft package under review: $pkg"
+            echo
+            echo "### specification.md"
+            cat "$pkg/specification.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### tasks.md"
+            cat "$pkg/tasks.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### acceptance-criteria.md"
+            cat "$pkg/acceptance-criteria.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### impact-analysis.md"
+            cat "$pkg/impact-analysis.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### test-plan.md"
+            cat "$pkg/test-plan.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### release-plan.md"
+            cat "$pkg/release-plan.md" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### change.yaml"
+            cat "$pkg/change.yaml" 2>/dev/null || echo "(missing)"
+            echo
+            echo "### .karsift/tasks.json (machine-readable task roster/dependencies, if present)"
+            cat "$pkg/.karsift/tasks.json" 2>/dev/null || echo "(not yet present - opened at adoption by adopt.yml)"
+            echo
+            echo "## AGENTS.md automatic_merge_allowed drafting rule (for reference)"
+            grep -A 25 '### Drafting `automatic_merge_allowed`' AGENTS.md 2>/dev/null || echo "(AGENTS.md not found or section missing at this commit)"
+            echo
+            echo "## PR metadata"
+            cat /tmp/pr.json
+            echo
+            echo "## Diff (the entire proposed package - this is a new package, not an addition to an adopted one)"
+            cat /tmp/pr.diff
+            echo
+            echo "## Lessons learned (.karsift/lessons.md, if present)"
+            cat .karsift/lessons.md 2>/dev/null || true
+          } > /tmp/review-prompt.txt
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          if ! "$HOME/.local/bin/agent" --version >/dev/null 2>&1; then
+            echo "::error::Cursor CLI install failed - agent binary not found/working at \$HOME/.local/bin/agent after install. This is usually a transient issue with cursor.com/install itself - rerun the job." >&2
+            exit 1
+          fi
+
+      - name: Run independent verification
+        id: verify
+        timeout-minutes: 30
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -uo pipefail
+          source karsift-ai-infra/config/retry-helpers.sh
+          MODEL="${{ steps.model.outputs.model }}"
+          MODEL="${MODEL#cursor/}"
+          run_review() {
+            agent -p --trust --mode plan \
+              --model "$MODEL" \
+              --output-format json \
+              < /tmp/review-prompt.txt \
+              > /tmp/verdict-response.json 2> /tmp/cursor-stderr.log
+          }
+          retry_if_transient /tmp/cursor-stderr.log /tmp/verdict-response.json -- run_review
+          exit_code=$?
+          if [ "$exit_code" -ne 0 ]; then
+            cat /tmp/cursor-stderr.log >&2
+          fi
+          exit "$exit_code"
+
+      - name: Extract verdict text
+        run: |
+          python3 - <<'PYEOF'
+          import json
+
+          with open("/tmp/verdict-response.json") as f:
+              raw = f.read().strip()
+
+          if not raw:
+              raise SystemExit(
+                  "cursor-agent produced no output - see /tmp/cursor-stderr.log "
+                  "in this job's logs."
+              )
+
+          event = json.loads(raw)
+          if event.get("is_error"):
+              raise SystemExit(
+                  "cursor-agent reported an application-level error "
+                  f"(subtype={event.get('subtype')!r}): {event.get('result')!r}"
+              )
+
+          result = event.get("result", "")
+          if not result:
+              raise SystemExit("cursor-agent response had no 'result' text.")
+
+          with open("/tmp/verdict.md", "w") as f:
+              f.write(result)
+          PYEOF
+
+      - name: Show verdict
+        run: cat /tmp/verdict.md
+
+      - name: Post verification comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "**Independent verification - bound to commit \`${{ steps.pr.outputs.sha }}\`**"
+            echo
+            cat /tmp/verdict.md
+          } > /tmp/verdict-comment.md
+          gh pr comment ${{ inputs.pr_number }} --body-file /tmp/verdict-comment.md
