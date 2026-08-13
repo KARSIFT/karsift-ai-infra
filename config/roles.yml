@@ -457,3 +457,17 @@ reviewer_fast_retry: cursor/cursor-grok-4.5-medium
 # Other-Models pool is exhausted (resets 2026-08-31, or a spend limit
 # fixes it sooner).
 planner: cursor/auto
+
+# plan_reviewer (added 2026-08-14, founder-requested fix: "reviewer should
+# review plan too"): independently verifies a plan PR (a draft change-package
+# proposal) before a human adopts it - closing the gap where plan PRs
+# previously got no review at all and could only ever be merged by hand. This
+# DOES need cross-vendor/cross-model independence from `planner`, the same
+# reasoning `reviewer` needs it from `implementer` - a plan_reviewer sharing
+# planner's own model would just be the planner checking its own homework.
+# planner is currently cursor/auto (Cursor's own model-selection tier, not a
+# pinned checkpoint); reusing reviewer's own value here is a genuinely
+# different, already-proven-for-review-style-work pick (xAI's Grok family,
+# not routed through Cursor's Auto selection) rather than introducing a third
+# untested model just for this one role.
+plan_reviewer: cursor/cursor-grok-4.5-medium
