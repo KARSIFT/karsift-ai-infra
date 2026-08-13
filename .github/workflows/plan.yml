@@ -51,10 +51,25 @@ name: plan (reusable)
 # unguarded, extract-package-path's unconditional `exit 1` on a missing
 # "Package path:" line would fail a check on the PR and - because
 # merge-gate.yml's approve-and-merge path requires all checks green - would
-# block even the human "approved"-comment merge path. merge-gate.yml itself
-# needs no changes: a planning PR never carries a "Risk classification: R#"
-# line, so it already falls into the existing fail-closed "requires founder
-# approval" path without any special-casing.
+# block even the human "approved"-comment merge path.
+#
+# CORRECTED (2026-08-14): the paragraph that used to follow this one claimed
+# "merge-gate.yml itself needs no changes: a planning PR never carries a
+# 'Risk classification: R#' line" - that was already wrong when written (see
+# this file's own "Open PR" step a few hundred lines down, which has always
+# written exactly that line from change.yaml's declared risk) and has now
+# been fully superseded regardless: a plan_reviewer role and plan-review.yml
+# reusable workflow were added specifically to review planning PRs (founder-
+# requested: "reviewer should review plan too"). The calling project's
+# pipeline.yml now runs a `plan-review` job on `plan/`-branch PRs and makes
+# `merge-gate` wait for it, the same way it already waits for `review` on
+# `agent/`-branch PRs - see that project's pipeline.yml for the actual wiring
+# (this repo's own reusable workflows don't reference calling-project files
+# and can't self-document that side). A planning PR that passes plan-review
+# is now eligible for the founder's "approved" comment to actually merge it,
+# and genuinely auto-merges if its own risk/automatic_merge_allowed permit -
+# it is no longer structurally stuck behind "requires founder approval" the
+# way it always was before.
 
 on:
   workflow_call:
