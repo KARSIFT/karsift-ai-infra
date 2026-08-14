@@ -315,23 +315,30 @@ jobs:
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
             --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
 
-          # Previously fail-open: only refused on a literal '^FAIL' match or
-          # an empty string, so any verdict text that wasn't recognized -
-          # including a real FAIL formatted as "## Verdict: **FAIL**" -
-          # fell through and merged anyway on a human "approved" comment.
-          # That's the opposite of this file's documented fail-closed
-          # design. Require positive proof of PASS instead of absence of a
-          # recognized FAIL - same "VERDICT: ..." anchor as report-status,
-          # per prompts/review.md.
-          # See report-status's identical note above (2026-07-25, PR #76, and
-          # 2026-07-26, PR #134): a 0-2-asterisk wrap tolerance, and later a
-          # word-boundary end (instead of end-of-line) to survive trailing
-          # prose after the verdict token, were added here too for the same
-          # reason - this is the fail-closed merge gate, so it must stay in
-          # lockstep with report-status's parsing, not just the display one.
-          if ! echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS(\b|[[:space:]]+WITH NON-BLOCKING FINDINGS\b)'; then
-            echo "No passing independent verification found - not merging."
-            exit 1
+          # FIXED 2026-08-14 (found live, vocanova-platform PR #51): this step
+          # used to `exit 1` here on anything but a positive PASS verdict -
+          # including a MISSING verdict (a non-"agent/"-prefixed branch never
+          # gets a review job dispatched at all, same as the dependabot case
+          # right above). That silently broke this job's own documented
+          # promise, posted by report-status just above this job in the same
+          # workflow: "Reply `approved` ... to merge regardless of automation
+          # state - that is always a valid human decision at any risk class."
+          # The `check` step above already confirmed this exact comment is a
+          # literal "approved" from the configured founder identity before
+          # this step ever runs - that IS the human decision the message
+          # promises is authoritative "at any risk class". Blocking on the
+          # verdict afterward made the promise false. checks_ok (above) stays
+          # a hard gate - a founder override is for substituting their own
+          # judgment for the independent reviewer's, not for merging code
+          # that doesn't build. The verdict itself (PASS/FAIL/missing) is
+          # still logged below either way, so the record stays auditable.
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS(\b|[[:space:]]+WITH NON-BLOCKING FINDINGS\b)'; then
+            echo "Independent verification: PASS."
+          elif [ -z "$verdict" ]; then
+            echo "No independent verification ran on this PR (no review job was dispatched) - proceeding on the founder's explicit approved comment, per this job's own documented override."
+          else
+            echo "Independent verification did not return PASS - proceeding anyway on the founder's explicit approved comment, per this job's own documented override. Verdict for the record:"
+            echo "$verdict"
           fi
           fi
 
