@@ -40,6 +40,14 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn('impl["authorized"] = True', self.adopt)
         self.assertIn("gh issue list --state all", self.adopt)
         self.assertIn("git diff --cached --quiet", self.adopt)
+        self.assertIn("gh pr checks", self.adopt)
+        self.assertIn('data["adoption_independent_verification_evidence"]', self.adopt)
+        self.assertIn('data["adoption_risk"]', self.adopt)
+        self.assertIn('data["adoption_resolved_decisions"]', self.adopt)
+        self.assertIn('data["adoption_deferred_decisions"]', self.adopt)
+        self.assertIn('data["adoption_authority_provenance"]', self.adopt)
+        self.assertIn("steps.root-dispatch.outputs.needed", self.adopt)
+        self.assertIn("gh pr list --state all --head", self.adopt)
 
     def test_caller_template_has_reconciliation_dispatch(self):
         self.assertIn("options: [implement, plan, reconcile]", self.template)

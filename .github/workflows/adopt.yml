@@ -8,7 +8,10 @@ name: adopt (reusable)
 # independent plan-review verdict. Adoption and roster fields are written
 # together in the checked roster PR, closing the old merged-as-draft gap.
 # Re-running this workflow with the same merged PR safely reconciles it:
-# existing task issues are reused and an unchanged roster is a no-op.
+# existing task issues are reused and an unchanged roster is a no-op. Callers
+# expose that recovery as workflow_dispatch action=reconcile with
+# plan_pr_number=<merged plan PR>. Reconcile also restarts the root task when
+# adoption landed but its implementation dispatch was missed.
 #
 # If the package's requirement_source records an originating issue (the one
 # that kicked off planning, if any - see plan.yml's source_issue_number),
@@ -17,8 +20,8 @@ name: adopt (reusable)
 # work actually landed.
 #
 # Also rewrites change.yaml's implementation.authority_issue to match the
-# task issue(s) just opened, for exactly one reason: at adoption time (when a
-# human hand-edits change.yaml to authorize the package) no task issue exists
+# task issue(s) just opened, for exactly one reason: when the draft is created
+# no task issue exists
 # yet - this workflow is what creates it - so whatever authority_issue a
 # human writes at that point can only be a guess or a leftover from the
 # package's requirement_source. implement.yml's own authority_issue check
@@ -69,7 +72,7 @@ jobs:
       change_id: ${{ steps.issues.outputs.change_id }}
       first_task_id: ${{ steps.issues.outputs.first_task_id }}
       first_issue_number: ${{ steps.issues.outputs.first_issue_number }}
-      should_dispatch: ${{ steps.commit.outputs.changed }}
+      should_dispatch: ${{ steps.root-dispatch.outputs.needed }}
     steps:
       # Determined before checkout, without needing one: a plan/-branch PR
       # can merge into "develop" or "main" or anything else a project uses as
@@ -146,8 +149,13 @@ jobs:
             echo "PR #${{ inputs.pr_number }} is not merged; refusing adoption." >&2
             exit 1
           fi
-          verdict=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+          gh pr checks "${{ inputs.pr_number }}" --fail-fast
+          if [ -x scripts/governance/validate-governance.sh ]; then
+            bash scripts/governance/validate-governance.sh
+          fi
+          verification=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
+            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last')
+          verdict=$(echo "$verification" | jq -r '.body // ""')
           if ! echo "$verdict" | grep -Fq "bound to commit \`$head_sha\`"; then
             echo "No independent verification is bound to merged plan head $head_sha." >&2
             exit 1
@@ -157,6 +165,7 @@ jobs:
             exit 1
           fi
           echo "plan_head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "verification_url=$(echo "$verification" | jq -r '.html_url // ""')" >> "$GITHUB_OUTPUT"
 
           python3 - "${{ steps.locate.outputs.package_path }}/change.yaml" "$GITHUB_OUTPUT" <<'PYEOF'
           import re
@@ -362,18 +371,35 @@ jobs:
           cp /tmp/roster.json "$package_path/.karsift/tasks.json"
 
           pip install --quiet pyyaml
-          python3 - "$package_path/change.yaml" /tmp/roster.json "${{ steps.verify.outputs.plan_head_sha }}" <<'PYEOF'
+          python3 - "$package_path/change.yaml" /tmp/roster.json "${{ steps.verify.outputs.plan_head_sha }}" "${{ steps.verify.outputs.verification_url }}" <<'PYEOF'
           import sys
           import json
           import yaml
 
-          change_path, roster_path, plan_head_sha = sys.argv[1:4]
+          change_path, roster_path, plan_head_sha, verification_url = sys.argv[1:5]
           roster = json.load(open(roster_path))
 
           data = yaml.safe_load(open(change_path))
           impl = data.setdefault("implementation", {})
           data["status"] = "adopted"
           data["approved_candidate_sha"] = plan_head_sha
+          data["adoption_independent_verification_evidence"] = verification_url
+          data["adoption_risk"] = data.get("risk")
+          dependencies = data.get("dependencies") or []
+          resolved, deferred = [], []
+          for dependency in dependencies:
+              dep_id = dependency.get("id")
+              status = str(dependency.get("status", "")).lower()
+              if "defer" in status:
+                  deferred.append(dep_id)
+              elif "resolved" in status and "unresolved" not in status:
+                  resolved.append(dep_id)
+          data["adoption_resolved_decisions"] = resolved
+          data["adoption_deferred_decisions"] = deferred
+          data["adoption_authority_provenance"] = (
+              f"{data.get('authority_model', 'repository-governance')} evaluated plan PR "
+              f"#{int('${{ inputs.pr_number }}')} at {plan_head_sha}"
+          )
           data["approval_status"] = "autonomously-adopted-after-independent-verification"
           data["requirement_approval_status"] = (
               "approved requirement; package adopted automatically after exact-revision "
@@ -534,6 +560,27 @@ jobs:
           set -euo pipefail
           gh issue comment "${{ steps.verify.outputs.source_issue }}" --body \
             "Adopted. ${{ steps.issues.outputs.count }} task issue(s) opened from the finalized package - see this repository's issue list for \`$(basename "${{ steps.locate.outputs.package_path }}" | grep -oP '^[A-Z]+-\d+')\`."
+
+      - name: Determine whether the root task needs dispatch
+        id: root-dispatch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          change_slug=$(echo "${{ steps.issues.outputs.change_id }}" | tr '[:upper:]' '[:lower:]')
+          task_slug=$(echo "${{ steps.issues.outputs.first_task_id }}" | tr '[:upper:]' '[:lower:]')
+          branch="agent/${change_slug}-${task_slug}"
+          pr_count=$(gh pr list --state all --head "$branch" --json number --jq 'length')
+          issue_state=$(gh issue view "${{ steps.issues.outputs.first_issue_number }}" --json state -q .state)
+          if [ "$issue_state" = "OPEN" ] && [ "$pr_count" = "0" ]; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # Adoption is the authorization event for the entire ordered roster. Start
   # its root task immediately; later tasks are released one at a time by

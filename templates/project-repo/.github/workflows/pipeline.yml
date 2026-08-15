@@ -5,21 +5,19 @@ name: pipeline
 # of) this repo's own governance/risk-classification workflows, if any.
 #
 # `plan` turns a request (free text, an existing document, or a GitHub issue's
-# whole thread) into a DRAFT change package (planner role, see plan.yml) - it
-# never adopts, authorizes, or implements anything, a human still does that by
-# hand, by reviewing and merging the draft PR. `adopt` then opens the real
-# per-task tracking issues, but only once that merge has happened - not at
-# draft time. `plan-from-issue` is what makes "anyone (a human, or another
+# whole thread) into a DRAFT change package (planner role, see plan.yml).
+# Independent plan review and merge policy decide whether the exact draft may
+# merge; `adopt` then records authority and opens the real per-task tracking
+# issues. A reconcile dispatch repairs a missed handoff idempotently.
+# `plan-from-issue` is what makes "anyone (a human, or another
 # agent - e.g. one that reads application logs and notices a bug) just opens
 # an issue" a valid way in: it auto-drafts a package from that issue, asking a
 # clarifying question back on the issue itself if there isn't enough to go on
-# yet, but a bare issue never becomes implementation authority on its own -
-# adoption is still the one required human decision point. Once a package is
-# adopted, `adopt.yml` starts the root task automatically and `auto-advance.yml`
+# yet. A bare issue never becomes implementation authority on its own. Once a
+# package is adopted, `adopt.yml` starts the root task automatically and `auto-advance.yml`
 # releases each later task only after its predecessor merges.
 #
 # Copy this file into a project repo and fill in:
-#   - founder_username below (whose "approved" comment is a valid merge decision)
 #   - auto_merge_enabled, only once you have real evidence for this project's loop
 #   - integration_branch below - "develop" if this project splits develop/main,
 #     "main" if it's GitHub-flow-only (a single long-lived branch). Get this
@@ -166,11 +164,9 @@ jobs:
   # rather than implementing one, so they never carry the "Package path:"
   # line this job requires - the startsWith guard below skips this (and
   # review/remediate, which depend on it) for those PRs instead of failing a
-  # check that would otherwise block even the human "approved"-comment merge
-  # path in merge-gate.yml. merge-gate.yml itself needs no such guard: a
-  # planning PR never declares a "Risk classification: R#" either, so it
-  # already falls into the existing fail-closed "requires founder approval"
-  # path on its own.
+  # check that would otherwise block the plan-review merge path. merge-gate.yml
+  # itself parses the plan package risk declaration and fails closed when it
+  # cannot determine a risk class.
   extract-package-path:
     if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
     runs-on: ubuntu-latest
