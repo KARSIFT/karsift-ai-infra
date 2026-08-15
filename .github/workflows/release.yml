@@ -297,7 +297,7 @@ jobs:
             failed_checks=$(echo "$check_runs" | jq \
               '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
             status_state=$(echo "$combined_status" | jq -r '.state')
-            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && [ "$status_state" = "failure" -o "$status_state" = "error" ]; }; then
+            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && { [ "$status_state" = "failure" ] || [ "$status_state" = "error" ]; }; }; then
               echo "Promotion PR #$PR_NUMBER has a failed check or commit status; refusing to merge." >&2
               exit 1
             fi
@@ -490,7 +490,7 @@ jobs:
             failed_checks=$(echo "$check_runs" | jq \
               '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
             status_state=$(echo "$combined_status" | jq -r '.state')
-            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && [ "$status_state" = "failure" -o "$status_state" = "error" ]; }; then
+            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && { [ "$status_state" = "failure" ] || [ "$status_state" = "error" ]; }; }; then
               echo "Promotion PR #$PR_NUMBER has a failed check or commit status; refusing to merge." >&2
               exit 1
             fi
