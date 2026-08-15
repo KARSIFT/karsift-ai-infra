@@ -63,9 +63,11 @@ jobs:
   adopt:
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: write
       issues: write
       pull-requests: write
+      statuses: read
     outputs:
       integration_branch: ${{ steps.target.outputs.branch }}
       package_path: ${{ steps.locate.outputs.package_path }}
@@ -149,7 +151,28 @@ jobs:
             echo "PR #${{ inputs.pr_number }} is not merged; refusing adoption." >&2
             exit 1
           fi
-          gh pr checks "${{ inputs.pr_number }}" --fail-fast
+          # Do not use `gh pr checks` here. Besides newer gh versions rejecting
+          # `--fail-fast` without `--watch`, that command expands a GraphQL
+          # statusCheckRollup field which GitHub App tokens cannot always read.
+          # The REST endpoints expose the same gate inputs with checks:read.
+          check_runs=$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100")
+          combined_status=$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/commits/$head_sha/status")
+          check_count=$(echo "$check_runs" | jq '.total_count')
+          status_count=$(echo "$combined_status" | jq '.statuses | length')
+          pending_checks=$(echo "$check_runs" | jq '[.check_runs[] | select(.status != "completed")] | length')
+          failed_checks=$(echo "$check_runs" | jq \
+            '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+          status_state=$(echo "$combined_status" | jq -r '.state')
+          if [ $((check_count + status_count)) -eq 0 ] || [ "$pending_checks" -ne 0 ] || [ "$failed_checks" -ne 0 ]; then
+            echo "Merged plan head $head_sha does not have a complete, passing check set; refusing adoption." >&2
+            exit 1
+          fi
+          if [ "$status_count" -gt 0 ] && [ "$status_state" != "success" ]; then
+            echo "Merged plan head $head_sha has non-passing commit statuses ($status_state); refusing adoption." >&2
+            exit 1
+          fi
           if [ -x scripts/governance/validate-governance.sh ]; then
             bash scripts/governance/validate-governance.sh
           fi
