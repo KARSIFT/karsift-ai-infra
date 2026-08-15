@@ -54,7 +54,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan]
+        options: [implement, plan, reconcile]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -90,6 +90,10 @@ on:
         required: false
         type: string
         default: "VOC"
+      plan_pr_number:
+        description: "reconcile only: merged plan PR whose adoption/roster handoff must be repaired"
+        required: false
+        type: string
 
 jobs:
   implement:
@@ -146,10 +150,12 @@ jobs:
   # merges. Later tasks are started by auto-advance after their predecessor
   # merges. See adopt.yml for the dependency and direct-dispatch guards.
   adopt:
-    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'plan/')
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'plan/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile' && inputs.plan_pr_number != '')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/adopt.yml@main
     with:
-      pr_number: ${{ github.event.pull_request.number }}
+      pr_number: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_pr_number || github.event.pull_request.number }}
     secrets: inherit
 
   ci:
@@ -238,9 +244,8 @@ jobs:
   # single-commit PR - discovered on vocanova-platform-sandbox's first real
   # attempt to exercise `auto_merge_enabled`. `always()` is required
   # because a job depending on a *skipped* job is by default also skipped -
-  # and `review` is deliberately skipped both on `issue_comment` events (the
-  # human-"approved" merge path) and on planning PRs (`plan/`-prefixed head
-  # branch, no package for the reviewer to check yet) - both cases must
+  # and `review` is deliberately skipped on planning PRs (`plan/`-prefixed head
+  # branch, no implementation package for the task reviewer to check yet) - that case must
   # still reach merge-gate so its status comment actually posts, rather than
   # requiring review's specific 'success' result which a planning PR's
   # deliberately-skipped review can never produce.
@@ -249,12 +254,11 @@ jobs:
     if: |
       always() &&
       (
-        github.event_name == 'issue_comment' ||
-        (github.event_name == 'pull_request' && github.event.action != 'closed' && (needs.review.result == 'success' || needs.review.result == 'skipped'))
+        github.event_name == 'pull_request' && github.event.action != 'closed' &&
+        (needs.review.result == 'success' || needs.review.result == 'skipped')
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
-      founder_username: "CHANGE-ME"   # the GitHub login whose "approved" comment is a valid merge decision
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
     secrets: inherit
 

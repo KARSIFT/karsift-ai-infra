@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Removed founder-comment merge authority: R0-R4 now share the same CI and
+  exact-revision independent-verification gate when autonomous merge is enabled.
+- Fixed plan adoption handoff by merging with the GitHub App token, autonomously
+  recording adoption in the roster PR, and adding idempotent reconciliation for
+  missed `pull_request: closed` events.
+
 Execution-mechanism history for `implement.yml`, `plan.yml`, and `review.yml` -
 which CLI/action each role's "Run ..." step actually invoked, why it changed,
 and what broke along the way. This is the *how it's invoked* history; for
