@@ -159,11 +159,20 @@ jobs:
             "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100")
           combined_status=$(gh api -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/commits/$head_sha/status")
-          check_count=$(echo "$check_runs" | jq '.total_count')
+          # The pull_request closed event attaches this adoption workflow to
+          # the plan head itself. Counting `adopt / adopt` would make the gate
+          # reject its own in-progress run; after that first failure, reconcile
+          # would remain poisoned by the completed failure forever. Adoption
+          # is the consumer of the plan gates, not one of those prerequisite
+          # gates, so exclude only this reusable workflow's own jobs.
+          prerequisite_checks=$(echo "$check_runs" | jq \
+            '[.check_runs[] | select((.name | startswith("adopt /")) | not)]')
+          check_count=$(echo "$prerequisite_checks" | jq 'length')
           status_count=$(echo "$combined_status" | jq '.statuses | length')
-          pending_checks=$(echo "$check_runs" | jq '[.check_runs[] | select(.status != "completed")] | length')
-          failed_checks=$(echo "$check_runs" | jq \
-            '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+          pending_checks=$(echo "$prerequisite_checks" | jq \
+            '[.[] | select(.status != "completed")] | length')
+          failed_checks=$(echo "$prerequisite_checks" | jq \
+            '[.[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
           status_state=$(echo "$combined_status" | jq -r '.state')
           if [ $((check_count + status_count)) -eq 0 ] || [ "$pending_checks" -ne 0 ] || [ "$failed_checks" -ne 0 ]; then
             echo "Merged plan head $head_sha does not have a complete, passing check set; refusing adoption." >&2
