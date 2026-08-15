@@ -45,6 +45,8 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertNotIn('gh pr checks "${{ inputs.pr_number }}"', self.adopt)
         self.assertIn("checks: read", self.adopt)
         self.assertIn("statuses: read", self.adopt)
+        self.assertIn('startswith("adopt /")', self.adopt)
+        self.assertIn("prerequisite_checks", self.adopt)
         self.assertIn('data["adoption_independent_verification_evidence"]', self.adopt)
         self.assertIn('data["adoption_risk"]', self.adopt)
         self.assertIn('data["adoption_resolved_decisions"]', self.adopt)
