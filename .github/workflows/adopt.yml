@@ -598,15 +598,15 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          if [ "${{ steps.commit.outputs.changed }}" = "true" ]; then
-            echo "needed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           change_slug=$(echo "${{ steps.issues.outputs.change_id }}" | tr '[:upper:]' '[:lower:]')
           task_slug=$(echo "${{ steps.issues.outputs.first_task_id }}" | tr '[:upper:]' '[:lower:]')
           branch="agent/${change_slug}-${task_slug}"
           pr_count=$(gh pr list --state all --head "$branch" --json number --jq 'length')
           issue_state=$(gh issue view "${{ steps.issues.outputs.first_issue_number }}" --json state -q .state)
+          # Decide from the root task's actual state, not whether adoption
+          # bookkeeping changed. A reconcile may legitimately update evidence
+          # and merge a roster PR after every task is already complete; that
+          # must not redispatch the closed root task.
           if [ "$issue_state" = "OPEN" ] && [ "$pr_count" = "0" ]; then
             echo "needed=true" >> "$GITHUB_OUTPUT"
           else

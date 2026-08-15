@@ -52,6 +52,12 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn('data["adoption_authority_provenance"]', self.adopt)
         self.assertIn("steps.root-dispatch.outputs.needed", self.adopt)
         self.assertIn("gh pr list --state all --head", self.adopt)
+        root_dispatch = self.adopt.split(
+            "- name: Determine whether the root task needs dispatch", 1
+        )[1].split("  implement-first-task:", 1)[0]
+        self.assertIn('issue_state" = "OPEN', root_dispatch)
+        self.assertIn('pr_count" = "0', root_dispatch)
+        self.assertNotIn("steps.commit.outputs.changed", root_dispatch)
         self.assertIn("git push -u --force-with-lease origin", self.adopt)
         self.assertNotIn("git push -u --force origin", self.adopt)
 
