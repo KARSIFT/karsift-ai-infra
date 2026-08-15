@@ -490,7 +490,15 @@ jobs:
             git config --local --unset-all http.https://github.com/.extraheader || true
             git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
           fi
-          git push -u origin "${{ steps.commit.outputs.branch }}"
+          # The deterministic roster branch may still exist after its first
+          # PR was merged. Reconciliation can legitimately need a newer
+          # bookkeeping commit (for example after adoption evidence fields
+          # evolve), so refresh the bot-owned remote ref and replace only the
+          # exact version just observed. A concurrent update makes the lease
+          # fail closed instead of being overwritten.
+          branch="${{ steps.commit.outputs.branch }}"
+          git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" || true
+          git push -u --force-with-lease origin "$branch"
 
       # Same "No commits between" race release.yml's own promotion-PR step
       # documents - harmless here too (nothing left to record if a
