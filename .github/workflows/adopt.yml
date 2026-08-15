@@ -3,16 +3,12 @@ name: adopt (reusable)
 # The other half of plan.yml's split: plan.yml only ever drafts a package and
 # opens a PR for it - this workflow is what actually opens the per-task
 # tracking issues that carry real implementation authority, records their
-# sequential dependency edges, and starts the root task. It only does that
-# once a human has adopted the draft (merged a "plan/"-branch PR whose
-# change.yaml no longer says "draft"). Moving issue-creation and first-task
-# dispatch here means a proposal nobody has agreed to yet never has a real,
-# numbered issue or implementation run attached to it.
-#
-# Refuses to open anything if the merged PR's change.yaml is still in draft
-# state (status == "draft" or implementation.authorized != true) - a human
-# merging an unadopted draft without editing it first is a mistake to leave
-# visible (no issues silently appear), not something to work around.
+# sequential dependency edges, and starts the root task. A merged plan PR is
+# adopted automatically only after its exact head revision has a passing
+# independent plan-review verdict. Adoption and roster fields are written
+# together in the checked roster PR, closing the old merged-as-draft gap.
+# Re-running this workflow with the same merged PR safely reconciles it:
+# existing task issues are reused and an unchanged roster is a no-op.
 #
 # If the package's requirement_source records an originating issue (the one
 # that kicked off planning, if any - see plan.yml's source_issue_number),
@@ -73,6 +69,7 @@ jobs:
       change_id: ${{ steps.issues.outputs.change_id }}
       first_task_id: ${{ steps.issues.outputs.first_task_id }}
       first_issue_number: ${{ steps.issues.outputs.first_issue_number }}
+      should_dispatch: ${{ steps.commit.outputs.changed }}
     steps:
       # Determined before checkout, without needing one: a plan/-branch PR
       # can merge into "develop" or "main" or anything else a project uses as
@@ -132,15 +129,35 @@ jobs:
           fi
           echo "package_path=$path" >> "$GITHUB_OUTPUT"
 
-      # Refuses to proceed on a still-draft change.yaml - see this file's
-      # header comment. Also extracts requirement_source, so a later step can
-      # thread a closing comment back to the originating issue if the
-      # adopter's requirement_source is a GitHub issue URL in this repo.
-      - name: Verify the package was actually adopted
+      # Re-check the exact-revision plan verdict so a reconciliation dispatch
+      # cannot bypass the non-human gates used by the merge path.
+      - name: Verify merged plan and independent review
         id: verify
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           pip install --quiet pyyaml
+          pr_json=$(gh pr view "${{ inputs.pr_number }}" --json state,mergedAt,headRefOid)
+          state=$(echo "$pr_json" | jq -r .state)
+          merged_at=$(echo "$pr_json" | jq -r '.mergedAt // ""')
+          head_sha=$(echo "$pr_json" | jq -r .headRefOid)
+          if [ "$state" != "MERGED" ] || [ -z "$merged_at" ]; then
+            echo "PR #${{ inputs.pr_number }} is not merged; refusing adoption." >&2
+            exit 1
+          fi
+          verdict=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
+            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+          if ! echo "$verdict" | grep -Fq "bound to commit \`$head_sha\`"; then
+            echo "No independent verification is bound to merged plan head $head_sha." >&2
+            exit 1
+          fi
+          if ! echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS([[:space:]]+WITH NON-BLOCKING FINDINGS)?\b'; then
+            echo "Independent verification for $head_sha is not passing; refusing adoption." >&2
+            exit 1
+          fi
+          echo "plan_head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
           python3 - "${{ steps.locate.outputs.package_path }}/change.yaml" "$GITHUB_OUTPUT" <<'PYEOF'
           import re
           import sys
@@ -149,23 +166,12 @@ jobs:
           path, github_output = sys.argv[1:3]
           data = yaml.safe_load(open(path))
 
-          status = data.get("status")
-          impl = data.get("implementation") or {}
-          authorized = impl.get("authorized")
-
-          if status == "draft" or not authorized:
-              sys.exit(
-                  f"{path}: status={status!r}, implementation.authorized={authorized!r} - "
-                  "this package was merged without being adopted. Refusing to open task "
-                  "issues for an unadopted draft."
-              )
-
           req_source = str(data.get("requirement_source", ""))
           m = re.search(r"/issues/(\d+)", req_source)
           with open(github_output, "a") as f:
               f.write(f"source_issue={m.group(1) if m else ''}\n")
 
-          print(f"Adopted: status={status}, authorized={authorized}")
+          print("Merged plan and exact-revision independent review verified.")
           PYEOF
 
       # Same parser plan.yml used to use before issue-opening moved here -
@@ -275,7 +281,7 @@ jobs:
             # argument-binding mechanism, so get the raw JSON first and
             # filter it through a real `jq --arg`-bound invocation instead
             # of splicing the title into filter text.
-            existing=$(gh issue list --state open --search "in:title \"$expected_title\"" --json number,title \
+            existing=$(gh issue list --state all --search "in:title \"$expected_title\"" --json number,title \
               | jq --arg t "$expected_title" '[.[] | select(.title == $t)] | .[0].number')
             if [ -n "$existing" ] && [ "$existing" != "null" ]; then
               echo "Issue for $task_id already exists (#$existing) - reusing it, not creating a duplicate."
@@ -356,16 +362,30 @@ jobs:
           cp /tmp/roster.json "$package_path/.karsift/tasks.json"
 
           pip install --quiet pyyaml
-          python3 - "$package_path/change.yaml" /tmp/roster.json <<'PYEOF'
+          python3 - "$package_path/change.yaml" /tmp/roster.json "${{ steps.verify.outputs.plan_head_sha }}" <<'PYEOF'
           import sys
           import json
           import yaml
 
-          change_path, roster_path = sys.argv[1:3]
+          change_path, roster_path, plan_head_sha = sys.argv[1:4]
           roster = json.load(open(roster_path))
 
           data = yaml.safe_load(open(change_path))
           impl = data.setdefault("implementation", {})
+          data["status"] = "adopted"
+          data["approved_candidate_sha"] = plan_head_sha
+          data["approval_status"] = "autonomously-adopted-after-independent-verification"
+          data["requirement_approval_status"] = (
+              "approved requirement; package adopted automatically after exact-revision "
+              "independent verification"
+          )
+          data["implementation_authorized"] = True
+          data["automatic_merge_allowed"] = True
+          data["implementation_authority_before_adoption"] = False
+          data["implementation_authority_status"] = "authorized"
+          data["blocking_reasons"] = "none - adopted and implementation-authorized"
+          impl["authorized"] = True
+          impl["status"] = "authorized"
           impl["authority_issue"] = roster[0]["issue"] if len(roster) == 1 else None
 
           # Found live on VOC-025-T00: nothing else in this pipeline ever set
@@ -398,14 +418,21 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git checkout -b "$branch"
           git add "$package_path/.karsift/tasks.json" "$package_path/change.yaml"
+          if git diff --cached --quiet; then
+            echo "Reconciliation is already complete; no roster or adoption changes remain."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster and authority_issue"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       # Same extraheader-precedence fix implement.yml's "Push branch" step
       # documents (2026-07-28 incident) - actions/checkout's own persisted
       # GITHUB_TOKEN credential takes precedence over whatever's embedded in
       # the remote URL unless explicitly unset first.
       - name: Push roster branch
+        if: steps.commit.outputs.changed == 'true'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -422,6 +449,7 @@ jobs:
       # not expected in practice since each package's branch name is unique.
       - name: Open roster PR
         id: roster-pr
+        if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
@@ -452,6 +480,7 @@ jobs:
       # was required).
       - name: Wait for roster PR checks
         id: roster-checks
+        if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
@@ -488,6 +517,7 @@ jobs:
           echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
 
       - name: Merge checked roster PR
+        if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
@@ -497,7 +527,7 @@ jobs:
           gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
 
       - name: Close the loop back to the originating issue, if any
-        if: steps.verify.outputs.source_issue != ''
+        if: steps.commit.outputs.changed == 'true' && steps.verify.outputs.source_issue != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
@@ -512,6 +542,7 @@ jobs:
   # in parallel and makes the safe path the automatic path.
   implement-first-task:
     needs: adopt
+    if: needs.adopt.outputs.should_dispatch == 'true'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
     with:
       change_id: ${{ needs.adopt.outputs.change_id }}

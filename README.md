@@ -1,8 +1,8 @@
 # karsift-ai-infra
 
-Reusable GitHub Actions automation for the loop: **implement an approved change → deterministic CI
-checks it → an independent reviewer verifies it → a human (or, once earned, a proven automated gate)
-merges it.** Formerly `vocanova-ai-infra` - renamed because the pipeline itself was never
+Reusable GitHub Actions automation for the loop: **plan or implement a governed change → deterministic
+CI checks it → an independent reviewer verifies the exact revision → the proven automated gate merges
+it.** Formerly `vocanova-ai-infra` - renamed because the pipeline itself was never
 Vocanova-specific; only the project wiring was. Any KARSIFT project can call these workflows.
 
 ## Roles are technology-agnostic
@@ -11,7 +11,7 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 
 | Role | What it does |
 |---|---|
-| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question back on the issue instead of guessing if there isn't enough to draft from yet. No adoption, authorization, implementation, or merge authority - a human still adopts the draft by hand. |
+| `planner` | Turns a request - free text, an existing document, or a GitHub issue's whole thread - into a full DRAFT change package (spec, acceptance criteria, task breakdown) in the calling project's own package format. Asks a clarifying question instead of guessing. The independently reviewed exact revision is adopted deterministically after merge; the planner cannot adopt or review its own output. |
 | `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. |
 | `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. |
 
@@ -81,19 +81,15 @@ through its own governance documents and through inputs to `merge-gate.yml`:
   the exact reviewed commit SHA.
 - **Merge authority**: `merge-gate.yml` is risk-aware and **fails closed**. It reads a
   `Risk classification: R#` line from the PR body (any project can use a different risk scheme, but
-  this is the convention the gate parses today); a PR with no parseable risk declaration, or declared
-  `R4`, never auto-merges regardless of any switch - both require a human's literal `approved`
-  comment from the project's configured founder identity. R0-R3 can auto-merge only when
+  this is the convention the gate parses today); a PR with no parseable risk declaration never
+  merges and must be corrected. R0-R4 can auto-merge only when
   `auto_merge_enabled: "true"` is explicitly passed by the calling project **and** CI is green **and**
-  the reviewer's verdict passed **and** the specific package's own `change.yaml` doesn't set
-  `automatic_merge_allowed: false` - a per-package opt-out a human can set at adoption time to keep
-  one particular package out of unattended auto-merge regardless of its risk class, independent of
-  the project-wide switch. `auto_merge_enabled` defaults to `"false"` - this is the real,
+  the reviewer's verdict passed. Historical `automatic_merge_allowed: false` values are not a
+  founder-attention gate. `auto_merge_enabled` defaults to `"false"` - this is the real,
   current, evidenced activation state in every KARSIFT project checked against this repo as of this
-  writing, not a cautious guess. Flipping it is a deliberate future edit made after real evidence the
-  loop is reliable, never a default. Both the auto-merge path and the human `approved`-comment path
-  delete the merged task/plan branch afterward (never the integration branch itself, which
-  `release.yml`'s separate promotion merge never deletes either).
+  writing, not a cautious guess. Flipping it is a deliberate edit made after real evidence the
+  loop is reliable, never a default. Automatic merges use the GitHub App token so their
+  `pull_request: closed` event reaches adoption, and delete only the merged task/plan branch.
 
 **Planner output is a draft, never an authoritative risk signal.** `plan.yml` lets
 the planner role propose a `risk:` value in the change package it drafts, but that
@@ -155,12 +151,10 @@ attempt.
 ## Drafting and issue-creation are two separate steps
 
 `plan.yml` only ever drafts a package and opens a PR for it - it does not open any tracking issues.
-Those come from `adopt.yml`, which fires only once a `plan/`-branch PR actually merges with
-`change.yaml` no longer showing `draft` status. This means a proposal nobody has agreed to yet never
-has a real, numbered issue attached to it - issues only ever exist for packages a human has already
-adopted. In between drafting and adoption, the draft PR's own review comments are the communication
-channel - a human (or the planner, re-run with updated context) revises the draft there, same as any
-other PR review, before anyone decides whether to merge it.
+Those come from `adopt.yml`, which fires after a `plan/`-branch PR merges and re-verifies that the
+independent PASS verdict is bound to the exact merged head. It writes adoption metadata and the task
+roster together through a checked bookkeeping PR. A caller can dispatch the same merged plan PR to
+reconcile a missed event; task issue lookup and the roster commit are idempotent.
 
 **Anyone - a human, or another agent - can start this by opening an issue,** not just by dispatching
 `plan.yml` by hand. The calling project's `pipeline.yml` routes any newly-opened issue with no

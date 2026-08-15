@@ -3,9 +3,9 @@ name: merge-gate (reusable)
 # Risk-aware, fail-closed by design. This mirrors the real activation model
 # used across KARSIFT projects (see e.g. vocanova-platform's
 # docs/governance/amendments/A-003 and its a003-transition-state.yaml):
-# governance PERMISSION and technical ACTIVATION are separate states, R0-R3
-# can in principle earn autonomous merge once proven, and R4 always requires
-# a human decision-maker regardless of any switch. This workflow does not
+# governance PERMISSION and technical ACTIVATION are separate states. R0-R4
+# can earn autonomous merge once deterministic checks and independent review
+# pass. This workflow does not
 # invent a project's risk policy - it only reads a risk declaration the PR
 # already carries and enforces the gate proportionate to it.
 #
@@ -19,14 +19,15 @@ on:
   workflow_call:
     inputs:
       auto_merge_enabled:
-        description: 'Master switch for automatic merge at R0-R3. R4 never auto-merges regardless of this value.'
+        description: 'Master switch for automatic merge at R0-R4 after CI and independent verification pass.'
         required: false
         type: string
         default: "false"
       founder_username:
-        description: 'GitHub login whose literal "approved" comment is a valid human merge decision.'
-        required: true
+        description: 'Deprecated compatibility input. Founder comments are not merge authority.'
+        required: false
         type: string
+        default: ""
     secrets:
       KARSIFT_BOT_APP_ID:
         description: >
@@ -222,206 +223,20 @@ jobs:
             gates_pass=true
           fi
 
-          if [ "$risk" = "R4" ]; then
-            decision="requires founder approval - R4 never auto-merges, regardless of auto_merge_enabled"
-          elif [ "$risk" = "unknown" ]; then
-            decision="requires founder approval - no parseable 'Risk classification: R#' line found in the PR body, failing closed"
-          elif [ "$gates_pass" = "true" ] && [ "$automatic_merge_allowed" = "false" ]; then
-            decision="gates pass for $risk but this package's own change.yaml sets automatic_merge_allowed: false - requires founder approval"
+          if [ "$risk" = "unknown" ]; then
+            decision="BLOCKED - no parseable 'Risk classification: R#' line found in the PR body; correct the declaration"
           elif [ "$gates_pass" = "true" ] && [ "${{ inputs.auto_merge_enabled }}" = "true" ]; then
             decision="WOULD AUTO-MERGE ($risk, auto_merge_enabled=true)"
           elif [ "$gates_pass" = "true" ]; then
-            decision="gates pass for $risk but auto_merge_enabled=false - requires founder approval"
+            decision="BLOCKED - gates pass for $risk but autonomous merge is not technically activated"
           else
             decision="would NOT merge yet (risk=$risk, checks_ok=$checks_ok, verdict=$verdict)"
           fi
 
-          gh pr comment "$pr_number" --body "**merge-gate:** $decision. Reply \`approved\` (as the configured founder identity) to merge regardless of automation state - that is always a valid human decision at any risk class."
+          gh pr comment "$pr_number" --body "**merge-gate:** $decision. Founder approval comments are not part of the merge path; failed or missing gates remain fail-closed."
 
-  # Path 2: a human (the configured founder identity) replies "approved".
-  # Verifies CI is green and a passing verdict exists, then merges. This
-  # remains valid for every risk class, including R4 and "unknown" - a
-  # human approval is a human approval.
-  approve-and-merge:
-    if: github.event_name == 'issue_comment' && github.event.issue.pull_request != null
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: write
-      issues: write
-      checks: read
-      actions: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      # COMMENT_BODY and COMMENT_AUTHOR go through env:, never interpolated
-      # directly into the script via ${{ }} - a comment body is arbitrary
-      # attacker-controlled text (anyone who can comment on the PR writes
-      # it), and this job has contents:write + pull-requests:write. Direct
-      # ${{ github.event.comment.body }} interpolation would splice that raw
-      # text into the bash source before bash parses it - a single comment
-      # containing a backtick or `"; <anything>; "` is a script-injection RCE
-      # in a privileged workflow, not a hypothetical. env: variable expansion
-      # does not get re-parsed for further substitution, so this is safe.
-      - name: Check approval signal
-        id: check
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-          FOUNDER_USERNAME: ${{ inputs.founder_username }}
-        run: |
-          # Trimmed before comparing: a founder comment of "approved " (a
-          # trailing space, e.g. from a mobile keyboard's auto-space-on-send)
-          # otherwise fails this exact match silently - the job just exits
-          # 1 with no comment posted back explaining why, so a human
-          # reasonably believes their approval worked when it didn't. Found
-          # live, 2026-08-09, vocanova-platform-sandbox PRs #425/#428/#430.
-          trimmed_body="$(echo "$COMMENT_BODY" | xargs)"
-          if [ "$trimmed_body" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
-            echo "approved"
-          else
-            echo "not approved (author=$COMMENT_AUTHOR, body='$COMMENT_BODY')"
-            exit 1
-          fi
-
-      - name: Verify CI is green and verification passed
-        if: steps.check.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          pr_number=${{ github.event.issue.number }}
-
-          # Same self-reference fix as report-status above: exclude this
-          # pipeline's own governance checks so this job's own in-progress
-          # check-run doesn't count against itself.
-          checks_ok=$(gh pr checks "$pr_number" --json name,state -q \
-            '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-            || echo "false")
-          if [ "$checks_ok" != "true" ]; then
-            echo "CI is not green yet - not merging."
-            exit 1
-          fi
-
-          # Same bot-authored short-circuit as report-status above: a
-          # Dependabot PR never gets a review verdict because no review
-          # job runs against it, so this founder-approved merge must not
-          # block on a comment that will never exist.
-          pr_author=$(gh pr view "$pr_number" --json author -q .author.login)
-          if [ "$pr_author" = "dependabot[bot]" ]; then
-            echo "PR authored by dependabot[bot] - no independent-review verdict applies; CI green is sufficient."
-          else
-
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
-
-          # FIXED 2026-08-14 (found live, vocanova-platform PR #51): this step
-          # used to `exit 1` here on anything but a positive PASS verdict -
-          # including a MISSING verdict (a non-"agent/"-prefixed branch never
-          # gets a review job dispatched at all, same as the dependabot case
-          # right above). That silently broke this job's own documented
-          # promise, posted by report-status just above this job in the same
-          # workflow: "Reply `approved` ... to merge regardless of automation
-          # state - that is always a valid human decision at any risk class."
-          # The `check` step above already confirmed this exact comment is a
-          # literal "approved" from the configured founder identity before
-          # this step ever runs - that IS the human decision the message
-          # promises is authoritative "at any risk class". Blocking on the
-          # verdict afterward made the promise false. checks_ok (above) stays
-          # a hard gate - a founder override is for substituting their own
-          # judgment for the independent reviewer's, not for merging code
-          # that doesn't build. The verdict itself (PASS/FAIL/missing) is
-          # still logged below either way, so the record stays auditable.
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS(\b|[[:space:]]+WITH NON-BLOCKING FINDINGS\b)'; then
-            echo "Independent verification: PASS."
-          elif [ -z "$verdict" ]; then
-            echo "No independent verification ran on this PR (no review job was dispatched) - proceeding on the founder's explicit approved comment, per this job's own documented override."
-          else
-            echo "Independent verification did not return PASS - proceeding anyway on the founder's explicit approved comment, per this job's own documented override. Verdict for the record:"
-            echo "$verdict"
-          fi
-          fi
-
-      # --delete-branch: these are always throwaway agent/plan-prefixed task
-      # branches, never the integration branch itself (release.yml's own
-      # develop -> main promotion merge is a separate job in a separate
-      # file and does not use this flag - deleting develop would be
-      # catastrophic, but nothing here ever merges that branch).
-      - name: Merge
-        if: steps.check.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # Retry-with-backoff: GitHub's ruleset-enforcement engine can lag a
-          # few seconds behind the check-run state gh pr checks already read
-          # as green, so a merge attempted right after checks finish can
-          # fail with "the base branch policy prohibits the merge" even
-          # though the PR is genuinely mergeable a moment later - found
-          # live, 2026-08-09, vocanova-platform-sandbox PR #408
-          # (karsift-ai-infra#22). Not retrying blindly forever: 3 attempts,
-          # a few seconds apart, is enough to absorb the propagation lag
-          # without masking a real, persistent block.
-          for attempt in 1 2 3; do
-            if gh pr merge ${{ github.event.issue.number }} --squash --delete-branch; then
-              exit 0
-            fi
-            echo "Merge attempt $attempt/3 failed - retrying in 5s (possible ruleset-propagation lag)." >&2
-            sleep 5
-          done
-          echo "Merge still failing after 3 attempts - not a transient lag, failing for real." >&2
-          exit 1
-
-      - name: Check for GitHub App credentials
-        id: has-app
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # An app-minted token, not github.token: closing the issue below must
-      # be attributed to an identity other than the default GITHUB_TOKEN, or
-      # GitHub's anti-recursion protection silently drops the `issues:
-      # closed` event this close is supposed to produce - release.yml's
-      # completion check would never fire. Confirmed live: closing
-      # karsift-ai-infra-smoke-test#8 with github.token produced no `issues`
-      # workflow run at all, first time this step existed.
-      - name: Mint App installation token
-        id: app-token
-        if: steps.check.outcome == 'success' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-
-      # Don't rely on GitHub's native "Closes #N" auto-close either -
-      # confirmed live on karsift-ai-infra-smoke-test PR #5 that it does not
-      # reliably fire (a genuine "Closes #4" in the PR body, squash-merged
-      # into the repository's default branch, left issue #4 open).
-      # release.yml's package-completion check reads real issue state, so it
-      # needs this to happen deterministically. No-op if the PR body has no
-      # "Closes #N" (e.g. a manual doc-fix PR with no tracked task issue), or
-      # if no App is configured (the close still happens via github.token in
-      # that case, just without triggering release.yml - see this job's
-      # secrets block).
-      - name: Close linked task issue
-        if: steps.check.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-        run: |
-          set -euo pipefail
-          body=$(gh pr view ${{ github.event.issue.number }} --json body -q .body)
-          issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || true)
-          if [ -n "$issue_number" ]; then
-            gh issue close "$issue_number" --comment "Closed by merge-gate after PR #${{ github.event.issue.number }} merged." || true
-          fi
-
-  # Path 3: auto_merge_enabled=true and the report-status job already found
-  # gates_pass for a risk class below R4. This only runs anything once a
+  # Automatic path: auto_merge_enabled=true and report-status already found
+  # every non-human gate passing for a parseable R0-R4 declaration. This only runs once a
   # project deliberately flips the switch - it is inert while the switch is
   # false, which is the default and the current real state everywhere.
   auto-merge:
@@ -429,12 +244,10 @@ jobs:
     if: |
       github.event_name == 'pull_request' &&
       inputs.auto_merge_enabled == 'true' &&
-      needs.report-status.outputs.risk != 'R4' &&
       needs.report-status.outputs.risk != 'unknown' &&
       needs.report-status.outputs.checks_ok == 'true' &&
       needs.report-status.outputs.verdict != 'FAIL' &&
-      needs.report-status.outputs.verdict != 'PENDING' &&
-      needs.report-status.outputs.automatic_merge_allowed != 'false'
+      needs.report-status.outputs.verdict != 'PENDING'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -442,12 +255,30 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      # --delete-branch: same reasoning as approve-and-merge's Merge step
-      # above - always a throwaway agent/plan-prefixed branch here, never
-      # the integration branch.
+
+      - name: Require GitHub App credentials
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APP_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
+            echo "GitHub App credentials are required for workflow-triggering merges; refusing to merge with github.token." >&2
+            exit 1
+          fi
+
+      - name: Mint App installation token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      # The App token is essential: a merge made with github.token does not
+      # emit the pull_request:closed event that starts adopt.yml.
       - name: Merge automatically
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
@@ -462,36 +293,15 @@ jobs:
           echo "Merge still failing after 3 attempts - not a transient lag, failing for real." >&2
           exit 1
 
-      - name: Check for GitHub App credentials
-        id: has-app
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Same app-token reasoning as approve-and-merge above: github.token
-      # would close the issue but silently never trigger release.yml.
-      - name: Mint App installation token
-        id: app-token
-        if: steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-
-      # Same explicit close as approve-and-merge above - see that step's
-      # comment for why native "Closes #N" auto-close isn't trusted here.
+      # Explicitly close a linked task issue with the same App identity so
+      # release/auto-advance receive their issues:closed event.
       # PR_BODY goes through env:, never ${{ }}-interpolated directly into
       # the script - same script-injection reasoning as the "Check approval
       # signal" step above (a PR body is attacker-controlled text, this job
       # has contents:write).
       - name: Close linked task issue
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
