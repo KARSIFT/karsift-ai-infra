@@ -31,6 +31,25 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("reconcile-release", self.template)
         self.assertIn("release_issue_number:", self.template)
 
+    def test_promotion_checks_use_rest_and_bind_the_checked_head(self):
+        auto = self.release.split("  auto-promote:", 1)[1].split(
+            "  retry-promote:", 1
+        )[0]
+        retry = self.release.split("  retry-promote:", 1)[1]
+        for job in (auto, retry):
+            self.assertIn("checks: read", job)
+            self.assertIn("statuses: read", job)
+        sections = self.release.split("- name: Wait for every promotion PR check")[1:]
+        self.assertEqual(2, len(sections))
+        for section in sections:
+            checks = section.split("- name: Merge checked promotion PR", 1)[0]
+            self.assertIn("/check-runs?per_page=100", checks)
+            self.assertIn("/status\"", checks)
+            self.assertIn('current_sha" != "$checked_sha', checks)
+            self.assertIn("stable_count", checks)
+            self.assertNotIn("statusCheckRollup", checks)
+            self.assertNotIn("gh pr checks", checks)
+
 
 if __name__ == "__main__":
     unittest.main()

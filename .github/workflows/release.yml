@@ -214,9 +214,11 @@ jobs:
     if: needs.check-and-open.outputs.release_issue_number != ''
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: write
       issues: write
       pull-requests: write
+      statuses: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -275,11 +277,33 @@ jobs:
         run: |
           set -euo pipefail
           deadline=$((SECONDS + 300))
+          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
           previous_count=0
           stable_count=0
           while true; do
-            check_count=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup | length')
-            if [ "$check_count" -gt 0 ] && [ "$check_count" -eq "$previous_count" ]; then
+            current_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+            if [ "$current_sha" != "$checked_sha" ]; then
+              echo "Promotion PR #$PR_NUMBER advanced from $checked_sha to $current_sha while checks were running; refusing to merge." >&2
+              exit 1
+            fi
+            check_runs=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/${{ github.repository }}/commits/$checked_sha/check-runs?per_page=100")
+            combined_status=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/${{ github.repository }}/commits/$checked_sha/status")
+            check_count=$(echo "$check_runs" | jq '.total_count')
+            status_count=$(echo "$combined_status" | jq '.statuses | length')
+            total_count=$((check_count + status_count))
+            pending_checks=$(echo "$check_runs" | jq '[.check_runs[] | select(.status != "completed")] | length')
+            failed_checks=$(echo "$check_runs" | jq \
+              '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+            status_state=$(echo "$combined_status" | jq -r '.state')
+            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && [ "$status_state" = "failure" -o "$status_state" = "error" ]; }; then
+              echo "Promotion PR #$PR_NUMBER has a failed check or commit status; refusing to merge." >&2
+              exit 1
+            fi
+            if [ "$total_count" -gt 0 ] && [ "$pending_checks" -eq 0 ] \
+              && { [ "$status_count" -eq 0 ] || [ "$status_state" = "success" ]; } \
+              && [ "$total_count" -eq "$previous_count" ]; then
               stable_count=$((stable_count + 1))
             else
               stable_count=0
@@ -291,17 +315,9 @@ jobs:
               echo "Promotion PR #$PR_NUMBER checks did not register and stabilize within 5 minutes - refusing to merge." >&2
               exit 1
             fi
-            previous_count=$check_count
+            previous_count=$total_count
             sleep 10
           done
-          gh pr checks "$PR_NUMBER" --watch --fail-fast --interval 10
-          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
-          checks_ok=$(gh pr checks "$PR_NUMBER" --json bucket -q \
-            'map(.bucket) | all(. == "pass" or . == "skipping")')
-          if [ "$checks_ok" != "true" ]; then
-            echo "Promotion PR #$PR_NUMBER is not fully green after watch completed - refusing to merge." >&2
-            exit 1
-          fi
           echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
 
       - name: Merge checked promotion PR and close release issue
@@ -326,6 +342,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+      statuses: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -439,9 +456,11 @@ jobs:
 
       # Use the workflow token only for read-only check inspection. The App
       # intentionally needs contents/issues/pull-requests write permission,
-      # not broad Actions/Checks access. A short registration wait closes the
-      # race where `gh pr checks --watch` is called before GitHub has created
-      # any check runs for the just-opened PR.
+      # not broad Actions/Checks access. Poll the REST check-runs and combined
+      # status endpoints: `gh pr checks` expands a GraphQL statusCheckRollup
+      # field which GitHub App/workflow tokens cannot reliably read. Requiring
+      # two identical, terminal snapshots also closes the registration race
+      # immediately after the promotion PR is opened.
       - name: Wait for every promotion PR check
         id: promotion-checks
         if: steps.promotion-pr.outputs.pr_number != ''
@@ -451,11 +470,33 @@ jobs:
         run: |
           set -euo pipefail
           deadline=$((SECONDS + 300))
+          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
           previous_count=0
           stable_count=0
           while true; do
-            check_count=$(gh pr view "$PR_NUMBER" --json statusCheckRollup -q '.statusCheckRollup | length')
-            if [ "$check_count" -gt 0 ] && [ "$check_count" -eq "$previous_count" ]; then
+            current_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
+            if [ "$current_sha" != "$checked_sha" ]; then
+              echo "Promotion PR #$PR_NUMBER advanced from $checked_sha to $current_sha while checks were running; refusing to merge." >&2
+              exit 1
+            fi
+            check_runs=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/${{ github.repository }}/commits/$checked_sha/check-runs?per_page=100")
+            combined_status=$(gh api -H "Accept: application/vnd.github+json" \
+              "repos/${{ github.repository }}/commits/$checked_sha/status")
+            check_count=$(echo "$check_runs" | jq '.total_count')
+            status_count=$(echo "$combined_status" | jq '.statuses | length')
+            total_count=$((check_count + status_count))
+            pending_checks=$(echo "$check_runs" | jq '[.check_runs[] | select(.status != "completed")] | length')
+            failed_checks=$(echo "$check_runs" | jq \
+              '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
+            status_state=$(echo "$combined_status" | jq -r '.state')
+            if [ "$failed_checks" -ne 0 ] || { [ "$status_count" -gt 0 ] && [ "$status_state" = "failure" -o "$status_state" = "error" ]; }; then
+              echo "Promotion PR #$PR_NUMBER has a failed check or commit status; refusing to merge." >&2
+              exit 1
+            fi
+            if [ "$total_count" -gt 0 ] && [ "$pending_checks" -eq 0 ] \
+              && { [ "$status_count" -eq 0 ] || [ "$status_state" = "success" ]; } \
+              && [ "$total_count" -eq "$previous_count" ]; then
               stable_count=$((stable_count + 1))
             else
               stable_count=0
@@ -467,17 +508,9 @@ jobs:
               echo "Promotion PR #$PR_NUMBER checks did not register and stabilize within 5 minutes - refusing to merge." >&2
               exit 1
             fi
-            previous_count=$check_count
+            previous_count=$total_count
             sleep 10
           done
-          gh pr checks "$PR_NUMBER" --watch --fail-fast --interval 10
-          checked_sha=$(gh pr view "$PR_NUMBER" --json headRefOid -q .headRefOid)
-          checks_ok=$(gh pr checks "$PR_NUMBER" --json bucket -q \
-            'map(.bucket) | all(. == "pass" or . == "skipping")')
-          if [ "$checks_ok" != "true" ]; then
-            echo "Promotion PR #$PR_NUMBER is not fully green after watch completed - refusing to merge." >&2
-            exit 1
-          fi
           echo "head_sha=$checked_sha" >> "$GITHUB_OUTPUT"
 
       - name: Merge checked promotion PR and close release issue
