@@ -1,10 +1,10 @@
 name: release (reusable)
 
-# The gate above the per-task loop: exactly one human approval per completed
-# change package, not per task and not an arbitrary batch count - gates
-# promotion from the integration branch to the production branch. Deploy is
-# explicitly out of scope; this workflow's entire job is that one promotion
-# PR's merge.
+# Promotes a completed package from the integration branch to the production
+# branch after its ordered roster closes. No founder comment is an authority
+# signal. A caller can idempotently retry a failed promotion by dispatching
+# action=reconcile-release with release_issue_number=<audit issue>. Deploy is
+# explicitly out of scope; this workflow only merges the promotion PR.
 #
 # A package's task roster is fixed once, at planning time, in
 # `<package_path>/.karsift/tasks.json` (written by plan.yml's "Commit task
@@ -20,8 +20,12 @@ on:
   workflow_call:
     inputs:
       founder_username:
-        description: 'GitHub login whose literal "approved" comment is a valid release decision.'
-        required: true
+        description: 'Deprecated compatibility input; never used as release authority.'
+        required: false
+        type: string
+      release_issue_number:
+        description: 'Audit issue to reconcile after an interrupted promotion.'
+        required: false
         type: string
       integration_branch:
         description: 'Branch a completed package promotes FROM, e.g. "develop".'
@@ -34,20 +38,7 @@ on:
         type: string
         default: "main"
       auto_release_enabled:
-        description: >
-          "true" to promote automatically the moment a package's roster is
-          complete, with no founder "approved" comment - the release-approval
-          issue is still opened for audit visibility, but check-and-open
-          closes it itself immediately after a successful promotion instead
-          of waiting for a comment event. Defaults to "false" (the original,
-          founder-approval-required behavior via the separate `promote` job
-          below, which stays exactly as-is and remains the retry path if an
-          auto-promotion attempt fails checks or errors). Mirrors
-          merge-gate.yml's own auto_merge_enabled opt-in pattern - same
-          per-project, explicit, fail-closed-by-default convention. Added
-          2026-08-08 at the founder's explicit, twice-confirmed request for
-          vocanova-platform-sandbox specifically - see that repo's own
-          AGENTS.md for the authorization record.
+        description: 'Deprecated compatibility input; completed rosters promote automatically.'
         required: false
         type: string
         default: "false"
@@ -162,7 +153,7 @@ jobs:
           done < <(jq -r '.[].issue' "$roster")
           echo "all_closed=$all_closed" >> "$GITHUB_OUTPUT"
 
-      - name: Open the release-approval issue, if complete and not already requested
+      - name: Open the release audit issue, if complete and not already requested
         id: open-issue
         if: steps.completion.outputs.all_closed == 'true'
         env:
@@ -189,13 +180,8 @@ jobs:
           # pipeline.yml's plan-from-issue job, which only fires for issues
           # with no karsift:* label at all.
           gh label create "karsift:release" --color "5319E7" \
-            --description "System-generated release-approval gate - not a planning request" \
+            --description "System-generated release audit - not a planning request" \
             --force
-
-          approval_sentence="requires exactly one human decision - reply \`approved\` (as the configured founder identity) on this issue to open and merge that promotion pull request."
-          if [ "${{ inputs.auto_release_enabled }}" = "true" ]; then
-            approval_sentence="promotes automatically now that this package's roster is complete (auto_release_enabled) - no founder comment needed. This issue exists for audit visibility and closes itself once promotion succeeds."
-          fi
 
           issue_url=$(gh issue create \
             --title "$title" \
@@ -205,8 +191,10 @@ jobs:
 
           $roster_summary
 
-          This package is complete. Promoting \`${{ inputs.integration_branch }}\` to
-          \`${{ inputs.production_branch }}\` $approval_sentence
+          This package is complete. It promotes \`${{ inputs.integration_branch }}\` to
+          \`${{ inputs.production_branch }}\` automatically after promotion-PR checks pass.
+          No founder approval comment is part of this path. If promotion is interrupted,
+          dispatch \`action=reconcile-release\` with this issue number.
 
           **Deploy is out of scope here.** This only promotes the branch; any hosted
           deployment is a separate step.
@@ -214,18 +202,16 @@ jobs:
           )")
           echo "issue_number=$(basename "$issue_url")" >> "$GITHUB_OUTPUT"
 
-  # Only runs when the calling project opted into auto_release_enabled.
-  # Duplicates promote's own promotion-PR/wait-for-checks/merge steps
+  # Runs whenever a completed roster has a release audit issue.
+  # Duplicates retry-promote's promotion-PR/wait-for-checks/merge steps
   # rather than sharing them, because this job runs in the SAME workflow
   # run as check-and-open (it already knows the issue number check-and-open
   # just created/found, with no need to wait for a second issue_comment
-  # event) - promote's own job stays untouched as the founder-approval path
-  # for any calling project that hasn't opted in, and as this job's own
-  # manual retry path if an auto-promotion attempt below fails checks or
-  # errors outright (a human can still comment `approved` afterward).
+  # event). retry-promote is the idempotent recovery path if this attempt is
+  # interrupted or its checks fail.
   auto-promote:
     needs: [identify, check-and-open]
-    if: inputs.auto_release_enabled == 'true' && needs.check-and-open.outputs.release_issue_number != ''
+    if: needs.check-and-open.outputs.release_issue_number != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -241,7 +227,7 @@ jobs:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
 
-      # See promote's own "Open or reuse the promotion PR" step for the
+      # See retry-promote's own "Open or reuse the promotion PR" step for the
       # "No commits between" race explanation - identical reasoning here.
       - name: Open or reuse the promotion PR
         id: promotion-pr
@@ -251,7 +237,7 @@ jobs:
         run: |
           set -euo pipefail
           promotion_body="$(cat <<EOF
-          Auto-promoted (auto_release_enabled) once issue #$RELEASE_ISSUE_NUMBER's package roster completed - no founder approval comment required for this project.
+          Auto-promoted once issue #$RELEASE_ISSUE_NUMBER's package roster completed. No founder approval comment is a release gate.
 
           Risk classification: R4
 
@@ -267,7 +253,7 @@ jobs:
               --body "$promotion_body" 2>&1) \
               || {
                 if echo "$create_output" | grep -qi "No commits between"; then
-                  gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrently-approved release most likely already brought this package's changes in. No new promotion PR was needed."
+                  gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrent release most likely already brought this package's changes in. No new promotion PR was needed."
                   echo "pr_number=" >> "$GITHUB_OUTPUT"
                   exit 0
                 fi
@@ -328,16 +314,11 @@ jobs:
         run: |
           set -euo pipefail
           gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
-          gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Auto-promoted via PR #$PR_NUMBER (auto_release_enabled - no founder comment required)."
+          gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Auto-promoted via PR #$PR_NUMBER after all promotion checks passed."
 
-  # Fires on the human "approved" comment. Same approval-signal pattern as
-  # merge-gate.yml's approve-and-merge - see that step for the injection-
-  # safety reasoning behind routing comment body/author through env:.
-  promote:
-    if: |
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request == null &&
-      startsWith(github.event.issue.title, 'Release: ')
+  # Idempotent recovery for an interrupted or failed automatic promotion.
+  retry-promote:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_issue_number != ''
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -347,20 +328,43 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.integration_branch }}
 
-      - name: Check approval signal
-        id: check
+      - name: Validate release audit and completed roster
+        id: validate
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-          FOUNDER_USERNAME: ${{ inputs.founder_username }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ISSUE_NUMBER: ${{ inputs.release_issue_number }}
         run: |
-          if [ "$COMMENT_BODY" = "approved" ] && [ "$COMMENT_AUTHOR" = "$FOUNDER_USERNAME" ]; then
-            echo "approved"
-          else
-            echo "not approved (author=$COMMENT_AUTHOR, body='$COMMENT_BODY')"
+          set -euo pipefail
+          issue=$(gh issue view "$RELEASE_ISSUE_NUMBER" --json state,title,labels)
+          state=$(echo "$issue" | jq -r .state)
+          if [ "$state" = "CLOSED" ]; then
+            echo "Release audit #$RELEASE_ISSUE_NUMBER is already closed; nothing to reconcile."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          title=$(echo "$issue" | jq -r .title)
+          labeled=$(echo "$issue" | jq -r '[.labels[].name] | index("karsift:release") != null')
+          change_id=${title#Release: }
+          if [ "$title" = "$change_id" ] || [ "$labeled" != "true" ]; then
+            echo "Issue #$RELEASE_ISSUE_NUMBER is not a release audit; refusing promotion." >&2
             exit 1
           fi
+          package_path=$(find specs/changes -maxdepth 1 -mindepth 1 -type d -name "${change_id}-*" | head -1 || true)
+          roster="$package_path/.karsift/tasks.json"
+          if [ -z "$package_path" ] || [ ! -f "$roster" ]; then
+            echo "No adopted roster found for $change_id; refusing promotion." >&2
+            exit 1
+          fi
+          while IFS= read -r task_issue; do
+            [ "$(gh issue view "$task_issue" --json state -q .state)" = "CLOSED" ] || {
+              echo "Task issue #$task_issue is not closed; refusing promotion." >&2
+              exit 1
+            }
+          done < <(jq -r '.[].issue' "$roster")
+          echo "needed=true" >> "$GITHUB_OUTPUT"
 
       # A GitHub App token is mandatory on this path. PRs created by the
       # default GITHUB_TOKEN require a maintainer to click "Approve workflows
@@ -371,23 +375,22 @@ jobs:
       # genuine first-time external contributors.
       - name: Mint App installation token for promotion
         id: app-token
-        if: steps.check.outcome == 'success'
+        if: steps.validate.outputs.needed == 'true'
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
 
-      # If two release-approval issues land close together (e.g. two
-      # packages both merged to the integration branch before either
-      # release was approved), the first approval's promotion already
+      # If two release audit issues land close together (e.g. two packages
+      # both complete before either promotion finishes), the first promotion
       # carries the second package's changes into production_branch too -
       # there's nothing left for the second one to promote. `gh pr create`
       # fails outright in that case ("No commits between main and develop"),
       # which used to fail this whole job and leave the issue open forever
       # with no automatic path forward, even though the release's actual
       # goal (the package's changes reaching production_branch) was already
-      # satisfied. Found live: VOC-020 and VOC-021's releases were both
-      # approved within seconds of each other, VOC-020's promotion (merged
+      # satisfied. Found live: VOC-020 and VOC-021's promotions started within
+      # seconds of each other, VOC-020's promotion (merged
       # moments earlier) already brought main up to develop's tip including
       # VOC-021, and VOC-021's own release run failed with exactly this
       # error - required a manual close after manually confirming main
@@ -395,15 +398,14 @@ jobs:
       # success it actually is, not a failure.
       - name: Open or reuse the promotion PR
         id: promotion-pr
-        if: steps.check.outcome == 'success'
+        if: steps.validate.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_ISSUE_NUMBER: ${{ github.event.issue.number }}
-          RELEASE_ISSUE_TITLE: ${{ github.event.issue.title }}
+          RELEASE_ISSUE_NUMBER: ${{ inputs.release_issue_number }}
         run: |
           set -euo pipefail
           promotion_body="$(cat <<EOF
-          Promotion requested and approved by the configured founder via issue #$RELEASE_ISSUE_NUMBER (\`$RELEASE_ISSUE_TITLE\`).
+          Reconciled automatic promotion for release audit issue #$RELEASE_ISSUE_NUMBER. No founder approval comment is a release gate.
 
           Risk classification: R4
 
@@ -419,7 +421,7 @@ jobs:
               --body "$promotion_body" 2>&1) \
               || {
                 if echo "$create_output" | grep -qi "No commits between"; then
-                  gh issue close ${{ github.event.issue.number }} --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }} - a concurrently-approved release most likely already brought this package's changes in. No new promotion PR was needed."
+                  gh issue close "$RELEASE_ISSUE_NUMBER" --comment "Already promoted: ${{ inputs.production_branch }} already contains everything on ${{ inputs.integration_branch }}. No new promotion PR was needed."
                   echo "pr_number=" >> "$GITHUB_OUTPUT"
                   exit 0
                 fi
@@ -490,4 +492,4 @@ jobs:
           # develop advances between the check watch and this command,
           # GitHub rejects the merge instead of releasing an unchecked tip.
           gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
-          gh issue close ${{ github.event.issue.number }} --comment "Promoted via PR #$PR_NUMBER."
+          gh issue close "${{ inputs.release_issue_number }}" --comment "Reconciled promotion via PR #$PR_NUMBER after all checks passed."

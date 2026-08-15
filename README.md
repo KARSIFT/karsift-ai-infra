@@ -167,12 +167,12 @@ planning with the updated thread - no manual re-dispatch needed either way. The 
 does is skip adoption: however planning started, the resulting package is still only ever a draft
 until a human reviews and merges it.
 
-## Release gate: one human approval per completed change package
+## Release gate: checked automatic promotion per completed change package
 
 `merge-gate.yml` gates each *task*; `release.yml` gates the layer above it - promoting a project's
 integration branch (e.g. `develop`) to its production branch (e.g. `main`) once an entire *package*
-is done. Exactly one human approval per completed package, never per task and never an arbitrary
-batch count.
+is done. Completion plus green promotion-PR checks is the gate; founder comments are not release
+authority.
 
 A package's task roster is fixed once, at adoption time: `adopt.yml` writes
 `<package_path>/.karsift/tasks.json`
@@ -184,10 +184,12 @@ completion - that was tried for issue-opening itself and broke against a real ho
 task's tracking issue is explicitly closed by `merge-gate.yml` when that task's PR merges (not left
 to GitHub's native "Closes #N" auto-close, which has been observed live not to fire reliably on a
 squash merge). The moment every issue in a package's roster is closed, `release.yml` opens a
-`Release: <change_id>` issue; a founder's literal `approved` reply on that issue opens (or reuses)
-and merges a real `develop → main` pull request - never a direct ref update, since a project's own
+`Release: <change_id>` audit issue and automatically opens (or reuses) and merges a real
+`develop → main` pull request - never a direct ref update, since a project's own
 branch-protection intent (e.g. vocanova-platform's "release pull requests only, no direct or force
-pushes") depends on promotion staying a real, reviewable PR.
+pushes") depends on promotion staying a real, reviewable PR. If that attempt is interrupted, the
+caller can dispatch `reconcile-release` with the audit issue number; the retry remains idempotent
+and fail-closed on checks.
 
 **Deploy is explicitly out of scope.** The promotion PR's merge is the entire scope of `release.yml`
 - no hosted deployment is triggered by anything in this repo today.

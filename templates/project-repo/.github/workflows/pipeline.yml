@@ -52,7 +52,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile]
+        options: [implement, plan, reconcile, reconcile-release]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -90,6 +90,10 @@ on:
         default: "VOC"
       plan_pr_number:
         description: "reconcile only: merged plan PR whose adoption/roster handoff must be repaired"
+        required: false
+        type: string
+      release_issue_number:
+        description: "reconcile-release only: release audit issue whose promotion must be retried"
         required: false
         type: string
 
@@ -258,19 +262,15 @@ jobs:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
     secrets: inherit
 
-  # The gate above the per-task loop: exactly one human approval per
-  # completed change package (its full task roster closed), not per task -
-  # gates promotion from integration_branch to production_branch. Routes
-  # both `issues: closed` (package-completion detection) and
-  # `issue_comment` (the founder's "approved" reply on a "Release: ..."
-  # issue) to release.yml, which internally filters by event/action/issue
-  # title the same way merge-gate.yml's own jobs do. Deploy is out of scope -
-  # see release.yml's header comment.
+  # Promotes a completed package after its roster closes. reconcile-release
+  # retries an interrupted promotion without creating an approval path.
   release:
-    if: (github.event_name == 'issues' && github.event.action == 'closed') || github.event_name == 'issue_comment'
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'closed') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-release' && inputs.release_issue_number != '')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/release.yml@main
     with:
-      founder_username: "CHANGE-ME"   # same identity as merge-gate's founder_username, above
+      release_issue_number: ${{ inputs.release_issue_number }}
       integration_branch: "develop"   # match the value used elsewhere in this file
       production_branch: "main"
     secrets: inherit

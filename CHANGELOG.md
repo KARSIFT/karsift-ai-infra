@@ -7,6 +7,8 @@
 - Fixed plan adoption handoff by merging with the GitHub App token, autonomously
   recording adoption in the roster PR, and adding idempotent reconciliation for
   missed `pull_request: closed` events.
+- Removed founder-comment release authority. Completed rosters promote through a
+  checked PR automatically, with `reconcile-release` as the idempotent retry path.
 
 Execution-mechanism history for `implement.yml`, `plan.yml`, and `review.yml` -
 which CLI/action each role's "Run ..." step actually invoked, why it changed,
