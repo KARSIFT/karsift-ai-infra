@@ -2,9 +2,9 @@ name: plan (reusable)
 
 # Runs the "planner" role: turns a request into a full DRAFT change package in
 # the calling project's own package format (read from package_template_path).
-# Never adopts, authorizes, implements, or merges anything - a human still has
-# to review and adopt the resulting change.yaml, exactly as with a
-# human-drafted package today. Which model fills the "planner" role is
+# Never adopts, authorizes, implements, or merges anything. Independent review,
+# merge policy, and adopt.yml establish authority after the draft is complete.
+# Which model fills the "planner" role is
 # resolved from THIS repo's own config/roles.yml, same convention as
 # implement.yml/review.yml.
 #
@@ -24,12 +24,11 @@ name: plan (reusable)
 #     a bare issue implementation authority - see below.
 #
 # Deliberately does NOT open the per-task tracking issues that used to live
-# here - that now happens in adopt.yml, triggered only once a human has
-# actually adopted the draft (merged the PR with change.yaml's status flipped
-# out of "draft"). Opening real, numbered issues at DRAFT time meant issues
+# here - that now happens in adopt.yml after the independently verified plan PR
+# merges. Opening real, numbered issues at DRAFT time meant issues
 # existed for proposals nobody had agreed to yet; moving issue-creation to
 # adoption time means the only issues that ever carry implementation
-# authority are ones a human has already signed off on the package behind.
+# authority are ones whose package passed the configured adoption boundary.
 #
 # If the planner doesn't have enough to draft confidently - most likely for a
 # source_issue_number run, where "anyone can open an issue" also means "the
@@ -739,10 +738,9 @@ jobs:
             fi
             echo
             echo "**This is a draft, not an approved or authorized package.** Nothing in"
-            echo "this PR grants implementation authority - a human reviews it and, if"
-            echo "adopted, flips \`change.yaml\`'s status/authorization fields by hand."
-            echo "Per-task tracking issues are opened automatically on adoption (once this"
-            echo "PR merges with an adopted change.yaml), not before."
+            echo "this PR grants implementation authority. Independent plan review and the"
+            echo "merge gate must pass; adopt.yml records authority and opens per-task"
+            echo "tracking issues only after this exact plan revision merges."
             echo
             echo "New package directory: \`${{ steps.branch.outputs.package_path }}\`"
             echo
