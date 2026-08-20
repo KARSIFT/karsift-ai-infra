@@ -316,6 +316,15 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("permission-issues: write", self.workflow)
         self.assertIn("repository: ${{ job.workflow_repository }}", self.workflow)
         self.assertIn("ref: ${{ job.workflow_sha }}", self.workflow)
+        self_ci = (ROOT / ".github/workflows/self-ci.yml").read_text()
+        self.assertIn(
+            'property "workflow_repository" is not defined in object type',
+            self_ci,
+        )
+        self.assertIn(
+            'property "workflow_sha" is not defined in object type',
+            self_ci,
+        )
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
