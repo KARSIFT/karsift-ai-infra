@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 import unittest
 
 
@@ -14,22 +13,10 @@ class RemediatePolicyTests(unittest.TestCase):
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
         cls.review_prompt = (ROOT / "prompts/review.md").read_text()
 
-    @staticmethod
-    def _review_state(text: str) -> str:
-        if re.search(
-            r"^\*{0,2}VERDICT:\s*WAITING FOR OPERATOR LIVE EVIDENCE\b",
-            text,
-            re.MULTILINE,
-        ):
-            return "waiting"
-        if re.search(r"^\*{0,2}VERDICT:\s*FAIL\b", text, re.MULTILINE):
-            return "fail"
-        return "other"
-
     def test_only_ci_review_failure_or_review_job_error_can_retry(self):
-        self.assertIn('CI_FAILED" != "true"', self.workflow)
-        self.assertIn('has_fail_verdict" = "false"', self.workflow)
-        self.assertIn('REVIEW_JOB_FAILED" != "true"', self.workflow)
+        self.assertIn("config/decide-remediation.py", self.workflow)
+        self.assertIn('--ci-failed "$CI_FAILED"', self.workflow)
+        self.assertIn('--review-job-failed "$REVIEW_JOB_FAILED"', self.workflow)
         self.assertIn('echo "should_retry=false"', self.workflow)
 
     def test_retry_is_bounded_to_two_attempts(self):
@@ -40,11 +27,10 @@ class RemediatePolicyTests(unittest.TestCase):
     def test_waiting_is_machine_detectable_and_does_not_retry(self):
         marker = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
         self.assertIn(marker, self.review_prompt)
-        self.assertEqual(self._review_state(marker), "waiting")
-        self.assertEqual(self._review_state("VERDICT: FAIL"), "fail")
-        self.assertIn('has_waiting_verdict" = "true"', self.workflow)
+        self.assertIn("config/classify-review-verdict.py", self.workflow)
+        self.assertIn('decision" = "WAITING"', self.workflow)
         self.assertIn('echo "should_retry=false"', self.workflow)
-        waiting_guard = self.workflow.index('has_waiting_verdict" = "true"')
+        waiting_guard = self.workflow.index('decision" = "WAITING"')
         retry_output = self.workflow.index('echo "should_retry=true"')
         self.assertLess(waiting_guard, retry_output)
 
@@ -54,13 +40,14 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn(".body | contains($binding)", self.workflow)
 
     def test_genuine_fail_and_infrastructure_failures_still_retry(self):
-        self.assertEqual(self._review_state("VERDICT: FAIL"), "fail")
-        self.assertIn(
-            '[ "$CI_FAILED" != "true" ] && [ "$REVIEW_JOB_FAILED" != "true" ] && [ "$has_waiting_verdict" = "true" ]',
-            self.workflow,
-        )
-        self.assertIn('has_fail_verdict" = "false"', self.workflow)
+        self.assertIn('decision" != "RETRY"', self.workflow)
         self.assertIn('echo "should_retry=true"', self.workflow)
+
+    def test_stale_caller_run_cannot_dispatch_newer_head(self):
+        self.assertIn("expected_head_sha:", self.workflow)
+        self.assertIn('--expected-sha "$EXPECTED_HEAD_SHA"', self.workflow)
+        self.assertIn('initial_decision" = "STALE"', self.workflow)
+        self.assertIn('echo "stale_run=true"', self.workflow)
 
     def test_implementer_has_no_general_actions_permission(self):
         permissions = self.implement.split("    permissions:\n", 1)[1].split(

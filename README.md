@@ -142,6 +142,13 @@ general Actions inspection/dispatch credential. Operator reconciliation is a
 separate repository-controlled responsibility; adding it must not broaden the
 implementer's permissions or secrets.
 
+Caller pipelines pass the triggering PR head into review, remediation, and
+merge-gate. A newer push makes older runs stale: reviewer model work is skipped,
+remediation cannot target the newer head, and merge uses GitHub CLI's atomic
+`--match-head-commit` guard. The caller template also cancels superseded
+pull-request runs to avoid duplicate model cost; the exact-SHA guards remain the
+correctness boundary when cancellation races or is unavailable.
+
 ## Ordered autonomous task execution
 
 Adoption starts the first task automatically. The adopted roster records an explicit

@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         default: "false"
+      expected_head_sha:
+        description: "PR head SHA that produced the caller pipeline run. A different live head makes this remediation decision stale."
+        required: false
+        type: string
+        default: ""
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false
@@ -59,6 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: read
+      contents: read
       pull-requests: write
       issues: write
     outputs:
@@ -68,7 +74,15 @@ jobs:
       issue_number: ${{ steps.parse.outputs.issue_number }}
       next_attempt: ${{ steps.parse.outputs.next_attempt }}
       waiting_for_operator_live_evidence: ${{ steps.parse.outputs.waiting_for_operator_live_evidence }}
+      stale_run: ${{ steps.parse.outputs.stale_run }}
     steps:
+      - name: Checkout karsift-ai-infra policy helpers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
+          persist-credentials: false
+
       # The PR body's exact wording is implement.yml's own template (see
       # "Open PR" there) - this parses it back out. Both files must stay in
       # sync; this is the one place outside implement.yml that depends on
@@ -81,6 +95,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           CI_FAILED: ${{ inputs.ci_failed }}
           REVIEW_JOB_FAILED: ${{ inputs.review_job_failed }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         run: |
           set -euo pipefail
 
@@ -95,14 +110,6 @@ jobs:
           body=$(echo "$pr_json" | jq -r .body)
           head_sha=$(echo "$pr_json" | jq -r .headRefOid)
 
-          # Only a review explicitly bound to the current PR head can drive a
-          # lifecycle decision. A prior-head WAITING or FAIL comment must not
-          # suppress or trigger remediation after the branch changes.
-          review_binding="bound to commit \`$head_sha\`"
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg binding "$review_binding" \
-              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
-
           task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
           change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
           issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || echo "")
@@ -112,50 +119,46 @@ jobs:
           echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
           echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+          echo "stale_run=false" >> "$GITHUB_OUTPUT"
 
-          # Two rounds of free-form-markdown guessing already failed here:
-          # first a bare '^FAIL' anchor missed the model's bolded "**FAIL**"
-          # (karsift-ai-infra-smoke-test's first real FAIL run), then the
-          # bold-tolerant fix that replaced it missed "## Verdict: **FAIL**"
-          # - a markdown heading with the bold token on the same line, not
-          # alone on its own line (vocanova-platform-sandbox VOC-013-T00's
-          # first real remediation-path run: a genuine FAIL verdict was
-          # posted, should_retry stayed false, and the retry silently never
-          # fired - again). prompts/review.md requires the reviewer's
-          # literal last line to be exactly "VERDICT: FAIL" (or PASS / PASS
-          # WITH NON-BLOCKING FINDINGS), with no markdown decoration - but a
-          # FOURTH occurrence (2026-07-25, VOC-025-T04 PR #76, the new
-          # OpenCode reviewer's first real run) posted "**VERDICT: FAIL**",
-          # the whole line wrapped in bold, and should_retry again read
-          # false on a genuine FAIL. A new model violating the same explicit
-          # instruction is exactly the scenario prompt compliance alone
-          # doesn't reliably survive. Added 0-2 leading/trailing '*'
-          # tolerance around the exact anchor IN ADDITION TO the prompt
-          # instruction (kept, not replaced) - merge-gate.yml's report-status
-          # job carries the identical fix and reasoning; keep both in sync.
-          # A FIFTH occurrence (2026-07-26, VOC-030-T00 PR #134, same
-          # reviewer model) posted "**VERDICT: FAIL** — H1 (...) blocks.
-          # H2 (...)" - a genuine FAIL with explanatory prose trailing the
-          # bold-closed token on the same line, which the exact end-anchor
-          # still missed. Changed the end-anchor to a word boundary instead
-          # of end-of-line so trailing prose no longer defeats the match -
-          # merge-gate.yml's report-status carries the identical fix; keep
-          # both in sync.
-          has_fail_verdict=false
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
-            has_fail_verdict=true
+          # CI/review-job failure inputs belong to the caller run's head, not
+          # whichever head happens to be live when this reusable job starts.
+          # A superseded run must never remediate a newer revision.
+          initial_decision=$(python3 karsift-ai-infra/config/decide-remediation.py \
+            --expected-sha "$EXPECTED_HEAD_SHA" \
+            --current-sha "$head_sha" \
+            --review-state PENDING \
+            --ci-failed "$CI_FAILED" \
+            --review-job-failed "$REVIEW_JOB_FAILED")
+          if [ "$initial_decision" = "STALE" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "stale_run=true" >> "$GITHUB_OUTPUT"
+            echo "Caller pipeline SHA $EXPECTED_HEAD_SHA is stale; live PR head is $head_sha. Refusing remediation."
+            exit 0
           fi
 
-          has_waiting_verdict=false
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*WAITING FOR OPERATOR LIVE EVIDENCE\b'; then
-            has_waiting_verdict=true
-          fi
+          # Only a review explicitly bound to this run's current PR head can
+          # drive a lifecycle decision. Earlier-head comments are ignored.
+          review_binding="bound to commit \`$head_sha\`"
+          verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            | jq -r --arg binding "$review_binding" \
+              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          printf '%s\n' "$verdict" > /tmp/review-verdict.md
+          review_state=$(python3 karsift-ai-infra/config/classify-review-verdict.py /tmp/review-verdict.md)
+          decision=$(python3 karsift-ai-infra/config/decide-remediation.py \
+            --expected-sha "$EXPECTED_HEAD_SHA" \
+            --current-sha "$head_sha" \
+            --review-state "$review_state" \
+            --ci-failed "$CI_FAILED" \
+            --review-job-failed "$REVIEW_JOB_FAILED")
 
-          # A current-SHA waiting verdict is an explicit operator lifecycle
-          # state, not an implementation failure. CI/reviewer infrastructure
-          # failures still win: those represent a fresh failed run and retain
-          # the existing bounded retry behavior.
-          if [ "$CI_FAILED" != "true" ] && [ "$REVIEW_JOB_FAILED" != "true" ] && [ "$has_waiting_verdict" = "true" ]; then
+          # The shared classifier tolerates historical markdown decoration,
+          # makes any machine-readable FAIL dominant over WAITING, and keeps
+          # both merge/remediation parsing identical. The decision helper then
+          # gives current-SHA CI/reviewer infrastructure failures precedence
+          # over waiting while stale runs remain absolute no-ops.
+          if [ "$decision" = "WAITING" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "waiting_for_operator_live_evidence=true" >> "$GITHUB_OUTPUT"
@@ -163,25 +166,20 @@ jobs:
             exit 0
           fi
 
-          # Found live on VOC-032-T01 PR #193: review.yml's opencode-install
-          # step failed outright (a transient "Failed to fetch version
-          # information" from opencode.ai) before the reviewer ever ran, so
-          # no verdict comment was posted at all - has_fail_verdict stayed
-          # false, CI_FAILED was false (ci passed), and this step would
-          # otherwise conclude "nothing to remediate" even though the review
-          # job's own conclusion was `failure`. merge-gate.yml correctly
-          # stays fail-closed either way (its `if` only proceeds on
-          # needs.review.result == 'success' or 'skipped', never 'failure'),
-          # but with should_retry=false too, the PR was simply stuck - no
-          # automatic path forward at all. A review job erroring before
-          # producing output is a distinct failure mode from a genuine
-          # posted FAIL verdict (there's no reviewer findings to hand the
-          # implementer as retry context), so it gets its own input rather
-          # than being folded into has_fail_verdict.
-          if [ "$CI_FAILED" != "true" ] && [ "$has_fail_verdict" = "false" ] && [ "$REVIEW_JOB_FAILED" != "true" ]; then
+          # PASS/PASS_WITH_FINDINGS/PENDING are no-ops when CI and the review
+          # job itself are healthy. Review-job errors still reach RETRY via
+          # the decision helper even though no verdict comment was produced.
+          if [ "$decision" = "NOOP" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "No FAIL verdict or waiting state, CI did not fail, and the review job itself did not error - nothing to remediate."
+            exit 0
+          fi
+
+          if [ "$decision" != "RETRY" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "Unexpected remediation decision '$decision' - refusing to dispatch." >&2
             exit 0
           fi
 

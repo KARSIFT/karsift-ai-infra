@@ -1,0 +1,125 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_module(name: str, path: Path):
+    spec = spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"cannot load {path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+classifier = load_module(
+    "classify_review_verdict",
+    ROOT / "config/classify-review-verdict.py",
+)
+decider = load_module(
+    "decide_remediation",
+    ROOT / "config/decide-remediation.py",
+)
+
+
+class LiveEvidenceLifecycleTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.review_workflow = (ROOT / ".github/workflows/review.yml").read_text()
+        cls.pipeline_template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text()
+
+    def test_verdict_fixture_matrix_is_fail_dominant(self):
+        waiting = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
+        failure = "VERDICT: FAIL"
+        self.assertEqual(classifier.classify(waiting), "WAITING")
+        self.assertEqual(classifier.classify(failure), "FAIL")
+        self.assertEqual(classifier.classify(f"{waiting}\n{failure}"), "FAIL")
+        self.assertEqual(classifier.classify(f"{failure}\n{waiting}"), "FAIL")
+        self.assertEqual(classifier.classify("no machine verdict"), "PENDING")
+
+    def test_waiting_does_not_retry(self):
+        self.assertEqual(
+            decider.decide(
+                expected_sha="a" * 40,
+                current_sha="a" * 40,
+                review_state="WAITING",
+                ci_failed=False,
+                review_job_failed=False,
+            ),
+            "WAITING",
+        )
+
+    def test_genuine_and_infrastructure_failures_retry(self):
+        common = {"expected_sha": "a" * 40, "current_sha": "a" * 40}
+        self.assertEqual(
+            decider.decide(
+                **common,
+                review_state="FAIL",
+                ci_failed=False,
+                review_job_failed=False,
+            ),
+            "RETRY",
+        )
+        self.assertEqual(
+            decider.decide(
+                **common,
+                review_state="WAITING",
+                ci_failed=True,
+                review_job_failed=False,
+            ),
+            "RETRY",
+        )
+        self.assertEqual(
+            decider.decide(
+                **common,
+                review_state="PENDING",
+                ci_failed=False,
+                review_job_failed=True,
+            ),
+            "RETRY",
+        )
+
+    def test_stale_run_never_retries_even_when_failed(self):
+        self.assertEqual(
+            decider.decide(
+                expected_sha="a" * 40,
+                current_sha="b" * 40,
+                review_state="FAIL",
+                ci_failed=True,
+                review_job_failed=True,
+            ),
+            "STALE",
+        )
+
+    def test_stale_review_skips_model_invocation(self):
+        self.assertIn("expected_head_sha:", self.review_workflow)
+        self.assertIn('echo "stale=true"', self.review_workflow)
+        self.assertRegex(
+            self.review_workflow,
+            r"- name: Run independent verification\n\s+if: steps\.pr\.outputs\.stale != 'true'",
+        )
+
+    def test_caller_template_cancels_superseded_pr_runs_and_binds_sha(self):
+        self.assertIn(
+            "group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}",
+            self.pipeline_template,
+        )
+        self.assertIn(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            self.pipeline_template,
+        )
+        self.assertEqual(
+            self.pipeline_template.count(
+                "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
+            ),
+            3,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

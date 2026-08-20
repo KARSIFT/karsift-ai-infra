@@ -33,23 +33,18 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertNotIn("COMMENT_BODY", self.workflow)
         self.assertIn("Deprecated compatibility input", self.workflow)
 
-    def test_fail_verdict_is_parsed_before_pass(self):
-        waiting = self.workflow.index(
-            "VERDICT:[[:space:]]*WAITING FOR OPERATOR LIVE EVIDENCE"
-        )
-        fail = self.workflow.index("VERDICT:[[:space:]]*FAIL")
-        pass_with_findings = self.workflow.index(
-            "VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS"
-        )
-        bare_pass = self.workflow.index("VERDICT:[[:space:]]*PASS\\b")
-        self.assertLess(waiting, fail)
-        self.assertLess(fail, pass_with_findings)
-        self.assertLess(pass_with_findings, bare_pass)
+    def test_verdict_uses_shared_fail_dominant_classifier(self):
+        self.assertIn("config/classify-review-verdict.py", self.workflow)
 
     def test_only_current_exact_sha_review_is_considered(self):
         self.assertIn("--json body,author,headRefOid", self.workflow)
         self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
         self.assertIn(".body | contains($binding)", self.workflow)
+
+    def test_merge_rechecks_the_reviewed_head_atomically(self):
+        self.assertIn("expected_head_sha:", self.workflow)
+        self.assertIn("head_sha: ${{ steps.status.outputs.head_sha }}", self.workflow)
+        self.assertIn("--match-head-commit \"$REVIEWED_HEAD_SHA\"", self.auto_merge)
 
 
 if __name__ == "__main__":

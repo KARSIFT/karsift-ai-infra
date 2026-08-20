@@ -5,6 +5,8 @@
 - Added an exact-SHA `WAITING FOR OPERATOR LIVE EVIDENCE` review lifecycle:
   merge stays fail-closed, remediation does not spend an implementation retry,
   and genuine implementation/CI/reviewer failures retain their bounded retry.
+  Superseded PR runs now cancel, stale runs cannot review/remediate a newer head,
+  and merge atomically requires the head SHA whose gate passed.
 - Removed founder-comment merge authority: R0-R4 now share the same CI and
   exact-revision independent-verification gate when autonomous merge is enabled.
 - Fixed plan adoption handoff by merging with the GitHub App token, autonomously
