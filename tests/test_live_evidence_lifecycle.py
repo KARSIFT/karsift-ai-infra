@@ -81,19 +81,22 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
           return 97
         }
         """
-        with tempfile.NamedTemporaryFile() as output:
-            env = os.environ.copy()
-            env["GITHUB_OUTPUT"] = output.name
-            completed = subprocess.run(
-                ["bash", "-c", textwrap.dedent(gh_stub) + script],
-                cwd=ROOT,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            output.seek(0)
-            return completed, output.read().decode()
+        with tempfile.TemporaryDirectory() as scratch:
+            script = script.replace("/tmp/pr.json", f"{scratch}/pr.json")
+            script = script.replace("/tmp/pr.diff", f"{scratch}/pr.diff")
+            with tempfile.NamedTemporaryFile(dir=scratch) as output:
+                env = os.environ.copy()
+                env["GITHUB_OUTPUT"] = output.name
+                completed = subprocess.run(
+                    ["bash", "-c", textwrap.dedent(gh_stub) + script],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                output.seek(0)
+                return completed, output.read().decode()
 
     def test_verdict_fixture_matrix_is_fail_dominant(self):
         waiting = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
