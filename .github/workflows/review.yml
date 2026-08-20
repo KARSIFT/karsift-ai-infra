@@ -222,13 +222,31 @@ jobs:
       # task N's diff against the full package's finished-state criteria.
       - name: Build prompt
         if: steps.pr.outputs.stale != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           task_id=$(jq -r .body /tmp/pr.json | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
+          live_evidence_attestation="not-required"
+          result_path="${{ inputs.package_path }}/.karsift/live-evidence/$task_id.result.json"
+          if [ -n "$task_id" ] && [ -f "$result_path" ]; then
+            binding="result_head_sha: \`${{ steps.pr.outputs.sha }}\`"
+            attestation_count=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
+              | jq --arg binding "$binding" \
+                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and (.body | startswith("**Live-evidence reconcile — qualified**")) and (.body | contains($binding)))] | length')
+            if [ "$attestation_count" = "1" ]; then
+              live_evidence_attestation="true"
+            else
+              live_evidence_attestation="false"
+            fi
+          fi
 
           {
             cat karsift-ai-infra/prompts/review.md
             echo
             echo "## Reviewed commit SHA: ${{ steps.pr.outputs.sha }}"
+            echo
+            echo "## Deterministic live-evidence attestation: $live_evidence_attestation"
             if [ -n "$task_id" ]; then
               echo
               echo "## Task under review: $task_id"

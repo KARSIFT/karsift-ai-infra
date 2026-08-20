@@ -326,6 +326,7 @@ def qualify_run(
     *,
     pr_head_sha: str,
     now: datetime,
+    completed_by: datetime | None = None,
     integration_contains_pr: bool | None = None,
     integration_contains_run: bool | None = None,
 ) -> dict[str, Any]:
@@ -357,6 +358,8 @@ def qualify_run(
     age = (now.astimezone(timezone.utc) - completed_at).total_seconds()
     if age < -300 or age > contract.max_age_seconds:
         raise ContractError("stale_run")
+    if completed_by is not None and completed_at > completed_by.astimezone(timezone.utc):
+        raise ContractError("waiting_deadline_exceeded")
     duration = int((completed_at - started_at).total_seconds())
     if duration < 0 or duration > MAX_METADATA_DURATION_SECONDS:
         raise ContractError("invalid_duration")

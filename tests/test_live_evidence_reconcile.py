@@ -159,6 +159,43 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             integration_contains_run=False,
         )
 
+    def test_name_only_identity_must_resolve_to_one_matching_workflow_id(self):
+        name_only_data = policy.parse_contract_yaml(
+            contract_text().replace(
+                "workflow_file: deploy-production.yml",
+                "workflow_name: deploy-production",
+            )
+        )
+        name_only = policy.validate_contract(name_only_data, "VOC-097-T02")
+        task = SimpleNamespace(
+            contract=name_only,
+            head_sha=HEAD,
+            waiting_since=NOW - timedelta(hours=1),
+        )
+
+        class NameApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, workflow_ids):
+                self.workflow_ids = workflow_ids
+
+            def get_all(self, endpoint, key=None):
+                return [
+                    {"id": workflow_id, "name": "deploy-production"}
+                    for workflow_id in self.workflow_ids
+                ]
+
+            def get(self, endpoint):
+                return {"total_count": 2, "jobs": jobs_fixture()}
+
+        accepted_run = run_fixture(workflow_id=91)
+        evidence = runner.qualify(NameApi([91]), task, accepted_run, NOW)
+        self.assertEqual(evidence["run_id"], 12345)
+        with self.assertRaises(policy.ContractError):
+            runner.qualify(NameApi([91, 92]), task, accepted_run, NOW)
+        with self.assertRaises(policy.ContractError):
+            runner.qualify(NameApi([92]), task, accepted_run, NOW)
+
     def test_09_qualifying_output_contains_allowlisted_metadata_only(self):
         evidence = policy.qualify_run(
             parsed_contract(),
@@ -202,6 +239,11 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             run_fixture(updated_at="2026-08-20T22:00:00Z"),
         )
         self.assert_rejected(contract, run_fixture(conclusion="failure"))
+        self.assert_rejected(
+            parsed_contract(),
+            run_fixture(updated_at="2026-08-20T23:59:00Z"),
+            completed_by=datetime(2026, 8, 20, 23, 58, tzinfo=timezone.utc),
+        )
 
     def test_13_timeout_is_bounded_and_marker_is_single_use(self):
         self.assertFalse(policy.timed_out(NOW - timedelta(hours=71), NOW))
@@ -211,12 +253,25 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
 
     def test_14_duplicate_result_short_circuits_reconciliation(self):
         task = SimpleNamespace(result_path="result.json", head_sha=HEAD)
+        task.pr_number = 12
+        class AttestedApi:
+            repository = "KARSIFT/example"
+
+            def get_all(self, endpoint, key=None):
+                return [{
+                    "user": {"login": "karsift-ai-infra-bot[bot]"},
+                    "body": (
+                        "**Live-evidence reconcile — qualified**\n"
+                        f"result_head_sha: `{HEAD}`"
+                    ),
+                }]
+
         with patch.object(
             runner,
             "read_repository_file",
             return_value='{"schema_version":1,"state":"qualified","run_id":12345}',
         ):
-            self.assertTrue(runner.result_already_present(object(), task))
+            self.assertTrue(runner.result_already_present(AttestedApi(), task))
         self.assertIn(
             "group: live-evidence-reconcile-${{ github.repository }}",
             self.workflow,
@@ -246,19 +301,90 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             )
 
     def test_operator_permissions_are_separate_from_implementer(self):
-        self.assertNotIn("actions: write", self.workflow)
-        self.assertIn("actions: read", self.workflow)
+        operator_job_permissions = self.workflow.split("    permissions:", 1)[1].split(
+            "    steps:", 1
+        )[0]
+        self.assertNotIn("actions: write", operator_job_permissions)
+        self.assertIn("actions: read", operator_job_permissions)
         implement_permissions = self.implement.split("permissions:", 1)[1].split(
             "steps:", 1
         )[0]
         self.assertNotIn("actions:", implement_permissions)
         self.assertIn("Mint separate operator token", self.workflow)
+        self.assertIn("permission-actions: write", self.workflow)
+        self.assertIn("permission-contents: write", self.workflow)
+        self.assertIn("permission-issues: write", self.workflow)
+        self.assertIn("ref: ${{ github.workflow_sha }}", self.workflow)
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
         self.assertNotIn("  workflow_run:", self.pipeline)
         self.assertIn("reconcile-live-evidence", self.pipeline)
         self.assertIn("live_evidence_run_id", self.pipeline)
+
+    def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):
+        body = (
+            f"**Independent verification - bound to commit `{HEAD}`**\n\n"
+            "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
+        )
+        comment = {
+            "body": body,
+            "created_at": "2026-08-20T23:59:00Z",
+            "user": {"login": "github-actions[bot]", "type": "Bot"},
+        }
+
+        class ReviewApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, checks):
+                self.checks = checks
+
+            def get_all(self, endpoint, key=None):
+                return self.checks
+
+        good_check = {
+            "name": "review / review",
+            "conclusion": "success",
+            "app": {"slug": "github-actions"},
+            "started_at": "2026-08-20T23:55:00Z",
+            "completed_at": "2026-08-21T00:00:00Z",
+        }
+        self.assertIsNotNone(
+            runner.trusted_waiting_review(ReviewApi([good_check]), HEAD, [comment])
+        )
+        forged = {**comment, "user": {"login": "untrusted", "type": "User"}}
+        self.assertIsNone(
+            runner.trusted_waiting_review(ReviewApi([good_check]), HEAD, [forged])
+        )
+        with self.assertRaises(policy.ContractError):
+            runner.trusted_waiting_review(ReviewApi([]), HEAD, [comment])
+
+    def test_non_agent_pr_cannot_enter_wake_path(self):
+        class NoApiCalls:
+            repository = "KARSIFT/example"
+
+            def __getattr__(self, name):
+                raise AssertionError("non-agent PR must be rejected before API reads")
+
+        pr = {
+            "number": 7,
+            "body": "Implements task `VOC-097-T02`\nPackage path: `specs/changes/x`\nCloses #8",
+            "head": {
+                "sha": HEAD,
+                "ref": "feature/unreviewed",
+                "repo": {"full_name": "KARSIFT/example"},
+            },
+        }
+        self.assertIsNone(runner.current_waiting_task(NoApiCalls(), pr))
+
+    def test_dispatch_requires_protected_unchanged_workflow_and_excludes_pipeline(self):
+        self.assertIn("dispatch_branch_unprotected", self.runner_source)
+        self.assertIn("dispatch_workflow_not_trusted", self.runner_source)
+        self.assertIn('dispatch.workflow_file == "pipeline.yml"', self.runner_source)
+        self.assertLess(
+            self.runner_source.index("/dispatches\""),
+            self.runner_source.index("declared dispatch requested**"),
+        )
 
 
 if __name__ == "__main__":

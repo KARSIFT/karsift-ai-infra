@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import base64
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import PurePosixPath
@@ -38,6 +38,10 @@ PACKAGE_RE = re.compile(r"Package path: `([^`]+)`")
 TASK_RE = re.compile(r"Implements task `([^`]+)`")
 ISSUE_RE = re.compile(r"Closes #([0-9]+)")
 WAITING_PREFIX = "**Independent verification"
+TRUSTED_REVIEW_AUTHOR = "github-actions[bot]"
+TRUSTED_REVIEW_CHECK = "review / review"
+TRUSTED_REVIEW_APP = "github-actions"
+TRUSTED_RECONCILE_AUTHOR = "karsift-ai-infra-bot[bot]"
 
 
 class ApiError(RuntimeError):
@@ -72,6 +76,19 @@ class GitHub:
 
     def get(self, endpoint: str) -> Any:
         return self._run([endpoint])
+
+    def get_all(self, endpoint: str, key: str | None = None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        separator = "&" if "?" in endpoint else "?"
+        for page in range(1, 11):
+            response = self.get(f"{endpoint}{separator}per_page=100&page={page}")
+            page_items = response.get(key) if key and isinstance(response, dict) else response
+            if not isinstance(page_items, list):
+                raise ApiError("github_api_page_invalid")
+            items.extend(item for item in page_items if isinstance(item, dict))
+            if len(page_items) < 100:
+                return items
+        raise ApiError("github_api_pagination_limit")
 
     def get_optional(self, endpoint: str) -> Any | None:
         env = os.environ.copy()
@@ -138,6 +155,46 @@ def read_repository_file(api: GitHub, path: str, ref: str) -> str | None:
         raise ContractError("invalid_repository_file") from exc
 
 
+def trusted_waiting_review(
+    api: GitHub,
+    head_sha: str,
+    comments: list[dict[str, Any]],
+) -> tuple[dict[str, Any], datetime] | None:
+    binding = f"bound to commit `{head_sha}`"
+    reviews = [
+        comment
+        for comment in comments
+        if isinstance(comment.get("body"), str)
+        and comment["body"].startswith(WAITING_PREFIX)
+        and binding in comment["body"]
+        and (comment.get("user") or {}).get("login") == TRUSTED_REVIEW_AUTHOR
+        and (comment.get("user") or {}).get("type") == "Bot"
+    ]
+    if not reviews:
+        return None
+    latest = max(reviews, key=lambda item: item.get("created_at") or "")
+    if review_state(latest["body"]) != "WAITING":
+        return None
+    waiting_since = parse_time(latest.get("created_at"))
+    check_runs = api.get_all(
+        f"repos/{api.repository}/commits/{head_sha}/check-runs",
+        key="check_runs",
+    )
+    trusted_checks = [
+        check
+        for check in check_runs
+        if check.get("name") == TRUSTED_REVIEW_CHECK
+        and check.get("conclusion") == "success"
+        and (check.get("app") or {}).get("slug") == TRUSTED_REVIEW_APP
+    ]
+    if not any(
+        parse_time(check.get("started_at")) <= waiting_since <= parse_time(check.get("completed_at"))
+        for check in trusted_checks
+    ):
+        raise ContractError("untrusted_waiting_marker")
+    return latest, waiting_since
+
+
 def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     number = pr.get("number")
     body = pr.get("body") or ""
@@ -151,6 +208,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         or not isinstance(head_sha, str)
         or not SHA_RE.fullmatch(head_sha)
         or not isinstance(head_ref, str)
+        or not head_ref.startswith("agent/")
     ):
         return None
     package_match = PACKAGE_RE.search(body)
@@ -161,25 +219,13 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     package_path = safe_package_path(package_match.group(1))
     task_id = task_match.group(1)
 
-    comments_response = api.get(
-        f"repos/{api.repository}/issues/{number}/comments?per_page=100"
+    comments_response = api.get_all(
+        f"repos/{api.repository}/issues/{number}/comments"
     )
-    if not isinstance(comments_response, list):
-        raise ApiError("invalid_comments_response")
-    binding = f"bound to commit `{head_sha}`"
-    reviews = [
-        comment
-        for comment in comments_response
-        if isinstance(comment.get("body"), str)
-        and comment["body"].startswith(WAITING_PREFIX)
-        and binding in comment["body"]
-    ]
-    if not reviews:
+    trusted_review = trusted_waiting_review(api, head_sha, comments_response)
+    if trusted_review is None:
         return None
-    latest = max(reviews, key=lambda item: item.get("created_at") or "")
-    if review_state(latest["body"]) != "WAITING":
-        return None
-    waiting_since = parse_time(latest.get("created_at"))
+    _, waiting_since = trusted_review
 
     contract_path = f"{package_path}/.karsift/live-evidence/{task_id}.yaml"
     contract_text = read_repository_file(api, contract_path, head_sha)
@@ -205,7 +251,7 @@ def waiting_tasks(api: GitHub, target_pr: int | None) -> list[WaitingTask]:
     if target_pr is not None:
         candidates = [api.get(f"repos/{api.repository}/pulls/{target_pr}")]
     else:
-        candidates = api.get(f"repos/{api.repository}/pulls?state=open&per_page=100")
+        candidates = api.get_all(f"repos/{api.repository}/pulls?state=open")
     if not isinstance(candidates, list):
         raise ApiError("invalid_pull_response")
     result = []
@@ -232,7 +278,18 @@ def result_already_present(api: GitHub, task: WaitingTask) -> bool:
         raise ContractError("malformed_result_record")
     if not isinstance(parsed, dict):
         raise ContractError("malformed_result_record")
-    return parsed.get("state") == "qualified"
+    if parsed.get("state") != "qualified":
+        raise ContractError("malformed_result_record")
+    comments = api.get_all(
+        f"repos/{api.repository}/issues/{task.pr_number}/comments"
+    )
+    binding = f"result_head_sha: `{task.head_sha}`"
+    return any(
+        (comment.get("user") or {}).get("login") == TRUSTED_RECONCILE_AUTHOR
+        and (comment.get("body") or "").startswith("**Live-evidence reconcile — qualified**")
+        and binding in (comment.get("body") or "")
+        for comment in comments
+    )
 
 
 def run_jobs(api: GitHub, run_id: int) -> list[dict[str, Any]]:
@@ -273,7 +330,14 @@ def candidate_runs(api: GitHub, task: WaitingTask) -> list[dict[str, Any]]:
         identity = quote(contract.workflow_file, safe="")
         endpoint = f"repos/{api.repository}/actions/workflows/{identity}/runs"
     else:
-        endpoint = f"repos/{api.repository}/actions/runs"
+        workflows = api.get_all(
+            f"repos/{api.repository}/actions/workflows",
+            key="workflows",
+        )
+        matches = [workflow for workflow in workflows if workflow.get("name") == contract.workflow_name]
+        if len(matches) != 1 or not isinstance(matches[0].get("id"), int):
+            raise ContractError("ambiguous_workflow_identity")
+        endpoint = f"repos/{api.repository}/actions/workflows/{matches[0]['id']}/runs"
     response = api.get(
         f"{endpoint}?branch={quote(contract.branch, safe='')}&per_page=30"
     )
@@ -287,6 +351,17 @@ def qualify(api: GitHub, task: WaitingTask, run: dict[str, Any], now: datetime) 
     run_id = run.get("id")
     if not isinstance(run_id, int) or run_id <= 0:
         raise ContractError("invalid_run_id")
+    if task.contract.workflow_file is None and task.contract.workflow_id is None:
+        workflows = api.get_all(
+            f"repos/{api.repository}/actions/workflows",
+            key="workflows",
+        )
+        matches = [
+            workflow for workflow in workflows
+            if workflow.get("name") == task.contract.workflow_name
+        ]
+        if len(matches) != 1 or run.get("workflow_id") != matches[0].get("id"):
+            raise ContractError("ambiguous_workflow_identity")
     contains_pr = contains_run = None
     if task.contract.lineage_mode == "integration_contains_pr_head":
         run_sha = run.get("head_sha")
@@ -299,6 +374,7 @@ def qualify(api: GitHub, task: WaitingTask, run: dict[str, Any], now: datetime) 
         run_jobs(api, run_id),
         pr_head_sha=task.head_sha,
         now=now,
+        completed_by=task.waiting_since + timedelta(hours=72),
         integration_contains_pr=contains_pr,
         integration_contains_run=contains_run,
     )
@@ -382,11 +458,9 @@ def post_qualified_comment(write_api: GitHub, task: WaitingTask, evidence: dict[
 
 
 def comment_exists(api: GitHub, issue_number: int, marker: str) -> bool:
-    comments = api.get(
-        f"repos/{api.repository}/issues/{issue_number}/comments?per_page=100"
+    comments = api.get_all(
+        f"repos/{api.repository}/issues/{issue_number}/comments"
     )
-    if not isinstance(comments, list):
-        raise ApiError("invalid_comments_response")
     return any(marker in (comment.get("body") or "") for comment in comments)
 
 
@@ -419,6 +493,35 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
     if comment_exists(read_api, task.pr_number, marker):
         print(f"live-evidence: dispatch already requested task={task.task_id}")
         return
+    if dispatch.workflow_file == "pipeline.yml":
+        raise ContractError("dispatch_workflow_forbidden")
+    repository = read_api.get(f"repos/{read_api.repository}")
+    default_branch = (repository or {}).get("default_branch")
+    if not isinstance(default_branch, str):
+        raise ContractError("default_branch_unavailable")
+    target_branch = read_api.get(
+        f"repos/{read_api.repository}/branches/{quote(task.contract.branch, safe='')}"
+    )
+    if (target_branch or {}).get("protected") is not True:
+        raise ContractError("dispatch_branch_unprotected")
+    workflow_path = f".github/workflows/{dispatch.workflow_file}"
+    target_workflow = read_api.get_optional(
+        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={quote(task.contract.branch, safe='')}"
+    )
+    default_workflow = read_api.get_optional(
+        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={quote(default_branch, safe='')}"
+    )
+    if (
+        not isinstance(target_workflow, dict)
+        or not isinstance(default_workflow, dict)
+        or target_workflow.get("sha") != default_workflow.get("sha")
+    ):
+        raise ContractError("dispatch_workflow_not_trusted")
+    write_api.mutate(
+        "POST",
+        f"repos/{write_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",
+        {"ref": task.contract.branch, "inputs": dispatch.inputs},
+    )
     write_api.mutate(
         "POST",
         f"repos/{write_api.repository}/issues/{task.pr_number}/comments",
@@ -433,11 +536,6 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
                 "Declared inputs were passed without copying their values into this comment.",
             ])
         },
-    )
-    write_api.mutate(
-        "POST",
-        f"repos/{write_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",
-        {"ref": task.contract.branch, "inputs": dispatch.inputs},
     )
     print(f"live-evidence: declared dispatch requested task={task.task_id}")
 

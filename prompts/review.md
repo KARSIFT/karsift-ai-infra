@@ -115,7 +115,10 @@ The repository-controlled reconciler satisfies that pending condition by adding
 Treat the record as evidence only when it is schema version 1, its state is
 `qualified`, its fields are limited to workflow/event/branch/exact-SHA/run/job/
 conclusion/timestamp/duration metadata, and it matches the adjacent declared
-contract. A malformed, mismatched, or arbitrarily expanded result is a finding,
+contract. The deterministic attestation value included in this prompt must also
+be exactly `true`; `false` means the result was not accompanied by the trusted
+operator-App comment bound to this reviewed head. A malformed, mismatched,
+unattested, or arbitrarily expanded result is a finding,
 not permission to pass. The reconcile commit exists specifically to make this
 review fresh and exact-SHA-bound; never reuse the prior waiting verdict.
 

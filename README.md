@@ -153,7 +153,9 @@ broad `workflow_run` trigger that recursively observes the pipeline itself. It:
   arbitrary output;
 - validates workflow identity, required successful jobs, event, branch, exact
   SHA lineage, conclusion, and age before qualifying evidence;
-- can dispatch only the workflow/ref/inputs declared by that contract;
+- can dispatch only the workflow/ref/inputs declared by that contract, and
+  only when the target ref is protected and the workflow file is byte-identical
+  to the default-branch copy (the caller pipeline itself is always forbidden);
 - serializes per calling repository, records one allowlisted
   `<task_id>.result.json`, and updates the PR ref without force; and
 - emits one timeout escalation after 72 hours without invoking implementation
@@ -164,7 +166,10 @@ The result commit changes the PR head. The calling project's normal
 bound to the post-reconcile SHA; a PASS from the older waiting head cannot carry
 forward. Mutations use a short-lived installation token from the KARSIFT GitHub
 App. The reusable job's own `GITHUB_TOKEN` remains read-only, and the implementer
-never receives the App token.
+never receives the App token. The App token is repository-scoped and requests
+only Actions, contents, and issues write permissions. Waiting is accepted only
+from the successful GitHub Actions reviewer check, and the post-reconcile review
+requires a trusted App-authored attestation bound to its new exact head.
 
 Caller pipelines pass the triggering PR head into review, remediation, and
 merge-gate. A newer push makes older runs stale: reviewer model work is skipped,
