@@ -50,8 +50,9 @@ on:
         default: "false"
       expected_head_sha:
         description: "PR head SHA that produced the caller pipeline run. A different live head makes this remediation decision stale."
-        required: true
+        required: false
         type: string
+        default: ""
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false

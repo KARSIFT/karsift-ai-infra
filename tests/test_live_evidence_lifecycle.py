@@ -114,17 +114,36 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         self.assertEqual(head_guard.verify(sha_a, sha_b), "STALE")
         self.assertEqual(head_guard.verify(sha_a, sha_a), "CURRENT")
 
-    def test_exact_sha_is_mandatory_at_reusable_boundaries(self):
+    def test_omitted_sha_is_transition_compatible_but_runtime_fail_closed(self):
         for workflow in (
             self.review_workflow,
             self.remediate_workflow,
             self.merge_workflow,
         ):
             expected_head_block = "\n".join(
-                workflow.split("expected_head_sha:", 1)[1].splitlines()[:4]
+                workflow.split("expected_head_sha:", 1)[1].splitlines()[:5]
             )
-            self.assertIn("required: true", expected_head_block)
-            self.assertNotIn('default: ""', expected_head_block)
+            self.assertIn("required: false", expected_head_block)
+            self.assertIn('default: ""', expected_head_block)
+
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR head SHA. Skipping reviewer model invocation.",
+            self.review_workflow,
+        )
+        self.assertIn(
+            'if [ "$head_state" != "CURRENT" ]; then',
+            self.remediate_workflow,
+        )
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state.",
+            self.merge_workflow,
+        )
+        for workflow in (
+            self.review_workflow,
+            self.remediate_workflow,
+            self.merge_workflow,
+        ):
+            self.assertNotIn("${expected:-live}", workflow)
 
     def test_retry_revalidates_head_and_uses_explicit_atomic_lease(self):
         self.assertIn(
@@ -153,7 +172,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.pipeline_template,
         )
         self.assertIn(
-            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}",
             self.pipeline_template,
         )
         self.assertEqual(

@@ -96,8 +96,9 @@ on:
         default: "develop"
       expected_head_sha:
         description: "PR head SHA that produced the caller pipeline run. A different live head skips this stale review before model invocation."
-        required: true
+        required: false
         type: string
+        default: ""
     secrets:
       CURSOR_API_KEY:
         required: true
