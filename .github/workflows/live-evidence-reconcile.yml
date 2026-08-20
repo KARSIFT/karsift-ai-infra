@@ -46,8 +46,10 @@ jobs:
       - name: Checkout shared reconciliation policy
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          repository: KARSIFT/karsift-ai-infra
-          ref: ${{ github.workflow_sha }}
+          # The github context belongs to the caller. These job contexts point
+          # to the exact called reusable-workflow revision instead.
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: karsift-ai-infra
           persist-credentials: false
 

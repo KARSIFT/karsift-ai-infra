@@ -314,7 +314,8 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("permission-actions: write", self.workflow)
         self.assertIn("permission-contents: write", self.workflow)
         self.assertIn("permission-issues: write", self.workflow)
-        self.assertIn("ref: ${{ github.workflow_sha }}", self.workflow)
+        self.assertIn("repository: ${{ job.workflow_repository }}", self.workflow)
+        self.assertIn("ref: ${{ job.workflow_sha }}", self.workflow)
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
