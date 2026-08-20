@@ -142,6 +142,30 @@ general Actions inspection/dispatch credential. Operator reconciliation is a
 separate repository-controlled responsibility; adding it must not broaden the
 implementer's permissions or secrets.
 
+`live-evidence-reconcile.yml` implements that separate responsibility. Calling
+repositories invoke it from an hourly schedule (or an explicit reconcile
+dispatch), so it can poll any workflow named by a task contract without adding a
+broad `workflow_run` trigger that recursively observes the pipeline itself. It:
+
+- accepts only the contract at
+  `<package>/.karsift/live-evidence/<task_id>.yaml` on a current waiting PR;
+- reads Actions run and job metadata only — never logs, artifacts, steps, or
+  arbitrary output;
+- validates workflow identity, required successful jobs, event, branch, exact
+  SHA lineage, conclusion, and age before qualifying evidence;
+- can dispatch only the workflow/ref/inputs declared by that contract;
+- serializes per calling repository, records one allowlisted
+  `<task_id>.result.json`, and updates the PR ref without force; and
+- emits one timeout escalation after 72 hours without invoking implementation
+  remediation, Sentry, or the operational-failure observer.
+
+The result commit changes the PR head. The calling project's normal
+`pull_request: synchronize` path therefore runs CI and independent review again,
+bound to the post-reconcile SHA; a PASS from the older waiting head cannot carry
+forward. Mutations use a short-lived installation token from the KARSIFT GitHub
+App. The reusable job's own `GITHUB_TOKEN` remains read-only, and the implementer
+never receives the App token.
+
 Caller pipelines pass the triggering PR head into review, remediation, and
 merge-gate. A newer push makes older runs stale: reviewer model work is skipped,
 remediation cannot target the newer head, and merge uses GitHub CLI's atomic

@@ -1,0 +1,80 @@
+name: live-evidence-reconcile (reusable)
+
+# Repository-controlled operator path for declared live GitHub Actions evidence.
+# It reads only run/job metadata, never logs or artifacts. Mutations use the
+# separately installed KARSIFT GitHub App; the implementer receives neither
+# Actions access nor this token. A qualifying run creates one sanitized result
+# commit, which changes the PR head and therefore forces the caller's ordinary
+# exact-SHA CI/review/merge-gate path to run again.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "reconcile polls declared workflows; observe validates one run id; dispatch invokes one declared workflow."
+        required: true
+        type: string
+      workflow_run_id:
+        description: "Observe mode only: repository Actions run id to validate."
+        required: false
+        type: string
+        default: ""
+      pr_number:
+        description: "Optional reconcile target; required for dispatch mode."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      KARSIFT_BOT_APP_ID:
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
+        required: true
+
+concurrency:
+  group: live-evidence-reconcile-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout shared reconciliation policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          ref: main
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Mint separate operator token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      - name: Reconcile declared live evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          KARSIFT_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          RECONCILE_MODE: ${{ inputs.mode }}
+          WORKFLOW_RUN_ID: ${{ inputs.workflow_run_id }}
+          TARGET_PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          args=(
+            --mode "$RECONCILE_MODE"
+            --repository "$GITHUB_REPOSITORY"
+          )
+          if [ -n "$WORKFLOW_RUN_ID" ]; then
+            args+=(--run-id "$WORKFLOW_RUN_ID")
+          fi
+          if [ -n "$TARGET_PR_NUMBER" ]; then
+            args+=(--pr-number "$TARGET_PR_NUMBER")
+          fi
+          python3 karsift-ai-infra/config/live-evidence-reconcile-runner.py "${args[@]}"

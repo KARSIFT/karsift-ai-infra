@@ -64,7 +64,10 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertNotIn("git push -u --force origin", self.adopt)
 
     def test_caller_template_has_reconciliation_dispatch(self):
-        self.assertIn("options: [implement, plan, reconcile, reconcile-release]", self.template)
+        self.assertIn(
+            "options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence]",
+            self.template,
+        )
         self.assertIn("plan_pr_number:", self.template)
         self.assertIn("inputs.action == 'reconcile'", self.template)
         self.assertIn("inputs.action == 'reconcile-release'", self.template)

@@ -110,6 +110,15 @@ Use `WAITING FOR OPERATOR LIVE EVIDENCE` only when all of these are true:
 - there is no observed failed, rejected, stale, malformed, or non-matching live
   run that constitutes a real finding.
 
+The repository-controlled reconciler satisfies that pending condition by adding
+`<package-path>/.karsift/live-evidence/<task_id>.result.json` on a new PR head.
+Treat the record as evidence only when it is schema version 1, its state is
+`qualified`, its fields are limited to workflow/event/branch/exact-SHA/run/job/
+conclusion/timestamp/duration metadata, and it matches the adjacent declared
+contract. A malformed, mismatched, or arbitrarily expanded result is a finding,
+not permission to pass. The reconcile commit exists specifically to make this
+review fresh and exact-SHA-bound; never reuse the prior waiting verdict.
+
 Waiting is a lifecycle state, not a finding and not a request for the
 implementer to edit workflows. Explain the pending evidence and its declared
 contract in the report, but do not invent proof, grant Actions access, or mark

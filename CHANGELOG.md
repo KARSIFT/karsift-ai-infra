@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added `live-evidence-reconcile.yml`, a serialized, App-authenticated operator
+  path that validates declared Actions metadata, records one sanitized result
+  commit, forces fresh exact-SHA review, optionally dispatches only declared
+  workflow inputs, and escalates one 72-hour timeout. The caller template polls
+  hourly instead of using a recursive catch-all `workflow_run` trigger.
+- Added dependency-free strict contract parsing and deterministic rejection,
+  sanitization, lineage, staleness, timeout, dispatch, and deduplication tests.
+
 - Added an exact-SHA `WAITING FOR OPERATOR LIVE EVIDENCE` review lifecycle:
   merge stays fail-closed, remediation does not spend an implementation retry,
   and genuine implementation/CI/reviewer failures retain their bounded retry.
