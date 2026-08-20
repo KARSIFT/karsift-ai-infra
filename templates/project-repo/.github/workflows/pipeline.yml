@@ -97,6 +97,13 @@ on:
         required: false
         type: string
 
+# A synchronize event supersedes every older pipeline for the same PR. This
+# prevents duplicate reviewer/model runs and stale remediation/merge decisions,
+# while issue and manual-dispatch runs retain unique groups.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   implement:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'implement'
@@ -201,6 +208,7 @@ jobs:
       pr_number: ${{ github.event.pull_request.number }}
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
       integration_branch: "develop"   # match the value used for implement, above
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
     secrets: inherit
 
   # Runs after ci and every review. A no-op unless ci failed outright or the
@@ -231,6 +239,7 @@ jobs:
       integration_branch: "develop"   # match the value used for implement, above
       ci_failed: ${{ needs.ci.result == 'failure' }}
       review_job_failed: ${{ needs.review.result == 'failure' }}
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
     secrets: inherit
 
   # `needs: review` + the `always()` guard below fixes a real race: on a
@@ -260,6 +269,7 @@ jobs:
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
     secrets: inherit
 
   # Promotes a completed package after its roster closes. reconcile-release

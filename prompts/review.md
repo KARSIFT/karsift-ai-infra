@@ -35,8 +35,8 @@ useful. A question you ask into the void is neither - it produces no PR
 comment content worth having and no verdict at all.
 
 Whatever else happens, your response's last line is always exactly one of the
-three VERDICT lines below - never a question, never "pending human input,"
-never nothing.
+four VERDICT lines below - never a question, never free-form "pending human
+input," never nothing.
 
 ## Scope your exploration
 
@@ -96,7 +96,25 @@ Open Critical and High findings block. Report exactly one of:
 
 - `PASS`
 - `PASS WITH NON-BLOCKING FINDINGS`
+- `WAITING FOR OPERATOR LIVE EVIDENCE`
 - `FAIL`
+
+Use `WAITING FOR OPERATOR LIVE EVIDENCE` only when all of these are true:
+
+- the reviewed task explicitly declares operator-owned evidence in
+  `<package-path>/.karsift/live-evidence/<task_id>.yaml`;
+- the implementation, documentation, deterministic checks, and every other
+  task-scoped acceptance condition pass;
+- the only missing condition is a pending live GitHub Actions run that the
+  implementer is intentionally not authorized to inspect or dispatch; and
+- there is no observed failed, rejected, stale, malformed, or non-matching live
+  run that constitutes a real finding.
+
+Waiting is a lifecycle state, not a finding and not a request for the
+implementer to edit workflows. Explain the pending evidence and its declared
+contract in the report, but do not invent proof, grant Actions access, or mark
+the task passed. Any implementation defect still uses `FAIL`, even if live
+evidence is also pending.
 
 Automation downstream of this review (remediate.yml, merge-gate.yml) parses your
 verdict out of this comment with a plain-text anchor, not an LLM - so the exact
@@ -107,6 +125,7 @@ exactly one of:
 ```
 VERDICT: PASS
 VERDICT: PASS WITH NON-BLOCKING FINDINGS
+VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE
 VERDICT: FAIL
 ```
 

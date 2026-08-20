@@ -9,17 +9,52 @@ class RemediatePolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = (ROOT / ".github/workflows/remediate.yml").read_text()
+        cls.merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text()
+        cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+        cls.review_prompt = (ROOT / "prompts/review.md").read_text()
 
     def test_only_ci_review_failure_or_review_job_error_can_retry(self):
-        self.assertIn('CI_FAILED" != "true"', self.workflow)
-        self.assertIn('has_fail_verdict" = "false"', self.workflow)
-        self.assertIn('REVIEW_JOB_FAILED" != "true"', self.workflow)
+        self.assertIn("config/decide-remediation.py", self.workflow)
+        self.assertIn('--ci-failed "$CI_FAILED"', self.workflow)
+        self.assertIn('--review-job-failed "$REVIEW_JOB_FAILED"', self.workflow)
         self.assertIn('echo "should_retry=false"', self.workflow)
 
     def test_retry_is_bounded_to_two_attempts(self):
         self.assertIn("next_attempt=$((attempt + 1))", self.workflow)
         self.assertIn('if [ "$next_attempt" -gt 2 ]; then', self.workflow)
         self.assertIn("Stopping - not retrying automatically", self.workflow)
+
+    def test_waiting_is_machine_detectable_and_does_not_retry(self):
+        marker = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
+        self.assertIn(marker, self.review_prompt)
+        self.assertIn("config/classify-review-verdict.py", self.workflow)
+        self.assertIn('decision" = "WAITING"', self.workflow)
+        self.assertIn('echo "should_retry=false"', self.workflow)
+        waiting_guard = self.workflow.index('decision" = "WAITING"')
+        retry_output = self.workflow.index('echo "should_retry=true"')
+        self.assertLess(waiting_guard, retry_output)
+
+    def test_waiting_is_bound_to_current_exact_pr_head(self):
+        self.assertIn("--json body,headRefOid", self.workflow)
+        self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
+        self.assertIn(".body | contains($binding)", self.workflow)
+
+    def test_genuine_fail_and_infrastructure_failures_still_retry(self):
+        self.assertIn('decision" != "RETRY"', self.workflow)
+        self.assertIn('echo "should_retry=true"', self.workflow)
+
+    def test_stale_caller_run_cannot_dispatch_newer_head(self):
+        self.assertIn("expected_head_sha:", self.workflow)
+        self.assertIn('--expected-sha "$EXPECTED_HEAD_SHA"', self.workflow)
+        self.assertIn('initial_decision" = "STALE"', self.workflow)
+        self.assertIn('echo "stale_run=true"', self.workflow)
+
+    def test_implementer_has_no_general_actions_permission(self):
+        permissions = self.implement.split("    permissions:\n", 1)[1].split(
+            "    steps:\n", 1
+        )[0]
+        self.assertNotIn("actions:", permissions)
+        self.assertIn("no `actions` permission", (ROOT / "README.md").read_text())
 
     def test_retry_reuses_implementer_with_incremented_attempt(self):
         retry = self.workflow.split("  retry:", 1)[1]

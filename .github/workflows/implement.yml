@@ -58,6 +58,11 @@ on:
         required: false
         type: string
         default: "develop"
+      expected_head_sha:
+        description: "Required on remediation attempts: exact failed PR head that this retry may replace."
+        required: false
+        type: string
+        default: ""
     secrets:
       OPENAI_API_KEY:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
@@ -268,8 +273,20 @@ jobs:
           branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           git fetch origin "${{ inputs.integration_branch }}"
-          if [ "${{ inputs.attempt }}" != "1" ] && git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
+          if [ "${{ inputs.attempt }}" != "1" ]; then
+            if ! git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
+              echo "Remediation attempt has no existing remote branch $branch; refusing to spend model work on an unbound retry." >&2
+              exit 1
+            fi
             git fetch origin "$branch"
+            remote_head=$(git rev-parse "origin/$branch")
+            head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
+              --expected-sha "${{ inputs.expected_head_sha }}" \
+              --current-sha "$remote_head")
+            if [ "$head_state" != "CURRENT" ]; then
+              echo "Remediation exact-head precondition is $head_state; refusing to modify $branch." >&2
+              exit 1
+            fi
             git checkout -B "$branch" "origin/$branch"
             if git rebase "origin/${{ inputs.integration_branch }}"; then
               echo "sync_mode=rebased" >> "$GITHUB_OUTPUT"
@@ -957,8 +974,22 @@ jobs:
           # though the implementer itself had succeeded. Fetching the
           # branch first (a no-op, exit-0 on attempt 1 when it doesn't
           # exist yet) gives the lease a real baseline to compare against.
-          git fetch origin "${{ steps.branch.outputs.branch }}" 2>/dev/null || true
-          git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
+          branch="${{ steps.branch.outputs.branch }}"
+          if [ "${{ inputs.attempt }}" != "1" ]; then
+            expected_head="${{ inputs.expected_head_sha }}"
+            live_head=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
+            head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
+              --expected-sha "$expected_head" \
+              --current-sha "$live_head")
+            if [ "$head_state" != "CURRENT" ]; then
+              echo "PR head changed after remediation started ($head_state); refusing stale push." >&2
+              exit 1
+            fi
+            git push --force-with-lease="refs/heads/$branch:$expected_head" -u origin "$branch"
+          else
+            git fetch origin "$branch" 2>/dev/null || true
+            git push --force-with-lease -u origin "$branch"
+          fi
 
       # On a remediation attempt, the force-push above already updated the
       # existing PR (pushing new commits to a PR's head branch updates it

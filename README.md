@@ -126,8 +126,35 @@ two-attempt cap `implement.yml` already enforced for its own internal failures, 
 where an implementer *success* followed by a reviewer *FAIL* (or a plain CI failure) previously went
 nowhere until a human happened to notice.
 
-A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or no verdict yet (with CI still green) are all no-ops -
-this only ever acts on an explicit `FAIL` or a CI failure.
+A declared operator-owned live-evidence task may instead receive the exact
+machine-readable state `VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE` when its
+implementation is correct and the only missing acceptance proof is the declared
+live Actions run. Merge remains fail-closed, but `remediate.yml` does not spend an
+implementation retry on that state. It is also forbidden to tell the implementer
+to edit unrelated workflows merely to manufacture the evidence.
+
+A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, waiting state, or no verdict yet
+(with CI still green) are remediation no-ops. Only an explicit implementation
+`FAIL`, CI failure, or review-job error can consume the bounded retry.
+
+The implementer job deliberately has no `actions` permission and receives no
+general Actions inspection/dispatch credential. Operator reconciliation is a
+separate repository-controlled responsibility; adding it must not broaden the
+implementer's permissions or secrets.
+
+Caller pipelines pass the triggering PR head into review, remediation, and
+merge-gate. A newer push makes older runs stale: reviewer model work is skipped,
+remediation cannot target the newer head, and merge uses GitHub CLI's atomic
+`--match-head-commit` guard. The caller template also cancels superseded
+pull-request runs to avoid duplicate model cost; the exact-SHA guards remain the
+correctness boundary when cancellation races or is unavailable.
+
+Those exact-head inputs are mandatory on review, remediation, and merge-gate,
+so an older caller fails closed instead of silently falling back to a live head.
+A remediation retry carries the failed head into `implement.yml`, validates it
+before model work, revalidates it immediately before publishing, and uses an
+explicit SHA-valued force-with-lease. A commit arriving in either timing window
+therefore survives instead of being overwritten by the stale retry.
 
 ## Ordered autonomous task execution
 

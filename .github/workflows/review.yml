@@ -94,6 +94,10 @@ on:
         required: false
         type: string
         default: "develop"
+      expected_head_sha:
+        description: "PR head SHA that produced the caller pipeline run. A different live head skips this stale review before model invocation."
+        required: true
+        type: string
     secrets:
       CURSOR_API_KEY:
         required: true
@@ -115,9 +119,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          set -euo pipefail
           gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
-          echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
+          live_sha=$(jq -r .headRefOid /tmp/pr.json)
+          expected_sha="${{ inputs.expected_head_sha }}"
+          echo "sha=$expected_sha" >> "$GITHUB_OUTPUT"
+          if ! [[ "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "Caller omitted or supplied an invalid expected PR head SHA. Skipping reviewer model invocation."
+            exit 0
+          fi
+          if [ "$live_sha" != "$expected_sha" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "Caller pipeline SHA $expected_sha is stale; live PR head is $live_sha. Skipping reviewer model invocation."
+            exit 0
+          fi
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
+          after_diff_sha=$(gh pr view ${{ inputs.pr_number }} --json headRefOid -q .headRefOid)
+          if [ "$after_diff_sha" != "$expected_sha" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "PR head changed while collecting the diff; skipping this superseded review."
+          fi
 
       # Checks out the PR's own reviewed commit, not integration_branch -
       # found live (VOC-022-T00) that checking out integration_branch here
@@ -133,10 +156,12 @@ jobs:
       # time. Checking out the exact reviewed SHA removes the root cause:
       # the reviewer now has the real file tree for what it's reviewing.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: steps.pr.outputs.stale != 'true'
         with:
           ref: ${{ steps.pr.outputs.sha }}
 
       - name: Checkout karsift-ai-infra
+        if: steps.pr.outputs.stale != 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
@@ -153,6 +178,7 @@ jobs:
       # which this job reads anyway for the prompt below - no new wiring
       # needed in the calling project's pipeline.yml.
       - name: Resolve reviewer model
+        if: steps.pr.outputs.stale != 'true'
         id: model
         env:
           GH_TOKEN: ${{ github.token }}
@@ -194,6 +220,7 @@ jobs:
       # gives the implementer - lets it scope correctly instead of judging
       # task N's diff against the full package's finished-state criteria.
       - name: Build prompt
+        if: steps.pr.outputs.stale != 'true'
         run: |
           task_id=$(jq -r .body /tmp/pr.json | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
 
@@ -242,6 +269,7 @@ jobs:
           } > /tmp/review-prompt.txt
 
       - name: Install Cursor CLI
+        if: steps.pr.outputs.stale != 'true'
         run: |
           curl https://cursor.com/install -fsS | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -290,6 +318,7 @@ jobs:
       # implement.yml's large-diff budget; not yet re-tuned against real
       # Cursor run durations, revisit if this proves too tight or too loose.
       - name: Run independent verification
+        if: steps.pr.outputs.stale != 'true'
         id: verify
         timeout-minutes: 30
         env:
@@ -318,6 +347,7 @@ jobs:
           exit "$exit_code"
 
       - name: Extract verdict text
+        if: steps.pr.outputs.stale != 'true'
         run: |
           python3 - <<'PYEOF'
           import json
@@ -347,9 +377,11 @@ jobs:
           PYEOF
 
       - name: Show verdict
+        if: steps.pr.outputs.stale != 'true'
         run: cat /tmp/verdict.md
 
       - name: Post verification comment
+        if: steps.pr.outputs.stale != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

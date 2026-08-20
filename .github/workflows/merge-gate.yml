@@ -23,6 +23,10 @@ on:
         required: false
         type: string
         default: "false"
+      expected_head_sha:
+        description: "PR head SHA that produced the caller pipeline run. A different live head makes this invocation stale and non-mergeable."
+        required: true
+        type: string
       founder_username:
         description: 'Deprecated compatibility input. Founder comments are not merge authority.'
         required: false
@@ -79,8 +83,16 @@ jobs:
       risk: ${{ steps.status.outputs.risk }}
       checks_ok: ${{ steps.status.outputs.checks_ok }}
       verdict: ${{ steps.status.outputs.verdict }}
+      head_sha: ${{ steps.status.outputs.head_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Checkout karsift-ai-infra policy helpers
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          path: karsift-ai-infra
+          persist-credentials: false
 
       - name: Determine risk class, checks, and verification status
         id: status
@@ -89,18 +101,34 @@ jobs:
         run: |
           set -euo pipefail
           pr_number=${{ github.event.pull_request.number }}
+          expected_head_sha="${{ inputs.expected_head_sha }}"
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          pr_json=$(gh pr view "$pr_number" --json body,author)
+          pr_json=$(gh pr view "$pr_number" --json body,author,headRefOid)
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
+          head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
+          echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
             risk="unknown"
           fi
           echo "risk=$risk" >> "$GITHUB_OUTPUT"
+
+          if ! [[ "$expected_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "checks_ok=false" >> "$GITHUB_OUTPUT"
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            echo "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state."
+            exit 0
+          fi
+          if [ "$head_sha" != "$expected_head_sha" ]; then
+            echo "checks_ok=false" >> "$GITHUB_OUTPUT"
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            echo "Caller pipeline SHA $expected_head_sha is stale; live PR head is $head_sha. Refusing to reuse checks or review state."
+            exit 0
+          fi
 
           # Excludes this pipeline's own governance checks ("merge-gate / *",
           # "remediate / *") from the checks_ok computation - not just the
@@ -142,46 +170,17 @@ jobs:
             exit 0
           fi
 
+          review_binding="bound to commit \`$head_sha\`"
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+            | jq -r --arg binding "$review_binding" \
+              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          printf '%s\n' "$verdict" > /tmp/review-verdict.md
 
-          # A prior '^FAIL' anchor here missed "## Verdict: **FAIL**" - a
-          # markdown heading with the bold token on the same line, not
-          # alone at line-start (vocanova-platform-sandbox VOC-013-T00's
-          # first real FAIL run, discovered the same day remediate.yml hit
-          # the identical bug independently). prompts/review.md requires an
-          # exact, undecorated "VERDICT: ..." anchor as the reviewer's
-          # literal last line - but a FOURTH occurrence (2026-07-25,
-          # VOC-025-T04 PR #76, first real run under the new OpenCode
-          # reviewer/deepseek-v4-pro) posted "**VERDICT: FAIL**" - the whole
-          # line wrapped in bold, not decoration mixed into a heading - and
-          # was read as PENDING instead of FAIL, the same failure mode as
-          # before under new dressing. A different model violating the same
-          # explicit prompt instruction is exactly the scenario "instruct it
-          # away" doesn't reliably survive - see implement.yml's identical
-          # lesson about git-commit compliance. A FIFTH occurrence
-          # (2026-07-26, VOC-030-T00 PR #134, same reviewer model) posted
-          # "**VERDICT: FAIL** — H1 (...) blocks. H2 (...)" - a genuine FAIL
-          # with explanatory text trailing the bold-closed token on the same
-          # line, which the then-exact `...\*{0,2}$` end-anchor still
-          # missed even after tolerating the bold wrapping itself. The
-          # end-anchor is now a word boundary instead of end-of-line, so
-          # trailing prose after the verdict token no longer defeats the
-          # match - the anchor only needs to identify which line carries the
-          # verdict token, not consume the entire line. Order still matters:
-          # FAIL is checked before either PASS form so a FAIL can never be
-          # misread as a pass, and PASS WITH NON-BLOCKING FINDINGS is
-          # checked before bare PASS so a findings-verdict line (which bare
-          # PASS's prefix would also match) resolves correctly.
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
-            echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS\b'; then
-            echo "verdict=PASS_WITH_FINDINGS" >> "$GITHUB_OUTPUT"
-          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS\b'; then
-            echo "verdict=PASS" >> "$GITHUB_OUTPUT"
-          else
-            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
-          fi
+          # Use the same fail-dominant parser as remediation. It tolerates
+          # historical bold/trailing-prose variants while refusing to let a
+          # WAITING marker mask any machine-readable FAIL in the report.
+          review_state=$(python3 karsift-ai-infra/config/classify-review-verdict.py /tmp/review-verdict.md)
+          echo "verdict=$review_state" >> "$GITHUB_OUTPUT"
 
       - name: Post status
         env:
@@ -192,7 +191,7 @@ jobs:
           checks_ok="${{ steps.status.outputs.checks_ok }}"
           verdict="${{ steps.status.outputs.verdict }}"
           gates_pass=false
-          if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "PENDING" ]; then
+          if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "WAITING" ] && [ "$verdict" != "PENDING" ]; then
             gates_pass=true
           fi
 
@@ -220,6 +219,7 @@ jobs:
       needs.report-status.outputs.risk != 'unknown' &&
       needs.report-status.outputs.checks_ok == 'true' &&
       needs.report-status.outputs.verdict != 'FAIL' &&
+      needs.report-status.outputs.verdict != 'WAITING' &&
       needs.report-status.outputs.verdict != 'PENDING'
     runs-on: ubuntu-latest
     permissions:
@@ -252,12 +252,13 @@ jobs:
       - name: Merge automatically
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REVIEWED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
         run: |
           set -euo pipefail
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
           # step above - see that step's comment (karsift-ai-infra#22).
           for attempt in 1 2 3; do
-            if gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch; then
+            if gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
               exit 0
             fi
             echo "Merge attempt $attempt/3 failed - retrying in 5s (possible ruleset-propagation lag)." >&2
