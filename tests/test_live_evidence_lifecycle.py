@@ -1,5 +1,9 @@
 from importlib.util import module_from_spec, spec_from_file_location
+import os
 from pathlib import Path
+import subprocess
+import tempfile
+import textwrap
 import unittest
 
 
@@ -41,6 +45,58 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         cls.pipeline_template = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
+
+    @staticmethod
+    def _run_block(workflow, step_name):
+        lines = workflow.splitlines()
+        marker = f"- name: {step_name}"
+        step_index = next(
+            index for index, line in enumerate(lines) if line.strip() == marker
+        )
+        run_index = next(
+            index
+            for index in range(step_index + 1, len(lines))
+            if lines[index].strip() == "run: |"
+        )
+        run_indent = len(lines[run_index]) - len(lines[run_index].lstrip())
+        block = []
+        for line in lines[run_index + 1 :]:
+            if line.strip() and len(line) - len(line.lstrip()) <= run_indent:
+                break
+            block.append(line)
+        return textwrap.dedent("\n".join(block))
+
+    def _execute_missing_sha_path(self, workflow, step_name):
+        script = self._run_block(workflow, step_name)
+        script = script.replace("${{ inputs.pr_number }}", "1")
+        script = script.replace("${{ github.event.pull_request.number }}", "1")
+        script = script.replace("${{ inputs.expected_head_sha }}", "")
+        gh_stub = """
+        gh() {
+          if [ "$1 $2 $3" = "pr view 1" ]; then
+            printf '%s\\n' '{"body":"Risk classification: R1","title":"fixture","author":{"login":"fixture"},"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+            return 0
+          fi
+          printf 'unexpected gh invocation: %s\\n' "$*" >&2
+          return 97
+        }
+        """
+        with tempfile.TemporaryDirectory() as scratch:
+            script = script.replace("/tmp/pr.json", f"{scratch}/pr.json")
+            script = script.replace("/tmp/pr.diff", f"{scratch}/pr.diff")
+            with tempfile.NamedTemporaryFile(dir=scratch) as output:
+                env = os.environ.copy()
+                env["GITHUB_OUTPUT"] = output.name
+                completed = subprocess.run(
+                    ["bash", "-c", textwrap.dedent(gh_stub) + script],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                output.seek(0)
+                return completed, output.read().decode()
 
     def test_verdict_fixture_matrix_is_fail_dominant(self):
         waiting = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
@@ -114,17 +170,53 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         self.assertEqual(head_guard.verify(sha_a, sha_b), "STALE")
         self.assertEqual(head_guard.verify(sha_a, sha_a), "CURRENT")
 
-    def test_exact_sha_is_mandatory_at_reusable_boundaries(self):
+    def test_omitted_sha_is_transition_compatible_but_runtime_fail_closed(self):
         for workflow in (
             self.review_workflow,
             self.remediate_workflow,
             self.merge_workflow,
         ):
             expected_head_block = "\n".join(
-                workflow.split("expected_head_sha:", 1)[1].splitlines()[:4]
+                workflow.split("expected_head_sha:", 1)[1].splitlines()[:5]
             )
-            self.assertIn("required: true", expected_head_block)
-            self.assertNotIn('default: ""', expected_head_block)
+            self.assertIn("required: false", expected_head_block)
+            self.assertIn('default: ""', expected_head_block)
+
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR head SHA. Skipping reviewer model invocation.",
+            self.review_workflow,
+        )
+        self.assertIn(
+            'if [ "$head_state" != "CURRENT" ]; then',
+            self.remediate_workflow,
+        )
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state.",
+            self.merge_workflow,
+        )
+        for workflow in (
+            self.review_workflow,
+            self.remediate_workflow,
+            self.merge_workflow,
+        ):
+            self.assertNotIn("${expected:-live}", workflow)
+
+        review_result, review_output = self._execute_missing_sha_path(
+            self.review_workflow,
+            "Fetch PR diff, metadata, and exact SHA",
+        )
+        self.assertEqual(review_result.returncode, 0, review_result.stderr)
+        self.assertIn("stale=true", review_output)
+        self.assertIn("Skipping reviewer model invocation", review_result.stdout)
+
+        merge_result, merge_output = self._execute_missing_sha_path(
+            self.merge_workflow,
+            "Determine risk class, checks, and verification status",
+        )
+        self.assertEqual(merge_result.returncode, 0, merge_result.stderr)
+        self.assertIn("checks_ok=false", merge_output)
+        self.assertIn("verdict=PENDING", merge_output)
+        self.assertIn("Refusing to reuse checks", merge_result.stdout)
 
     def test_retry_revalidates_head_and_uses_explicit_atomic_lease(self):
         self.assertIn(
@@ -153,7 +245,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.pipeline_template,
         )
         self.assertIn(
-            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}",
             self.pipeline_template,
         )
         self.assertEqual(
