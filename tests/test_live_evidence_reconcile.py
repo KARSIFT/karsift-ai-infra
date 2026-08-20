@@ -224,6 +224,18 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("append_result_commit", self.runner_source)
         self.assertIn("result_already_present", self.runner_source)
         self.assertIn("fresh exact-SHA independent review", self.runner_source)
+        self.assertLess(
+            self.runner_source.index(
+                "post_qualified_comment(write_api, task, evidence, new_sha)"
+            ),
+            self.runner_source.index(
+                "advance_result_ref(read_api, write_api, task, new_sha)"
+            ),
+        )
+        self.assertIn(
+            "fast synchronize run can never observe the result commit",
+            self.runner_source,
+        )
         self.assertIn("pull_request:", self.pipeline)
         self.assertEqual(
             self.pipeline.count(

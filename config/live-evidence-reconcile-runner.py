@@ -422,12 +422,37 @@ def append_result_commit(read_api: GitHub, write_api: GitHub, task: WaitingTask,
     new_sha = (created or {}).get("sha")
     if not isinstance(new_sha, str) or not SHA_RE.fullmatch(new_sha):
         raise ApiError("commit_creation_failed")
+    return new_sha.lower()
+
+
+def advance_result_ref(
+    read_api: GitHub,
+    write_api: GitHub,
+    task: WaitingTask,
+    new_sha: str,
+) -> None:
+    """Advance the PR branch only after its exact future head is attested.
+
+    Creating a Git commit object does not change the branch or trigger the PR
+    pipeline. The App can therefore attest that exact immutable object first,
+    then perform a second stale-head check before the non-force ref update. A
+    fast synchronize run can never observe the result commit before its trusted
+    attestation exists.
+    """
+    live_pr = read_api.get(f"repos/{read_api.repository}/pulls/{task.pr_number}")
+    live_head = ((live_pr or {}).get("head") or {}).get("sha")
+    live_ref = ((live_pr or {}).get("head") or {}).get("ref")
+    if live_head != task.head_sha or live_ref != task.head_ref:
+        raise ContractError("stale_pr_head")
+    encoded_ref = quote(f"heads/{task.head_ref}", safe="/")
+    ref = read_api.get(f"repos/{read_api.repository}/git/ref/{encoded_ref}")
+    if ((ref or {}).get("object") or {}).get("sha") != task.head_sha:
+        raise ContractError("stale_pr_head")
     write_api.mutate(
         "PATCH",
         f"repos/{write_api.repository}/git/refs/{encoded_ref}",
         {"sha": new_sha, "force": False},
     )
-    return new_sha.lower()
 
 
 def post_qualified_comment(write_api: GitHub, task: WaitingTask, evidence: dict[str, Any], new_sha: str) -> None:
@@ -557,6 +582,7 @@ def reconcile_task(
             continue
         new_sha = append_result_commit(read_api, write_api, task, evidence)
         post_qualified_comment(write_api, task, evidence, new_sha)
+        advance_result_ref(read_api, write_api, task, new_sha)
         print(
             f"live-evidence: qualified task={task.task_id} pr={task.pr_number} run_id={evidence['run_id']}"
         )
