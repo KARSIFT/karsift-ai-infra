@@ -50,9 +50,8 @@ on:
         default: "false"
       expected_head_sha:
         description: "PR head SHA that produced the caller pipeline run. A different live head makes this remediation decision stale."
-        required: false
+        required: true
         type: string
-        default: ""
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false
@@ -109,6 +108,18 @@ jobs:
           pr_json=$(gh pr view "$PR_NUMBER" --json body,headRefOid)
           body=$(echo "$pr_json" | jq -r .body)
           head_sha=$(echo "$pr_json" | jq -r .headRefOid)
+
+          head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
+            --expected-sha "$EXPECTED_HEAD_SHA" \
+            --current-sha "$head_sha")
+          if [ "$head_state" != "CURRENT" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+            echo "stale_run=true" >> "$GITHUB_OUTPUT"
+            echo "Exact-head precondition is $head_state; refusing remediation."
+            exit 0
+          fi
 
           task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
           change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
@@ -314,4 +325,5 @@ jobs:
       issue_number: ${{ needs.decide.outputs.issue_number }}
       attempt: ${{ needs.decide.outputs.next_attempt }}
       integration_branch: ${{ inputs.integration_branch }}
+      expected_head_sha: ${{ inputs.expected_head_sha }}
     secrets: inherit

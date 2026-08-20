@@ -149,6 +149,13 @@ remediation cannot target the newer head, and merge uses GitHub CLI's atomic
 pull-request runs to avoid duplicate model cost; the exact-SHA guards remain the
 correctness boundary when cancellation races or is unavailable.
 
+Those exact-head inputs are mandatory on review, remediation, and merge-gate,
+so an older caller fails closed instead of silently falling back to a live head.
+A remediation retry carries the failed head into `implement.yml`, validates it
+before model work, revalidates it immediately before publishing, and uses an
+explicit SHA-valued force-with-lease. A commit arriving in either timing window
+therefore survives instead of being overwritten by the stale retry.
+
 ## Ordered autonomous task execution
 
 Adoption starts the first task automatically. The adopted roster records an explicit

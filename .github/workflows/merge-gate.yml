@@ -25,9 +25,8 @@ on:
         default: "false"
       expected_head_sha:
         description: "PR head SHA that produced the caller pipeline run. A different live head makes this invocation stale and non-mergeable."
-        required: false
+        required: true
         type: string
-        default: ""
       founder_username:
         description: 'Deprecated compatibility input. Founder comments are not merge authority.'
         required: false
@@ -110,8 +109,7 @@ jobs:
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
-          selected_head_sha="${expected_head_sha:-$head_sha}"
-          echo "head_sha=$selected_head_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
@@ -119,7 +117,13 @@ jobs:
           fi
           echo "risk=$risk" >> "$GITHUB_OUTPUT"
 
-          if [ -n "$expected_head_sha" ] && [ "$head_sha" != "$expected_head_sha" ]; then
+          if ! [[ "$expected_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "checks_ok=false" >> "$GITHUB_OUTPUT"
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            echo "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state."
+            exit 0
+          fi
+          if [ "$head_sha" != "$expected_head_sha" ]; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
             echo "Caller pipeline SHA $expected_head_sha is stale; live PR head is $head_sha. Refusing to reuse checks or review state."
