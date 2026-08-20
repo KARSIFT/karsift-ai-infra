@@ -92,9 +92,10 @@ jobs:
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          pr_json=$(gh pr view "$pr_number" --json body,author)
+          pr_json=$(gh pr view "$pr_number" --json body,author,headRefOid)
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
+          head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
@@ -142,8 +143,10 @@ jobs:
             exit 0
           fi
 
+          review_binding="bound to commit \`$head_sha\`"
           verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+            | jq -r --arg binding "$review_binding" \
+              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
 
           # A prior '^FAIL' anchor here missed "## Verdict: **FAIL**" - a
           # markdown heading with the bold token on the same line, not
@@ -173,7 +176,9 @@ jobs:
           # misread as a pass, and PASS WITH NON-BLOCKING FINDINGS is
           # checked before bare PASS so a findings-verdict line (which bare
           # PASS's prefix would also match) resolves correctly.
-          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*WAITING FOR OPERATOR LIVE EVIDENCE\b'; then
+            echo "verdict=WAITING" >> "$GITHUB_OUTPUT"
+          elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*FAIL\b'; then
             echo "verdict=FAIL" >> "$GITHUB_OUTPUT"
           elif echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS\b'; then
             echo "verdict=PASS_WITH_FINDINGS" >> "$GITHUB_OUTPUT"
@@ -192,7 +197,7 @@ jobs:
           checks_ok="${{ steps.status.outputs.checks_ok }}"
           verdict="${{ steps.status.outputs.verdict }}"
           gates_pass=false
-          if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "PENDING" ]; then
+          if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "WAITING" ] && [ "$verdict" != "PENDING" ]; then
             gates_pass=true
           fi
 
@@ -220,6 +225,7 @@ jobs:
       needs.report-status.outputs.risk != 'unknown' &&
       needs.report-status.outputs.checks_ok == 'true' &&
       needs.report-status.outputs.verdict != 'FAIL' &&
+      needs.report-status.outputs.verdict != 'WAITING' &&
       needs.report-status.outputs.verdict != 'PENDING'
     runs-on: ubuntu-latest
     permissions:

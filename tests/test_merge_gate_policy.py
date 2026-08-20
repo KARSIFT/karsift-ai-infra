@@ -24,6 +24,7 @@ class MergeGatePolicyTests(unittest.TestCase):
     def test_ci_and_independent_verdict_are_hard_gates(self):
         self.assertIn("needs.report-status.outputs.checks_ok == 'true'", self.auto_merge)
         self.assertIn("needs.report-status.outputs.verdict != 'FAIL'", self.auto_merge)
+        self.assertIn("needs.report-status.outputs.verdict != 'WAITING'", self.auto_merge)
         self.assertIn("needs.report-status.outputs.verdict != 'PENDING'", self.auto_merge)
 
     def test_founder_comment_is_not_an_override_path(self):
@@ -33,13 +34,22 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("Deprecated compatibility input", self.workflow)
 
     def test_fail_verdict_is_parsed_before_pass(self):
+        waiting = self.workflow.index(
+            "VERDICT:[[:space:]]*WAITING FOR OPERATOR LIVE EVIDENCE"
+        )
         fail = self.workflow.index("VERDICT:[[:space:]]*FAIL")
         pass_with_findings = self.workflow.index(
             "VERDICT:[[:space:]]*PASS WITH NON-BLOCKING FINDINGS"
         )
         bare_pass = self.workflow.index("VERDICT:[[:space:]]*PASS\\b")
+        self.assertLess(waiting, fail)
         self.assertLess(fail, pass_with_findings)
         self.assertLess(pass_with_findings, bare_pass)
+
+    def test_only_current_exact_sha_review_is_considered(self):
+        self.assertIn("--json body,author,headRefOid", self.workflow)
+        self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
+        self.assertIn(".body | contains($binding)", self.workflow)
 
 
 if __name__ == "__main__":

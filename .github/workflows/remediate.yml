@@ -19,8 +19,10 @@ name: remediate (reusable)
 # hand). Requires pipeline.yml's `remediate` job to itself run on a CI
 # failure now (see that file), passing `ci_failed` through as an input.
 #
-# A PASS, PASS WITH NON-BLOCKING FINDINGS, or no verdict yet (review hasn't
-# posted, and CI didn't fail either) is still a no-op.
+# A PASS, PASS WITH NON-BLOCKING FINDINGS, an exact-SHA operator-live-evidence
+# waiting verdict, or no verdict yet (review hasn't posted, and CI didn't fail
+# either) is still a no-op. Waiting is deliberately distinct from a code-defect
+# FAIL so it cannot consume the one implementation retry.
 
 on:
   workflow_call:
@@ -65,6 +67,7 @@ jobs:
       task_id: ${{ steps.parse.outputs.task_id }}
       issue_number: ${{ steps.parse.outputs.issue_number }}
       next_attempt: ${{ steps.parse.outputs.next_attempt }}
+      waiting_for_operator_live_evidence: ${{ steps.parse.outputs.waiting_for_operator_live_evidence }}
     steps:
       # The PR body's exact wording is implement.yml's own template (see
       # "Open PR" there) - this parses it back out. Both files must stay in
@@ -88,10 +91,17 @@ jobs:
           # "not a git repository", not an auth or permissions error. Found
           # via karsift-ai-infra-smoke-test PR #7: a genuine PASS verdict
           # should have been a silent no-op here and instead errored the job.
-          body=$(gh pr view "$PR_NUMBER" --json body -q .body)
+          pr_json=$(gh pr view "$PR_NUMBER" --json body,headRefOid)
+          body=$(echo "$pr_json" | jq -r .body)
+          head_sha=$(echo "$pr_json" | jq -r .headRefOid)
 
+          # Only a review explicitly bound to the current PR head can drive a
+          # lifecycle decision. A prior-head WAITING or FAIL comment must not
+          # suppress or trigger remediation after the branch changes.
+          review_binding="bound to commit \`$head_sha\`"
           verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""')
+            | jq -r --arg binding "$review_binding" \
+              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
 
           task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
           change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
@@ -101,6 +111,7 @@ jobs:
           echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
           echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+          echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
 
           # Two rounds of free-form-markdown guessing already failed here:
           # first a bare '^FAIL' anchor missed the model's bolded "**FAIL**"
@@ -135,6 +146,23 @@ jobs:
             has_fail_verdict=true
           fi
 
+          has_waiting_verdict=false
+          if echo "$verdict" | grep -qE '^\*{0,2}VERDICT:[[:space:]]*WAITING FOR OPERATOR LIVE EVIDENCE\b'; then
+            has_waiting_verdict=true
+          fi
+
+          # A current-SHA waiting verdict is an explicit operator lifecycle
+          # state, not an implementation failure. CI/reviewer infrastructure
+          # failures still win: those represent a fresh failed run and retain
+          # the existing bounded retry behavior.
+          if [ "$CI_FAILED" != "true" ] && [ "$REVIEW_JOB_FAILED" != "true" ] && [ "$has_waiting_verdict" = "true" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "waiting_for_operator_live_evidence=true" >> "$GITHUB_OUTPUT"
+            echo "Current exact-SHA review is waiting for operator-owned live evidence - implementation remediation is intentionally suppressed."
+            exit 0
+          fi
+
           # Found live on VOC-032-T01 PR #193: review.yml's opencode-install
           # step failed outright (a transient "Failed to fetch version
           # information" from opencode.ai) before the reviewer ever ran, so
@@ -153,7 +181,7 @@ jobs:
           if [ "$CI_FAILED" != "true" ] && [ "$has_fail_verdict" = "false" ] && [ "$REVIEW_JOB_FAILED" != "true" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
-            echo "No FAIL verdict, CI did not fail, and the review job itself did not error - nothing to remediate."
+            echo "No FAIL verdict or waiting state, CI did not fail, and the review job itself did not error - nothing to remediate."
             exit 0
           fi
 

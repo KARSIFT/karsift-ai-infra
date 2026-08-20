@@ -46,6 +46,8 @@ class RoleSeparationPolicyTests(unittest.TestCase):
         self.assertIn("Bind your report to the exact commit SHA", self.review_prompt)
         self.assertIn("VERDICT: FAIL", self.review_prompt)
         self.assertIn("VERDICT: PASS", self.review_prompt)
+        self.assertIn("VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE", self.review_prompt)
+        self.assertIn(".karsift/live-evidence/<task_id>.yaml", self.review_prompt)
 
 
 if __name__ == "__main__":
