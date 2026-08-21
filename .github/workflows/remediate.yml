@@ -280,7 +280,7 @@ jobs:
       # review never produces a verdict comment: the review job itself
       # errored (e.g. an install/network failure on the reviewer's own
       # tooling, not a code-quality finding). Mirrors that step exactly,
-      # just pulling the "review / review" job's log instead of "ci / ci"'s.
+      # pulling whichever isolated review stage failed instead of "ci / ci".
       - name: Attach review-job-error output as retry context, if the review job itself failed
         if: inputs.review_job_failed == 'true' && steps.parse.outputs.next_attempt != ''
         env:
@@ -290,12 +290,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          review_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q '.jobs[] | select(.name == "review / review") | .databaseId' | head -1)
+          review_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q \
+            '[.jobs[] | select((.name == "review / publish-review" or .name == "review / review") and .conclusion == "failure")][0].databaseId // empty')
 
           if [ -n "$review_job_id" ]; then
             log_tail=$(gh api "repos/${{ github.repository }}/actions/jobs/$review_job_id/logs" | tail -150)
           else
-            log_tail="(could not locate the review / review job's log for this run)"
+            log_tail="(could not locate the failed review stage's log for this run)"
           fi
 
           {
@@ -307,7 +308,7 @@ jobs:
             echo "transient failure in the reviewer's own tooling, not a finding about"
             echo "this PR's code). This is very likely unrelated to the implementation -"
             echo "re-check the log below before assuming your prior change was at fault."
-            echo "Last ~150 lines of the \`review / review\` job's log:"
+            echo "Last ~150 lines of the failed review stage's log:"
             echo
             echo '```'
             echo "$log_tail"

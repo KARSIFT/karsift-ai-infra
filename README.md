@@ -149,6 +149,8 @@ repository-scoped contents/pull-requests/workflows token, imports the exact
 declared commit into a new bare repository, and pushes with hooks disabled plus
 an explicit lease. Repository hooks, PATH changes, or tools left by model code
 therefore cannot observe the App credential or forge its bot identity.
+Its model-facing job also has read-only issue and pull-request permissions;
+no-change reporting is performed by a separate clean runner.
 
 The unrestricted planner uses the same privilege boundary. Its runner has no
 persisted checkout credential while the model is active and can only upload a
@@ -194,8 +196,10 @@ post-fix `create-github-app-token` revision whose parser honors the
 when the successful check resolves to the exact PR, head, branch, active caller
 pipeline workflow ID, and an unchanged head/base pipeline file; the comment
 timestamp must also fall inside that check's run window. Its trusted comment
+is signed by the dedicated GitHub App from an isolated `publish-review` job and
 binds the package path, task ID, and authority issue observed by that review, so
-a later PR-body edit cannot retarget authorization. The post-reconcile
+neither another `github-actions[bot]` workflow nor a later PR-body edit can
+retarget authorization. The post-reconcile
 review requires a trusted App-authored attestation bound to its new exact head,
 and that attestation is posted before the branch advances to prevent a fast
 `synchronize` review from racing it.

@@ -102,13 +102,22 @@ on:
     secrets:
       CURSOR_API_KEY:
         required: true
+      KARSIFT_BOT_APP_ID:
+        description: "GitHub App ID used only by the isolated verdict publisher."
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
+        description: "GitHub App private key used only by the isolated verdict publisher."
+        required: true
 
 jobs:
   review:
     runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+      stale: ${{ steps.pr.outputs.stale }}
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
     steps:
       # No repo checked out yet at this point - gh needs GH_REPO set
       # explicitly rather than inferring it from a local git remote (same
@@ -160,6 +169,7 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         with:
           ref: ${{ steps.pr.outputs.sha }}
+          persist-credentials: false
 
       - name: Checkout karsift-ai-infra
         if: steps.pr.outputs.stale != 'true'
@@ -167,6 +177,7 @@ jobs:
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
+          persist-credentials: false
 
       # Routes a remediate.yml retry (attempt 2) on a low-risk (R0/R1)
       # package to a cheaper/faster model (config/roles.yml's
@@ -399,10 +410,9 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         run: cat /tmp/verdict.md
 
-      - name: Post verification comment
+      - name: Build verification record for isolated publisher
         if: steps.pr.outputs.stale != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
           REVIEWED_PACKAGE_PATH: ${{ inputs.package_path }}
         run: |
           set -euo pipefail
@@ -425,4 +435,114 @@ jobs:
             echo
             cat /tmp/verdict.md
           } > /tmp/verdict-comment.md
-          gh pr comment ${{ inputs.pr_number }} --body-file /tmp/verdict-comment.md
+
+      - name: Upload verification record
+        if: steps.pr.outputs.stale != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: review-verdict-${{ inputs.pr_number }}-${{ steps.pr.outputs.sha }}
+          path: /tmp/verdict-comment.md
+          retention-days: 1
+
+  # The reviewer consumes model output and repository content, so it cannot
+  # safely hold the identity used as dispatch authority. This fresh runner
+  # validates the immutable artifact against current PR metadata before the
+  # dedicated App signs it as a comment.
+  publish-review:
+    needs: review
+    if: needs.review.outputs.stale != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Download verification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: review-verdict-${{ inputs.pr_number }}-${{ needs.review.outputs.sha }}
+          path: /tmp/review-publish
+
+      - name: Validate exact head, authority metadata, and verdict shape
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
+          EXPECTED_PACKAGE_PATH: ${{ inputs.package_path }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Review publication identity is malformed." >&2
+            exit 1
+          fi
+          gh pr view "$PR_NUMBER" --json body,headRefOid,state > /tmp/live-pr.json
+          python3 - /tmp/review-publish/verdict-comment.md /tmp/live-pr.json \
+            "$EXPECTED_HEAD_SHA" "$EXPECTED_PACKAGE_PATH" <<'PYEOF'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          verdict_path, pr_path, expected_sha, expected_package = sys.argv[1:5]
+          raw = Path(verdict_path).read_bytes()
+          if not raw or len(raw) > 131_072:
+              raise SystemExit("Verification record is empty or too large.")
+          try:
+              text = raw.decode("utf-8")
+          except UnicodeDecodeError:
+              raise SystemExit("Verification record is not UTF-8.")
+          pr = json.loads(Path(pr_path).read_text())
+          if pr.get("state") != "OPEN" or pr.get("headRefOid") != expected_sha:
+              raise SystemExit("PR head changed before verdict publication.")
+
+          body = pr.get("body") or ""
+          task = re.findall(r"Implements task `([^`]+)`", body)
+          package = re.findall(r"Package path: `([^`]+)`", body)
+          issue = re.findall(r"Closes #([0-9]+)", body)
+          if (
+              len(task) != 1
+              or not re.fullmatch(r"[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+", task[0])
+              or package != [expected_package]
+              or len(issue) != 1
+          ):
+              raise SystemExit("PR authority metadata changed or is ambiguous.")
+
+          lines = text.splitlines()
+          required = (
+              f"**Independent verification - bound to commit `{expected_sha}`**",
+              f"task_id: `{task[0]}`",
+              f"package_path: `{package[0]}`",
+              f"authority_issue: `{issue[0]}`",
+          )
+          if not lines or lines[0] != required[0] or any(lines.count(line) != 1 for line in required):
+              raise SystemExit("Verification record binding is invalid or ambiguous.")
+          verdicts = [
+              line for line in lines
+              if re.fullmatch(
+                  r"VERDICT: (?:FAIL|PASS|PASS WITH NON-BLOCKING FINDINGS|WAITING FOR OPERATOR LIVE EVIDENCE)",
+                  line,
+              )
+          ]
+          if len(verdicts) != 1 or verdicts[0] != next(
+              (line for line in reversed(lines) if line.strip()), ""
+          ):
+              raise SystemExit("Verification record must end in one unambiguous verdict.")
+          PYEOF
+
+      - name: Mint verdict-signing App token on the clean runner
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Publish App-signed verification comment
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr comment "${{ inputs.pr_number }}" \
+            --body-file /tmp/review-publish/verdict-comment.md

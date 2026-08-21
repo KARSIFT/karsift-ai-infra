@@ -16,7 +16,11 @@
   its single attempt.
   Reviewer WAITING comments bind package/task/authority metadata; only open,
   unmerged, unexpired tasks can dispatch; both compared branches must be
-  protected; and structured comment values are single-line safe.
+  protected; and structured comment values are single-line safe. Reviewer
+  verdicts are now validated and signed by the dedicated GitHub App from a
+  fresh publisher job; the model-facing reviewer and implementer hold no
+  issue-writing token, so the generic Actions bot cannot forge dispatch
+  authority.
   The caller template polls hourly instead of using a recursive catch-all
   `workflow_run` trigger.
 - Isolated privileged publication from unrestricted implementation: the model

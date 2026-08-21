@@ -408,6 +408,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "steps:", 1
         )[0]
         self.assertNotIn("actions:", implement_permissions)
+        self.assertNotIn("issues: write", implement_permissions)
+        self.assertNotIn("pull-requests: write", implement_permissions)
+        self.assertIn("issues: read", implement_permissions)
         self.assertIn("Mint separate operator token", self.workflow)
         self.assertIn(
             "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
@@ -442,6 +445,8 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("permission-contents: write", publish_job)
         self.assertIn("permission-pull-requests: write", publish_job)
         self.assertIn("permission-workflows: write", publish_job)
+        self.assertIn("permission-issues: write", publish_job)
+        self.assertIn("report-no-change:", self.implement)
 
         plan_job, plan_publish_job = self.plan.split("\n  publish-plan:", 1)
         planner_boundary = plan_job.index(
@@ -475,9 +480,10 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
         )
         comment = {
+            "id": 44,
             "body": body,
             "created_at": "2026-08-20T23:59:00Z",
-            "user": {"login": "github-actions[bot]", "type": "Bot"},
+            "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
         }
 
         class ReviewApi:
@@ -523,7 +529,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 raise AssertionError(endpoint)
 
         good_check = {
-            "name": "review / review",
+            "name": "review / publish-review",
             "conclusion": "success",
             "head_sha": HEAD,
             "app": {"slug": "github-actions"},
@@ -570,6 +576,23 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 [forged],
             )
         )
+        generic_actions_bot = {
+            **comment,
+            "user": {"login": "github-actions[bot]", "type": "Bot"},
+        }
+        self.assertIsNone(
+            runner.trusted_waiting_review(
+                ReviewApi([good_check]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
+                [generic_actions_bot],
+            )
+        )
         with self.assertRaises(policy.ContractError):
             runner.trusted_waiting_review(
                 ReviewApi([]),
@@ -598,6 +621,12 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         )
         self.assertIn("authority_issue: \\`$authority_issue\\`", self.review)
         self.assertIn("package_path: \\`$package_path\\`", self.review)
+        review_job, publisher_job = self.review.split("\n  publish-review:", 1)
+        self.assertNotIn("create-github-app-token@", review_job)
+        self.assertNotIn("gh pr comment", review_job)
+        self.assertIn("actions/download-artifact@", publisher_job)
+        self.assertIn("permission-issues: write", publisher_job)
+        self.assertIn("PR head changed before verdict publication", publisher_job)
 
     def test_non_agent_pr_cannot_enter_wake_path(self):
         class NoApiCalls:

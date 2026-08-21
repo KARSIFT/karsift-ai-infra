@@ -109,9 +109,9 @@ jobs:
       group: implement-${{ github.repository }}-${{ inputs.change_id }}
       cancel-in-progress: false
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -274,19 +274,25 @@ jobs:
       # state instead of the current failure.
       - name: Create implementation branch
         id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           slug=$(echo "${{ inputs.task_id }}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
           change_lower=$(echo "${{ inputs.change_id }}" | tr '[:upper:]' '[:lower:]')
           branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          git fetch origin "${{ inputs.integration_branch }}"
+          git -c credential.helper= \
+            -c 'credential.https://github.com.helper=!gh auth git-credential' \
+            fetch origin "${{ inputs.integration_branch }}"
           if [ "${{ inputs.attempt }}" != "1" ]; then
             if ! git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
               echo "Remediation attempt has no existing remote branch $branch; refusing to spend model work on an unbound retry." >&2
               exit 1
             fi
-            git fetch origin "$branch"
+            git -c credential.helper= \
+              -c 'credential.https://github.com.helper=!gh auth git-credential' \
+              fetch origin "$branch"
             remote_head=$(git rev-parse "origin/$branch")
             head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
               --expected-sha "${{ inputs.expected_head_sha }}" \
@@ -896,73 +902,38 @@ jobs:
           path: /tmp/implementer-work.bundle
           retention-days: 14
 
-      # Two stacked bugs found live on VOC-028-T05, both now fixed:
-      # 1. `!= 'success'`, not `== 'failure'` - a step that hits its own
-      #    timeout-minutes is cancelled by the runner, and continue-on-error
-      #    preserves that as outcome == 'cancelled' (not 'failure').
-      # 2. `steps.implementer.outputs.outcome`, not `steps.implementer.outcome`
-      #    (missing `.outputs`) - `steps.<id>.outcome` (no `.outputs`) is the
-      #    *step's own* execution result (did "Normalize implementer outcome"
-      #    itself run without erroring - an `echo` command, so always
-      #    'success' no matter what it echoed), completely different from
-      #    `steps.<id>.outputs.<name>`, the custom output value that step
-      #    wrote. Fix #1 alone (still using the wrong field) made zero
-      #    observable difference - re-timed-out on the very next T05 retry
-      #    with the identical silent-success symptom, which is what
-      #    surfaced this second, more fundamental bug. Together: neither
-      #    "Escalate on final failed attempt" nor "Fail job if implementer
-      #    step failed" had EVER actually fired on any real implementer
-      #    failure since this Normalize/outcome pattern was introduced -
-      #    both conditions were unconditionally false. Also fixed the same
-      #    bug on line ~394 ("Commit and push"'s own `if:`), which had been
-      #    running unconditionally regardless of implementer outcome for
-      #    the same reason (harmless in practice only because its own
-      #    internal git-diff check happens to no-op when nothing changed).
-      # Attempt-1 counterpart to "Escalate on final failed attempt" below,
-      # for exactly the case that condition's `inputs.attempt >= '2'` guard
-      # deliberately excludes: the implementer itself ran successfully but
-      # chose not to change anything (has_changes == 'false') - not a crash,
-      # a deliberate decision (e.g. a blocked precondition it explained in
-      # its own response). Before this step existed, that outcome left the
-      # job reporting a bare `success` with zero trace anywhere except this
-      # run's own logs - neither "Escalate on final failed attempt" nor
-      # "Fail job if implementer step failed" fires for it on attempt 1
-      # (outcome IS 'success', so both conditions are false), so the task
-      # issue just sat open with no visible explanation and no automatic
-      # retry trigger. Found live on VOC-049-T01 (vocanova-platform-sandbox,
-      # see KARSIFT/karsift-ai-infra#15): the implementer correctly refused
-      # to promote against stale evidence, but nothing said so anywhere a
-      # human would see without digging through Actions logs - required a
-      # manual close with a written justification to unblock. This doesn't
-      # retry or resolve anything automatically (that's still #15's own
-      # open question) - it just makes "nothing happened, and here's why"
-      # observable on the issue itself instead of silent.
-      - name: Comment implementer's own explanation when no changes were made (attempt 1)
-        if: steps.implementer.outputs.outcome == 'success' && steps.commit.outputs.has_changes == 'false' && inputs.attempt == '1'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          response=$(jq -r '.result // "(no result field)"' /tmp/cursor-response.json 2>/dev/null || echo "(no parseable response)")
-          gh issue comment ${{ inputs.issue_number }} --body "$(cat <<EOF
-          The implementer ran successfully on attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`, but made no changes - no PR was opened. This is not a failure and the job did not stop; it may retry on attempt 2 if this task is dispatched again, or a human may need to look at why below before that happens.
-
-          Implementer's own explanation:
-
-          $response
-          EOF
-          )"
-
-      - name: Escalate on final failed attempt
-        if: (steps.implementer.outputs.outcome != 'success' || steps.commit.outputs.has_changes == 'false') && inputs.attempt >= '2'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment ${{ inputs.issue_number }} --body \
-            "The implementer failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
-
+      # A timeout/cancellation is not the literal outcome `failure`; test the
+      # normalized output and fail loud for every non-success state. The clean
+      # report job below preserves bounded issue visibility without returning
+      # an issue-writing credential to this model-controlled runner.
       - name: Fail job if implementer step failed
         if: steps.implementer.outputs.outcome != 'success'
         run: exit 1
+
+  # No model-controlled runner ever receives an issue-writing token. Preserve
+  # the prior no-change/final-attempt observability from a clean runner.
+  report-no-change:
+    needs: implement
+    if: >-
+      always() &&
+      needs.implement.outputs.has_changes != 'true' &&
+      (needs.implement.result == 'success' || inputs.attempt == '2')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report bounded implementation outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.attempt }}" = "1" ]; then
+            gh issue comment "${{ inputs.issue_number }}" --body \
+              "The implementer completed attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\` but produced no committed change, so no PR was opened. A later dispatch may use the bounded final attempt."
+          else
+            gh issue comment "${{ inputs.issue_number }}" --body \
+              "The implementer failed to produce a publishable change on attempt 2/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Automatic implementation has stopped for this task."
+          fi
 
   # The implementer above has unrestricted shell access. It therefore cannot
   # safely share a runner with any step that receives the privileged App token:
@@ -1006,6 +977,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          permission-issues: write
           permission-pull-requests: write
           permission-workflows: write
 
