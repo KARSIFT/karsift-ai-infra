@@ -146,10 +146,29 @@ def verify_ready_jobs(
         if isinstance(step, dict)
         and str(step.get("name") or "") == "Detect and run pnpm checks"
     ]
+    project_checkouts = [
+        step
+        for step in ci_steps
+        if isinstance(step, dict)
+        and str(step.get("name") or "").startswith("Run actions/checkout@")
+    ]
+    infra_checkouts = [
+        step
+        for step in ci_steps
+        if isinstance(step, dict)
+        and str(step.get("name") or "") == "Checkout karsift-ai-infra"
+    ]
     if len(reuse_markers) != 1 or _job_conclusion(reuse_markers[0]) != "success":
         return VerificationResult(False, "ci_reuse_marker_not_successful")
     if len(full_checks) != 1 or _job_conclusion(full_checks[0]) != "skipped":
         return VerificationResult(False, "ci_full_validation_not_skipped")
+    if (
+        len(project_checkouts) != 1
+        or _job_conclusion(project_checkouts[0]) != "skipped"
+        or len(infra_checkouts) != 1
+        or _job_conclusion(infra_checkouts[0]) != "skipped"
+    ):
+        return VerificationResult(False, "ci_checkout_not_skipped")
     if publisher is None or _job_conclusion(publisher) != "skipped":
         return VerificationResult(False, "review_not_skipped")
     if len(merge_report) != 1 or _job_conclusion(merge_report[0]) != "success":

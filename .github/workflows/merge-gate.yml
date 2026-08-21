@@ -43,6 +43,11 @@ on:
         required: false
         type: string
         default: ""
+      current_ci_result:
+        description: "Current caller-run CI job result, bound through the caller needs context."
+        required: false
+        type: string
+        default: ""
       founder_username:
         description: 'Deprecated compatibility input. Founder comments are not merge authority.'
         required: false
@@ -124,6 +129,7 @@ jobs:
           expected_base_sha="${{ inputs.expected_base_sha }}"
           reuse_outcome="${{ inputs.reuse_outcome }}"
           reuse_prior_run_id="${{ inputs.reuse_prior_run_id }}"
+          current_ci_result="${{ inputs.current_ci_result }}"
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
@@ -215,7 +221,7 @@ jobs:
             fi
           fi
           if [ "$reuse_outcome" = "reuse-evidence" ]; then
-            if [ "$prior_jobs_available" = "true" ]; then
+            if [ "$prior_jobs_available" = "true" ] && [ "$current_ci_result" = "success" ]; then
               checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
                 --pr-checks-file /tmp/pr-checks.json \
                 --prior-jobs-file /tmp/prior-jobs.json \
@@ -225,9 +231,10 @@ jobs:
               checks_ok=false
             fi
           else
-            checks_ok=$(jq -r \
-              '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-              /tmp/pr-checks.json || echo "false")
+            checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
+              --pr-checks-file /tmp/pr-checks.json \
+              --head-ref "$head_ref" \
+              --reuse-outcome "$reuse_outcome" || echo "false")
           fi
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 

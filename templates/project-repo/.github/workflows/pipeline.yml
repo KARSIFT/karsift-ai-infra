@@ -369,7 +369,7 @@ jobs:
   # requiring review's specific 'success' result which a planning PR's
   # deliberately-skipped review can never produce.
   merge-gate:
-    needs: [ready-for-review-reuse, review, plan-review]
+    needs: [ready-for-review-reuse, ci, review, plan-review]
     if: |
       always() &&
       (
@@ -384,6 +384,7 @@ jobs:
       expected_base_sha: ${{ github.event.pull_request.base.sha }}
       reuse_outcome: ${{ needs.ready-for-review-reuse.outputs.outcome }}
       reuse_prior_run_id: ${{ needs.ready-for-review-reuse.outputs.prior_run_id }}
+      current_ci_result: ${{ needs.ci.result }}
     secrets: inherit
 
   # Promotes a completed package after its roster closes. reconcile-release
