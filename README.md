@@ -279,8 +279,11 @@ and one sanitized waiting marker. The task's own `tasks.md` stanza may declare t
 expectation marker `- Automation ownership: operator` or
 `- Automation ownership: live-actions`; a missing required contract, malformed contract, invalid
 or duplicate marker, or marker/contract conflict fails closed. Narrative prose is never parsed as
-ownership. Re-entry repairs a partially published carrier without overwriting an existing evidence
-file. Implementer jobs remain serialized per change package.
+ownership. “No marker” means the task stanza was successfully read and contains no ownership
+marker; a missing or unreadable `tasks.md` cannot establish that condition and therefore fails
+closed instead of guessing that the task is ordinary. Re-entry repairs a partially published
+carrier without overwriting an existing evidence file. Implementer jobs remain serialized per
+change package.
 
 The ownership classifier is read-only. Only the non-model carrier publisher receives an App token
 for contents/issues/pull-request writes, and the fail-closed notifier receives issue-write only.
