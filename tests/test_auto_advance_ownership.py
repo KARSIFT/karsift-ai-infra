@@ -380,6 +380,77 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             )
             post.assert_called_once()
 
+    def test_voc102_test_11_existing_carrier_repairs_missing_evidence_file(self):
+        task_id = "VOC-102-T01"
+        evidence_relative = "t01-evidence.md"
+        evidence_path = f"{PACKAGE}/{evidence_relative}"
+        pr_body = ownership.carrier_pr_body(
+            change_id="VOC-102",
+            task_id=task_id,
+            package_path=PACKAGE,
+            issue_number=866,
+            evidence_relative_path=evidence_relative,
+        )
+        existing_pr = {
+            "number": 900,
+            "title": "VOC-102: VOC-102-T01",
+            "body": pr_body,
+            "state": "OPEN",
+            "isDraft": True,
+            "author": {"login": "app/karsift-ai-infra-bot"},
+            "headRefName": "agent/voc-102-voc-102-t01",
+            "headRefOid": "a" * 40,
+            "baseRefName": "develop",
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            workdir = Path(scratch) / "carrier-work"
+
+            def fake_clone(command, **_kwargs):
+                clone_dir = Path(command[4])
+                roster = clone_dir / PACKAGE / ".karsift/tasks.json"
+                roster.parent.mkdir(parents=True, exist_ok=True)
+                roster.write_text(
+                    json.dumps([{"task_id": task_id, "issue": 866}]),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_git(args, **_kwargs):
+                if args[:3] == ["ls-remote", "--heads", "origin"]:
+                    return f"{'a' * 40}\trefs/heads/agent/voc-102-voc-102-t01"
+                if args[:2] == ["diff", "--name-only"]:
+                    return evidence_path
+                if args and args[0] == "merge-base":
+                    return "b" * 40
+                return ""
+
+            with (
+                mock.patch.object(publisher, "find_pr_for_branch", return_value=existing_pr),
+                mock.patch.object(publisher, "validate_issue_and_roster"),
+                mock.patch.object(publisher, "post_deduplicated_comment") as post,
+                mock.patch.object(publisher, "run_git", side_effect=fake_git) as git,
+                mock.patch.object(publisher.tempfile, "mkdtemp", return_value=str(workdir)),
+                mock.patch.object(publisher.subprocess, "run", side_effect=fake_clone),
+            ):
+                publisher.ensure_carrier(
+                    repo="KARSIFT/example",
+                    token="masked-fixture-token",
+                    integration_branch="develop",
+                    change_id="VOC-102",
+                    task_id=task_id,
+                    package_path=PACKAGE,
+                    issue_number=866,
+                    evidence_relative_path=evidence_relative,
+                )
+
+            target = workdir / "repo" / evidence_path
+            self.assertEqual(
+                target.read_text(encoding="utf-8"),
+                ownership.pending_evidence_body(task_id, "VOC-102", PACKAGE),
+            )
+            git.assert_any_call(["add", evidence_path], cwd=workdir / "repo")
+            post.assert_called_once()
+
     def test_voc102_test_12_permission_boundary(self):
         advance_block = self.auto_advance.split("  advance:", 1)[1].split("  prepare-live-evidence:", 1)[0]
         publisher_block = self.auto_advance.split("  prepare-live-evidence:", 1)[1].split("  fail-closed:", 1)[0]
@@ -419,10 +490,11 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertNotRegex(verifier_runner, r"[\"']artifacts[\"']")
 
     def test_voc102_test_12_fail_closed_marker_is_sanitized_and_deduplicated(self):
+        marker = f"{fail_closed.FAIL_CLOSED_MARKER_PREFIX} `VOC-102-T01`"
         trusted = {
             "comments": [
                 {
-                    "body": "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    "body": marker,
                     "author": {"login": "app/karsift-ai-infra-bot"},
                 }
             ]
@@ -437,7 +509,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                     "KARSIFT/example",
                     866,
                     "masked-fixture-token",
-                    "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    marker,
                 )
             )
         command = run.call_args.args[0]
@@ -447,7 +519,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         untrusted = {
             "comments": [
                 {
-                    "body": "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    "body": marker,
                     "author": {"login": "untrusted-user"},
                 }
             ]
@@ -462,7 +534,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                     "KARSIFT/example",
                     866,
                     "masked-fixture-token",
-                    "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    marker,
                 )
 
         self.assertIsNotNone(fail_closed.SAFE_REASON_RE.fullmatch("invalid_contract"))
