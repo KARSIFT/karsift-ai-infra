@@ -36,14 +36,9 @@ on:
         type: string
         default: "develop"
     secrets:
-      ANTHROPIC_API_KEY:
-        required: false
-      OPENAI_API_KEY:
-        required: false
-      OPENCODE_API_KEY:
-        required: false
-      OPENCODE_SECOND_API_KEY:
-        required: false
+      CURSOR_API_KEY:
+        description: "Required by the ordinary-task implement.yml path; never mapped into operator or fail-closed step environments."
+        required: true
       KARSIFT_BOT_APP_ID:
         required: false
       KARSIFT_BOT_PRIVATE_KEY:
