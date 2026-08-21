@@ -33,6 +33,10 @@ publisher = load_module(
     "auto_advance_carrier_publisher",
     CONFIG / "auto-advance-carrier-publisher.py",
 )
+fail_closed = load_module(
+    "auto_advance_fail_closed",
+    CONFIG / "auto-advance-fail-closed.py",
+)
 
 
 PACKAGE = "specs/changes/VOC-102-auto-advance-dispatches-implementer-for-operator"
@@ -116,17 +120,17 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             package = Path(scratch) / "pkg"
             package.mkdir()
-            (package / "tasks.md").write_text(
-                textwrap.dedent(
-                    """\
+            tasks_md = textwrap.dedent(
+                """\
                     ## VOC-000-T01 — ordinary task
 
                     - Status: pending
                     """
-                ),
-                encoding="utf-8",
             )
-            result = ownership.classify_next_task(str(package), "VOC-000-T01", "")
+            (package / "tasks.md").write_text(tasks_md, encoding="utf-8")
+            result = ownership.classify_next_task(
+                str(package), "VOC-000-T01", tasks_md
+            )
             self.assertEqual(result.decision, "implement")
 
     def test_voc102_test_04_malformed_contract_fail_closed(self):
@@ -413,6 +417,90 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertIn(".karsift/tasks.json", verifier_runner)
         self.assertNotRegex(verifier_runner, r"[\"']logs[\"']")
         self.assertNotRegex(verifier_runner, r"[\"']artifacts[\"']")
+
+    def test_voc102_test_12_fail_closed_marker_is_sanitized_and_deduplicated(self):
+        trusted = {
+            "comments": [
+                {
+                    "body": "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    "author": {"login": "app/karsift-ai-infra-bot"},
+                }
+            ]
+        }
+        with mock.patch.object(
+            fail_closed.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=json.dumps(trusted)),
+        ) as run:
+            self.assertTrue(
+                fail_closed.issue_has_marker(
+                    "KARSIFT/example",
+                    866,
+                    "masked-fixture-token",
+                    "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                )
+            )
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ["gh", "issue", "view"])
+        self.assertNotIn("masked-fixture-token", command)
+
+        untrusted = {
+            "comments": [
+                {
+                    "body": "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                    "author": {"login": "untrusted-user"},
+                }
+            ]
+        }
+        with mock.patch.object(
+            fail_closed.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=json.dumps(untrusted)),
+        ):
+            with self.assertRaisesRegex(ValueError, "untrusted_fail_closed_marker"):
+                fail_closed.issue_has_marker(
+                    "KARSIFT/example",
+                    866,
+                    "masked-fixture-token",
+                    "<!-- karsift:auto-advance-fail-closed --> `VOC-102-T01`",
+                )
+
+        self.assertIsNotNone(fail_closed.SAFE_REASON_RE.fullmatch("invalid_contract"))
+        self.assertIsNone(fail_closed.SAFE_REASON_RE.fullmatch("email@example.invalid"))
+        self.assertIsNone(fail_closed.SAFE_REASON_RE.fullmatch("contains spaces"))
+
+        argv = [
+            "auto-advance-fail-closed.py",
+            "--repository",
+            "KARSIFT/example",
+            "--token",
+            "masked-fixture-token",
+            "--task-id",
+            "VOC-102-T01",
+            "--issue-number",
+            "866",
+            "--reason",
+            "invalid_contract",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(fail_closed, "issue_has_marker", return_value=False),
+            mock.patch.object(fail_closed.subprocess, "run") as post,
+        ):
+            self.assertEqual(fail_closed.main(), 0)
+        post_command = post.call_args.args[0]
+        body = post_command[post_command.index("--body") + 1]
+        self.assertIn("invalid_contract", body)
+        self.assertIn("No implementer run was started", body)
+        self.assertNotIn("masked-fixture-token", body)
+
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(fail_closed, "issue_has_marker", return_value=True),
+            mock.patch.object(fail_closed.subprocess, "run") as duplicate_post,
+        ):
+            self.assertEqual(fail_closed.main(), 0)
+        duplicate_post.assert_not_called()
 
     def test_voc102_test_13_verifier_fail_closed_and_exact_head(self):
         closed = datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc)
