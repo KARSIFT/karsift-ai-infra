@@ -278,56 +278,37 @@ jobs:
             echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
           fi
 
-      # review.yml posts its own "**Independent verification" comment that
-      # implement.yml's "Fetch prior review findings, if this is a retry"
-      # step already knows how to find and hand to the implementer as
-      # required reading. A CI failure never produces that comment (review
-      # never ran), so the retry would otherwise be blind - no worse odds
-      # than the first attempt, defeating the point of a retry. Posting a
-      # comment in the SAME shape (the same "**Independent verification"
-      # prefix, the same "VERDICT: FAIL" anchor) reuses that exact mechanism
-      # for a CI failure without needing any change to implement.yml at all.
-      - name: Attach CI failure output as retry context, if CI failed
+      # CI can fail before review produces a signed verdict. Record only the
+      # immutable identifiers needed to audit that retry. Raw job logs are not
+      # a safe transport: they may contain terminal sequences, arbitrary test
+      # data, or values GitHub did not recognize as secrets. The implementer
+      # receives a deterministic "reproduce repository checks" instruction
+      # directly from implement.yml when no trusted review record exists.
+      - name: Record sanitized CI failure metadata without log replay
         if: inputs.ci_failed == 'true' && steps.parse.outputs.next_attempt != ''
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
-
-          # remediate.yml runs as a job within the SAME overall workflow run
-          # as the ci job that just failed (pipeline.yml's `remediate` job
-          # calls this workflow directly, not via a separate dispatch) - so
-          # $GITHUB_RUN_ID here is already the right run to look in, no SHA-
-          # based run discovery needed.
-          ci_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q '.jobs[] | select(.name == "ci / ci") | .databaseId' | head -1)
-
-          if [ -n "$ci_job_id" ]; then
-            # Raw job log, timestamps/ANSI codes and all - noisier than a
-            # cleaned excerpt would be, but real signal beats a prettier
-            # blind retry. Tail-bounded so an unusually verbose failure
-            # (a long dependency-install log, say) doesn't blow out the
-            # implementer's prompt size.
-            log_tail=$(gh api "repos/${{ github.repository }}/actions/jobs/$ci_job_id/logs" | tail -150)
-          else
-            log_tail="(could not locate the ci / ci job's log for this run)"
-          fi
-
+          sanitized_run_id="$GITHUB_RUN_ID"
+          [[ "$sanitized_run_id" =~ ^[1-9][0-9]*$ ]] || sanitized_run_id="unavailable"
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || EXPECTED_HEAD_SHA="unavailable"
+          [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || EXPECTED_BASE_SHA="unavailable"
           {
-            echo "**Independent verification - CI failure, not a reviewer verdict**"
+            echo "### Sanitized CI remediation metadata"
             echo
-            echo "VERDICT: FAIL"
+            echo "run_id: \`$sanitized_run_id\`"
+            echo "head_sha: \`$EXPECTED_HEAD_SHA\`"
+            echo "base_sha: \`$EXPECTED_BASE_SHA\`"
+            echo "job_name: \`ci / ci\`"
+            echo "conclusion: \`failure\`"
             echo
-            echo "CI failed on this attempt before independent review could run. Fix"
-            echo "whatever this points at, not just the symptom. Last ~150 lines of the"
-            echo "\`ci / ci\` job's log:"
-            echo
-            echo '```'
-            echo "$log_tail"
-            echo '```'
-          } > /tmp/ci-failure-comment.md
-          gh pr comment "$PR_NUMBER" --body-file /tmp/ci-failure-comment.md
+            echo "No raw logs, artifacts, step output, environment values, or credentials"
+            echo "were fetched or replayed. The bounded retry must reproduce the failure"
+            echo "with repository-controlled validation commands."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # A reviewer-infrastructure failure is not a code finding. Record only
       # bounded Actions metadata so the retry has a machine-readable reason

@@ -56,7 +56,7 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn("without implementation retry", self.workflow)
         retry_decision = self.workflow.split(
             'if [ "$decision" != "RETRY" ]', 1
-        )[1].split("- name: Attach CI failure output", 1)[0]
+        )[1].split("- name: Record sanitized CI failure metadata", 1)[0]
         self.assertNotIn("Review job errored (no verdict)", retry_decision)
         self.assertNotIn("hit a review-job error", retry_decision)
         metadata_step = self.workflow.split(
@@ -70,6 +70,24 @@ class RemediatePolicyTests(unittest.TestCase):
             metadata_step.index("PR base/head pair changed"),
             metadata_step.index('gh pr comment "$PR_NUMBER"'),
         )
+
+    def test_ci_failure_context_is_metadata_only_and_retry_reproduces_checks(self):
+        ci_metadata = self.workflow.split(
+            "- name: Record sanitized CI failure metadata without log replay", 1
+        )[1].split("- name: Record sanitized review-job-error metadata", 1)[0]
+        self.assertIn("continue-on-error: true", ci_metadata)
+        self.assertNotIn("/actions/jobs/", ci_metadata)
+        self.assertNotIn("/logs", ci_metadata)
+        self.assertNotIn("/artifacts", ci_metadata)
+        self.assertNotIn("--allow-escape-sequences", ci_metadata)
+        self.assertNotIn("gh pr comment", ci_metadata)
+        self.assertIn('run_id: \\`$sanitized_run_id\\`', ci_metadata)
+        self.assertIn('head_sha: \\`$EXPECTED_HEAD_SHA\\`', ci_metadata)
+        self.assertIn('base_sha: \\`$EXPECTED_BASE_SHA\\`', ci_metadata)
+        self.assertIn("$GITHUB_STEP_SUMMARY", ci_metadata)
+        self.assertIn("previous attempt failed deterministic CI before review", self.implement)
+        self.assertIn("Reproduce the failure in this", self.implement)
+        self.assertIn("failed_head_sha: ${{ inputs.expected_head_sha }}", self.implement)
 
     def test_stale_caller_run_cannot_dispatch_newer_head(self):
         self.assertIn("expected_head_sha:", self.workflow)
