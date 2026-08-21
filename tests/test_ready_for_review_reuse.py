@@ -907,6 +907,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("prior_jobs_available=true", merge)
         self.assertIn('current_ci_result="${{ inputs.current_ci_result }}"', merge)
         self.assertIn('[ "$current_ci_result" = "success" ]', merge)
+        self.assertGreaterEqual(
+            merge.count("merge-gate-reuse-checks.py checks"),
+            2,
+        )
+        self.assertNotIn(
+            'map(.state) | all(. == "SUCCESS" or . == "SKIPPED")',
+            merge,
+        )
         self.assertGreaterEqual(merge.count("else\n              checks_ok=false"), 1)
         self.assertGreaterEqual(merge.count("else\n              review_check_ok=false"), 1)
         self.assertIn("pipeline_run_id:", merge)

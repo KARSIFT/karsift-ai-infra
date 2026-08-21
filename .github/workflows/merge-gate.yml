@@ -231,9 +231,10 @@ jobs:
               checks_ok=false
             fi
           else
-            checks_ok=$(jq -r \
-              '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-              /tmp/pr-checks.json || echo "false")
+            checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
+              --pr-checks-file /tmp/pr-checks.json \
+              --head-ref "$head_ref" \
+              --reuse-outcome "$reuse_outcome" || echo "false")
           fi
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 
