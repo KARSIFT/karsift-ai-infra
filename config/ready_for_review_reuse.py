@@ -389,10 +389,19 @@ def compute_checks_ok_with_reuse(
     current_names = {str(check.get("name") or "") for check in pr_checks}
     if not current_reusable.issubset(current_names):
         return False
+    current_ci = [
+        check
+        for check in pr_checks
+        if str(check.get("name") or "") == REQUIRED_CI_JOB
+    ]
+    if len(current_ci) != 1 or str(current_ci[0].get("state") or "") != "SUCCESS":
+        return False
     for check in pr_checks:
         name = str(check.get("name") or "")
         state = str(check.get("state") or "")
         if name.startswith(MERGE_GATE_PREFIX) or name.startswith(REMEDIATE_PREFIX):
+            continue
+        if name == REQUIRED_CI_JOB:
             continue
         if name in current_reusable and state == "SKIPPED":
             continue

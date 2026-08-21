@@ -471,6 +471,29 @@ class MergeGateReuseTests(unittest.TestCase):
                 reuse_outcome="reuse-evidence",
             )
         )
+        skipped_current_ci = [dict(item) for item in self.pr_checks]
+        skipped_current_ci[0] = {
+            **skipped_current_ci[0],
+            "state": "SKIPPED",
+        }
+        self.assertFalse(
+            policy.compute_checks_ok_with_reuse(
+                pr_checks=skipped_current_ci,
+                head_ref=AGENT_REF,
+                prior_jobs=self.prior_jobs,
+                reuse_outcome="reuse-evidence",
+            )
+        )
+        duplicate_current_ci = [dict(item) for item in self.pr_checks]
+        duplicate_current_ci.append(dict(self.pr_checks[0]))
+        self.assertFalse(
+            policy.compute_checks_ok_with_reuse(
+                pr_checks=duplicate_current_ci,
+                head_ref=AGENT_REF,
+                prior_jobs=self.prior_jobs,
+                reuse_outcome="reuse-evidence",
+            )
+        )
 
     def test_merge_helper_accepts_github_jobs_object_not_a_bare_list(self):
         helper = CONFIG / "merge-gate-reuse-checks.py"
