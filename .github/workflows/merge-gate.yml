@@ -342,7 +342,8 @@ jobs:
           for attempt in 1 2 3; do
             live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state,isDraft)
             if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
-               [ "$(jq -r .isDraft <<<"$live_pair")" != "false" ] ||
+               ! jq -e '(.isDraft | type) == "boolean" and .isDraft == false' \
+                 >/dev/null <<<"$live_pair" ||
                [ "$(jq -r .headRefOid <<<"$live_pair")" != "$REVIEWED_HEAD_SHA" ] ||
                [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$REVIEWED_BASE_SHA" ]; then
               echo "PR became closed or draft, or its base/head pair changed immediately before merge; refusing stale evidence." >&2
