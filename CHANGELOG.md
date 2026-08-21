@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Canonicalized untrusted task- and plan-review narratives before constructing
+  App-signed verification records. Full-line binding lookalikes are removed and
+  replaced by the workflow's exact authoritative metadata, while malformed,
+  duplicate, or non-final verdicts remain fail-closed.
+
 - Made the clean implementation publisher's PR operations and bounded issue
   notifications explicitly target the calling repository. The isolated
   bare-repository job can now open or update a PR after pushing its verified

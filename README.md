@@ -135,6 +135,13 @@ live Actions run. Merge remains fail-closed, but `remediate.yml` does not spend 
 implementation retry on that state. It is also forbidden to tell the implementer
 to edit unrelated workflows merely to manufacture the evidence.
 
+Before either task or plan review becomes an App-signed record, a bounded
+normalizer removes full-line commit/task/package/issue/base binding lookalikes
+from the model narrative. The clean workflow then supplies those authoritative
+bindings exactly once and revalidates the final verdict plus live base/head pair.
+Reviewer preambles or repeated metadata therefore cannot make a valid review
+ambiguous, while duplicate or non-final verdicts still fail closed.
+
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, waiting state, or no verdict yet
 (with CI still green) are implementation-remediation no-ops. Only an explicit
 implementation `FAIL` or CI failure can consume the bounded implementation

@@ -423,6 +423,12 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         run: cat /tmp/verdict.md
 
+      - name: Remove model-authored binding lookalikes
+        if: steps.pr.outputs.stale != 'true'
+        run: |
+          python3 karsift-ai-infra/config/normalize-review-narrative.py \
+            /tmp/verdict.md /tmp/verdict-narrative.md
+
       - name: Build verification record for isolated publisher
         if: steps.pr.outputs.stale != 'true'
         env:
@@ -447,7 +453,7 @@ jobs:
             echo "authority_issue: \`$authority_issue\`"
             echo "base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
             echo
-            cat /tmp/verdict.md
+            cat /tmp/verdict-narrative.md
           } > /tmp/verdict-comment.md
 
       - name: Upload verification record
