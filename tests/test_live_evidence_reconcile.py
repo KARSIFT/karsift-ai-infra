@@ -583,7 +583,20 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "- name: Open draft PR from clean runner", 1
         )[1].split("- name: Link source issue to the draft PR", 1)[0]
         self.assertIn("GH_REPO: ${{ github.repository }}", open_pr_step)
-        self.assertIn('gh pr create \\\n            --repo "$GH_REPO"', open_pr_step)
+        self.assertIn(
+            'gh pr create \\\n            --repo "$GH_REPO" \\\n            --draft',
+            open_pr_step,
+        )
+        needs_info_step = plan_publish_job.split(
+            "- name: Post clarifying question from clean runner", 1
+        )[1].split("- name: Download planned package bundle", 1)[0]
+        self.assertIn("GH_REPO: ${{ github.repository }}", needs_info_step)
+        self.assertEqual(needs_info_step.count('--repo "$GH_REPO"'), 3)
+        source_link_step = plan_publish_job.split(
+            "- name: Link source issue to the draft PR", 1
+        )[1]
+        self.assertIn("GH_REPO: ${{ github.repository }}", source_link_step)
+        self.assertEqual(source_link_step.count('--repo "$GH_REPO"'), 3)
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
