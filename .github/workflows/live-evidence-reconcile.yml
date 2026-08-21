@@ -65,6 +65,10 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-issues: write
+          # The qualified attestation is posted on the waiting pull request.
+          # GitHub Apps authorize that conversation through Pull requests,
+          # even though the REST route is under /issues/{number}/comments.
+          permission-pull-requests: write
 
       - name: Reconcile declared live evidence
         env:

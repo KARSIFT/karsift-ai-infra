@@ -529,6 +529,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertNotIn("permission-actions: write", self.workflow)
         self.assertIn("permission-contents: write", self.workflow)
         self.assertIn("permission-issues: write", self.workflow)
+        self.assertIn("permission-pull-requests: write", self.workflow)
         operator_caller = self.pipeline.split("  live-evidence-reconcile:", 1)[1]
         self.assertIn("      actions: write", operator_caller)
         self.assertNotIn("    secrets: inherit", operator_caller)
