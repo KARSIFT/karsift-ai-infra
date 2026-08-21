@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       integration_branch:
-        description: "Integration branch the source run executed against."
+        description: "Integration branch used as the evidence-carrier PR base."
         required: false
         type: string
         default: "develop"
