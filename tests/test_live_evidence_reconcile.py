@@ -579,6 +579,11 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("permission-issues: write", plan_publish_job)
         self.assertIn("permission-pull-requests: write", plan_publish_job)
         self.assertIn("changed files outside its package directory", plan_publish_job)
+        open_pr_step = plan_publish_job.split(
+            "- name: Open draft PR from clean runner", 1
+        )[1].split("- name: Link source issue to the draft PR", 1)[0]
+        self.assertIn("GH_REPO: ${{ github.repository }}", open_pr_step)
+        self.assertIn('gh pr create \\\n            --repo "$GH_REPO"', open_pr_step)
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
