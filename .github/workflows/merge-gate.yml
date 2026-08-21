@@ -91,6 +91,7 @@ jobs:
       verdict: ${{ steps.status.outputs.verdict }}
       head_sha: ${{ steps.status.outputs.head_sha }}
       base_sha: ${{ steps.status.outputs.base_sha }}
+      is_draft: ${{ steps.status.outputs.is_draft }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -113,14 +114,20 @@ jobs:
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          pr_json=$(gh pr view "$pr_number" --json body,author,headRefName,headRefOid,baseRefOid)
+          pr_json=$(gh pr view "$pr_number" --json body,author,headRefName,headRefOid,baseRefOid,isDraft)
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
           head_ref=$(echo "$pr_json" | jq -r '.headRefName')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
           base_sha=$(echo "$pr_json" | jq -r '.baseRefOid')
+          # GitHub documents isDraft as a boolean. Treat a missing, null, or
+          # otherwise malformed value as an infrastructure failure instead
+          # of normalizing it to "false" and opening a merge path.
+          is_draft=$(echo "$pr_json" | jq -r \
+            'if (.isDraft | type) == "boolean" then (.isDraft | tostring) else error("invalid isDraft value") end')
           echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
           echo "base_sha=$expected_base_sha" >> "$GITHUB_OUTPUT"
+          echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
@@ -259,6 +266,7 @@ jobs:
           risk="${{ steps.status.outputs.risk }}"
           checks_ok="${{ steps.status.outputs.checks_ok }}"
           verdict="${{ steps.status.outputs.verdict }}"
+          is_draft="${{ steps.status.outputs.is_draft }}"
           gates_pass=false
           if [ "$checks_ok" = "true" ] && [ "$verdict" != "FAIL" ] && [ "$verdict" != "WAITING" ] && [ "$verdict" != "PENDING" ]; then
             gates_pass=true
@@ -266,6 +274,8 @@ jobs:
 
           if [ "$risk" = "unknown" ]; then
             decision="BLOCKED - no parseable 'Risk classification: R#' line found in the PR body; correct the declaration"
+          elif [ "$is_draft" = "true" ]; then
+            decision="BLOCKED - PR is draft; mark it ready only after its required evidence is complete"
           elif [ "$gates_pass" = "true" ] && [ "${{ inputs.auto_merge_enabled }}" = "true" ]; then
             decision="WOULD AUTO-MERGE ($risk, auto_merge_enabled=true)"
           elif [ "$gates_pass" = "true" ]; then
@@ -285,6 +295,7 @@ jobs:
     if: |
       github.event_name == 'pull_request' &&
       inputs.auto_merge_enabled == 'true' &&
+      needs.report-status.outputs.is_draft == 'false' &&
       needs.report-status.outputs.risk != 'unknown' &&
       needs.report-status.outputs.checks_ok == 'true' &&
       needs.report-status.outputs.verdict != 'FAIL' &&
@@ -329,11 +340,13 @@ jobs:
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
           # step above - see that step's comment (karsift-ai-infra#22).
           for attempt in 1 2 3; do
-            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state,isDraft)
             if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+               ! jq -e '(.isDraft | type) == "boolean" and .isDraft == false' \
+                 >/dev/null <<<"$live_pair" ||
                [ "$(jq -r .headRefOid <<<"$live_pair")" != "$REVIEWED_HEAD_SHA" ] ||
                [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$REVIEWED_BASE_SHA" ]; then
-              echo "PR base/head pair changed immediately before merge; refusing stale evidence." >&2
+              echo "PR became closed or draft, or its base/head pair changed immediately before merge; refusing stale evidence." >&2
               exit 1
             fi
             if gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then

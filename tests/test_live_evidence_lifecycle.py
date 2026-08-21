@@ -75,7 +75,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         gh_stub = """
         gh() {
           if [ "$1 $2 $3" = "pr view 1" ]; then
-            printf '%s\\n' '{"body":"Risk classification: R1","title":"fixture","author":{"login":"fixture"},"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+            printf '%s\\n' '{"body":"Risk classification: R1","title":"fixture","author":{"login":"fixture"},"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","isDraft":false}'
             return 0
           fi
           printf 'unexpected gh invocation: %s\\n' "$*" >&2
@@ -119,6 +119,13 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             ),
             "WAITING",
         )
+
+    def test_ready_for_review_rechecks_unchanged_draft_sha(self):
+        self.assertIn(
+            "types: [opened, synchronize, reopened, ready_for_review, closed]",
+            self.pipeline_template,
+        )
+        self.assertIn("github.event.action != 'closed'", self.pipeline_template)
 
     def test_code_and_ci_failures_retry_but_review_infrastructure_does_not(self):
         common = {"expected_sha": "a" * 40, "current_sha": "a" * 40}

@@ -27,6 +27,14 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("needs.report-status.outputs.verdict != 'WAITING'", self.auto_merge)
         self.assertIn("needs.report-status.outputs.verdict != 'PENDING'", self.auto_merge)
 
+    def test_draft_pr_is_reported_and_never_enters_auto_merge(self):
+        self.assertIn("is_draft: ${{ steps.status.outputs.is_draft }}", self.workflow)
+        self.assertIn("baseRefOid,isDraft", self.workflow)
+        self.assertIn('echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"', self.workflow)
+        self.assertIn('else error("invalid isDraft value") end', self.workflow)
+        self.assertIn('PR is draft; mark it ready only after its required evidence is complete', self.workflow)
+        self.assertIn("needs.report-status.outputs.is_draft == 'false'", self.auto_merge)
+
     def test_founder_comment_is_not_an_override_path(self):
         self.assertNotIn("  approve-and-merge:", self.workflow)
         self.assertNotIn("COMMENT_AUTHOR", self.workflow)
@@ -52,7 +60,11 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("expected_base_sha:", self.workflow)
         self.assertIn("head_sha: ${{ steps.status.outputs.head_sha }}", self.workflow)
         self.assertIn("base_sha: ${{ steps.status.outputs.base_sha }}", self.workflow)
-        self.assertIn('gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state', self.auto_merge)
+        self.assertIn('gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state,isDraft', self.auto_merge)
+        self.assertIn(
+            '! jq -e \'(.isDraft | type) == "boolean" and .isDraft == false\'',
+            self.auto_merge,
+        )
         self.assertIn('!= "$REVIEWED_BASE_SHA"', self.auto_merge)
         self.assertIn("--match-head-commit \"$REVIEWED_HEAD_SHA\"", self.auto_merge)
 
