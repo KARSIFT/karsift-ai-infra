@@ -412,7 +412,6 @@ class MergeGateReuseTests(unittest.TestCase):
         self.pr_checks = [
             {"name": policy.REQUIRED_CI_JOB, "state": "SUCCESS"},
             {"name": policy.AGENT_PUBLISHER_JOB, "state": "SUCCESS"},
-            {"name": "ci", "state": "SKIPPED"},
             {"name": "extract-package-path", "state": "SKIPPED"},
             {"name": "review", "state": "SKIPPED"},
             {"name": "governance-policy", "state": "SUCCESS"},
@@ -460,7 +459,9 @@ class MergeGateReuseTests(unittest.TestCase):
             )
         )
         without_ci = [
-            item for item in self.pr_checks if item["name"] != "ci"
+            item
+            for item in self.pr_checks
+            if item["name"] != policy.REQUIRED_CI_JOB
         ]
         self.assertFalse(
             policy.compute_checks_ok_with_reuse(
