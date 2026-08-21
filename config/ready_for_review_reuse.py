@@ -414,7 +414,11 @@ def compute_checks_ok(pr_checks: list[dict]) -> bool:
     for check in pr_checks:
         name = str(check.get("name") or "")
         state = str(check.get("state") or "")
-        if name.startswith(MERGE_GATE_PREFIX) or name.startswith(REMEDIATE_PREFIX):
+        if (
+            name.startswith(MERGE_GATE_PREFIX)
+            or name.startswith(REMEDIATE_PREFIX)
+            or name.startswith("ready-for-review-reuse")
+        ):
             continue
         if state not in {"SUCCESS", "SKIPPED"}:
             return False

@@ -678,7 +678,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             self.pipeline.split("  plan-review:", 1)[1].split("\n  extract-package-path:", 1)[0],
         )
         self.assertIn(
-            "needs: [ready-for-review-reuse, review, plan-review]",
+            "needs: [ready-for-review-reuse, ci, review, plan-review]",
             self.pipeline,
         )
 

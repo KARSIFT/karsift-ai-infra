@@ -48,9 +48,9 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      outcome: ${{ steps.decide.outputs.outcome || steps.full-path.outputs.outcome || 'fail-closed-to-full-path' }}
-      reason: ${{ steps.decide.outputs.reason || steps.full-path.outputs.reason || 'helper_failed' }}
-      prior_run_id: ${{ steps.decide.outputs.prior_run_id || '' }}
+      outcome: ${{ steps.fail-closed.outputs.outcome || steps.decide.outputs.outcome || steps.full-path.outputs.outcome || 'fail-closed-to-full-path' }}
+      reason: ${{ steps.fail-closed.outputs.reason || steps.decide.outputs.reason || steps.full-path.outputs.reason || 'helper_failed' }}
+      prior_run_id: ${{ steps.decide.outcome == 'success' && steps.decide.outputs.prior_run_id || '' }}
     steps:
       - name: Select the normal path for non-ready activity
         id: full-path
@@ -59,11 +59,15 @@ jobs:
           echo "outcome=full-path" >> "$GITHUB_OUTPUT"
           echo "reason=not_ready_for_review" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - id: source-checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         if: inputs.event_action == 'ready_for_review'
+        continue-on-error: true
 
       - name: Checkout shared reuse policy
+        id: policy-checkout
         if: inputs.event_action == 'ready_for_review'
+        continue-on-error: true
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: ${{ job.workflow_repository }}
@@ -73,7 +77,11 @@ jobs:
 
       - name: Evaluate ready_for_review reuse eligibility
         id: decide
-        if: inputs.event_action == 'ready_for_review'
+        if: |
+          inputs.event_action == 'ready_for_review' &&
+          steps.source-checkout.outcome == 'success' &&
+          steps.policy-checkout.outcome == 'success'
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PYTHONPATH: karsift-ai-infra/config
@@ -85,3 +93,17 @@ jobs:
             --expected-base-sha "${{ inputs.expected_base_sha }}" \
             --event-action "${{ inputs.event_action }}" \
             --current-run-id "${{ inputs.current_run_id }}"
+
+      - name: Select the fail-closed full path after evaluation failure
+        id: fail-closed
+        if: |
+          always() &&
+          inputs.event_action == 'ready_for_review' &&
+          (
+            steps.source-checkout.outcome != 'success' ||
+            steps.policy-checkout.outcome != 'success' ||
+            steps.decide.outcome != 'success'
+          )
+        run: |
+          echo "outcome=fail-closed-to-full-path" >> "$GITHUB_OUTPUT"
+          echo "reason=helper_failed" >> "$GITHUB_OUTPUT"

@@ -525,8 +525,22 @@ class MergeGateReuseTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "true")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "true")
+
+    def test_failed_reuse_decision_does_not_poison_completed_full_path(self):
+        self.assertTrue(
+            policy.compute_checks_ok(
+                [
+                    {"name": policy.REQUIRED_CI_JOB, "state": "SUCCESS"},
+                    {"name": policy.AGENT_PUBLISHER_JOB, "state": "SUCCESS"},
+                    {
+                        "name": "ready-for-review-reuse / decide (ready_for_review)",
+                        "state": "FAILURE",
+                    },
+                ]
+            )
+        )
 
 
 class ProofVerifierTests(unittest.TestCase):
@@ -891,6 +905,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(".head_branch == $head_ref", merge)
         self.assertIn('[ "$reuse_prior_run_id" -lt "$current_run_id" ]', merge)
         self.assertIn("prior_jobs_available=true", merge)
+        self.assertIn('current_ci_result="${{ inputs.current_ci_result }}"', merge)
+        self.assertIn('[ "$current_ci_result" = "success" ]', merge)
         self.assertGreaterEqual(merge.count("else\n              checks_ok=false"), 1)
         self.assertGreaterEqual(merge.count("else\n              review_check_ok=false"), 1)
         self.assertIn("pipeline_run_id:", merge)
@@ -984,6 +1000,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("expected_source_head_sha:", template)
         self.assertIn("expected_source_base_sha:", template)
         self.assertIn("name: decide (${{ inputs.event_action }})", reuse_workflow)
+        self.assertIn("Select the fail-closed full path after evaluation failure", reuse_workflow)
+        self.assertIn("steps.fail-closed.outputs.outcome", reuse_workflow)
+        self.assertIn("steps.decide.outcome == 'success'", reuse_workflow)
+        self.assertGreaterEqual(reuse_workflow.count("continue-on-error: true"), 3)
+        merge_match = re.search(
+            r"(?ms)^  merge-gate:\n(.*?)(?=^  [A-Za-z0-9][A-Za-z0-9-]*:\n|\Z)",
+            template,
+        )
+        self.assertIsNotNone(merge_match)
+        self.assertIn(
+            "needs: [ready-for-review-reuse, ci, review, plan-review]",
+            merge_match.group(1),
+        )
+        self.assertIn(
+            "current_ci_result: ${{ needs.ci.result }}",
+            merge_match.group(1),
+        )
 
         # A missing output (helper/job failure), unknown output, deterministic
         # full-path, and explicit fail-closed outcome all satisfy the caller's
