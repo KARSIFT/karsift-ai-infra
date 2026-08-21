@@ -120,7 +120,11 @@ jobs:
           head_ref=$(echo "$pr_json" | jq -r '.headRefName')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
           base_sha=$(echo "$pr_json" | jq -r '.baseRefOid')
-          is_draft=$(echo "$pr_json" | jq -r 'if .isDraft == true then "true" else "false" end')
+          # GitHub documents isDraft as a boolean. Treat a missing, null, or
+          # otherwise malformed value as an infrastructure failure instead
+          # of normalizing it to "false" and opening a merge path.
+          is_draft=$(echo "$pr_json" | jq -r \
+            'if (.isDraft | type) == "boolean" then (.isDraft | tostring) else error("invalid isDraft value") end')
           echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
           echo "base_sha=$expected_base_sha" >> "$GITHUB_OUTPUT"
           echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"

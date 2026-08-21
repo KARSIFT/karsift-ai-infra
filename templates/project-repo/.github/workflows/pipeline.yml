@@ -41,7 +41,10 @@ name: pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    # ready_for_review is required for draft-aware merge gating: completing
+    # evidence can leave the exact reviewed SHA unchanged, so GitHub's draft
+    # transition must give the gate a fresh event on that same SHA.
+    types: [opened, synchronize, reopened, ready_for_review, closed]
   # Polling avoids a workflow_run-on-pipeline recursion loop and can discover
   # any workflow identity declared by a contract without a static name list.
   schedule:

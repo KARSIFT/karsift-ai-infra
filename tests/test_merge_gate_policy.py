@@ -31,6 +31,7 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("is_draft: ${{ steps.status.outputs.is_draft }}", self.workflow)
         self.assertIn("baseRefOid,isDraft", self.workflow)
         self.assertIn('echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"', self.workflow)
+        self.assertIn('else error("invalid isDraft value") end', self.workflow)
         self.assertIn('PR is draft; mark it ready only after its required evidence is complete', self.workflow)
         self.assertIn("needs.report-status.outputs.is_draft == 'false'", self.auto_merge)
 
