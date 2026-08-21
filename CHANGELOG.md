@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Restored schema-level rollout compatibility for `plan-review.yml` exact
+  base/head inputs. Older default-branch callers can start unrelated issue
+  events again, while omitted or invalid SHAs still fail closed before plan
+  reviewer invocation.
+
 - Replaced raw CI-log replay in remediation with allowlisted run/base/head/job
   metadata in the Actions summary. A CI-only retry now reproduces the failure
   with repository-controlled checks when no trusted signed review exists, so

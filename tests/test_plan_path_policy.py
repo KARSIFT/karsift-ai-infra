@@ -42,10 +42,21 @@ class PlanPathPolicyTests(unittest.TestCase):
     def test_plan_review_is_bound_to_the_callers_immutable_event_base_and_head(self):
         self.assertIn("expected_head_sha:", self.plan_review)
         self.assertIn("expected_base_sha:", self.plan_review)
-        input_block = self.plan_review.split("expected_head_sha:", 1)[1].split("secrets:", 1)[0]
-        self.assertIn("required: true", input_block)
-        self.assertIn('EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}', self.plan_review)
-        self.assertIn('EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}', self.plan_review)
+        input_block = self.plan_review.split("expected_head_sha:", 1)[1].split(
+            "secrets:", 1
+        )[0]
+        self.assertEqual(input_block.count("required: false"), 2)
+        self.assertEqual(input_block.count('default: ""'), 2)
+        self.assertIn(
+            'EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}', self.plan_review
+        )
+        self.assertIn(
+            'EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}', self.plan_review
+        )
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR base/head SHA; refusing to run plan review.",
+            self.plan_review,
+        )
         self.assertIn('if [ "$live_sha" != "$EXPECTED_HEAD_SHA" ] ||', self.plan_review)
         self.assertIn('[ "$live_base_sha" != "$EXPECTED_BASE_SHA" ]', self.plan_review)
         self.assertNotIn('gh pr diff', self.plan_review)
