@@ -204,6 +204,11 @@ review requires a trusted App-authored attestation bound to its new exact head,
 and that attestation is posted before the branch advances to prevent a fast
 `synchronize` review from racing it.
 
+Merge, remediation, and plan adoption apply the same identity rule: only an
+App-signed, exact-head verdict with its successful isolated publisher check is
+accepted. Plan review has its own clean `publish-plan-review` stage, so neither
+review model can impersonate the credential that records its decision.
+
 For `pull_request` and `pull_request_target` evidence, the run's GitHub PR
 association must include the waiting PR number; matching workflow, branch, and
 SHA alone is insufficient. The read-only workflow token explicitly grants

@@ -106,9 +106,10 @@ jobs:
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          pr_json=$(gh pr view "$pr_number" --json body,author,headRefOid)
+          pr_json=$(gh pr view "$pr_number" --json body,author,headRefName,headRefOid)
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
+          head_ref=$(echo "$pr_json" | jq -r '.headRefName')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
           echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
@@ -147,9 +148,14 @@ jobs:
           # count. The single-job "approved"-comment path mostly avoided
           # this by luck (fewer concurrent jobs, less chance of catching one
           # mid-flight), not by design - it has the identical bug below.
-          checks_ok=$(gh pr checks "$pr_number" --json name,state -q \
+          if ! gh pr checks "$pr_number" --json name,state > /tmp/pr-checks.json; then
+            echo "checks_ok=false" >> "$GITHUB_OUTPUT"
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          checks_ok=$(jq -r \
             '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-            || echo "false")
+            /tmp/pr-checks.json || echo "false")
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 
           # Bot-authored PRs (Dependabot etc.) never get a `review` job run
@@ -171,10 +177,59 @@ jobs:
             exit 0
           fi
 
-          review_binding="bound to commit \`$head_sha\`"
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-            | jq -r --arg binding "$review_binding" \
-              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          review_check=""
+          task_line=""
+          issue_line=""
+          package_line=""
+          if [[ "$head_ref" == agent/* ]]; then
+            review_check="review / publish-review"
+            mapfile -t tasks < <(printf '%s\n' "$body" | grep -oP '(?<=Implements task `)[^`]+' || true)
+            mapfile -t packages < <(printf '%s\n' "$body" | grep -oP '(?<=Package path: `)[^`]+' || true)
+            mapfile -t issues < <(printf '%s\n' "$body" | grep -oP '(?<=Closes #)[0-9]+' || true)
+            if [ "${#tasks[@]}" -ne 1 ] || [ "${#packages[@]}" -ne 1 ] || [ "${#issues[@]}" -ne 1 ]; then
+              echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            task_line="task_id: \`${tasks[0]}\`"
+            package_line="package_path: \`${packages[0]}\`"
+            issue_line="authority_issue: \`${issues[0]}\`"
+          elif [[ "$head_ref" == plan/* ]]; then
+            review_check="plan-review / publish-plan-review"
+            mapfile -t packages < <(printf '%s\n' "$body" | grep -oP '(?<=New package directory: `)[^`]+' || true)
+            if [ "${#packages[@]}" -ne 1 ]; then
+              echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            package_line="package_path: \`${packages[0]}\`"
+          else
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          review_check_ok=$(jq -r --arg name "$review_check" \
+            '[.[] | select(.name == $name)] | length > 0 and all(.state == "SUCCESS")' \
+            /tmp/pr-checks.json)
+          if [ "$review_check_ok" != "true" ]; then
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          review_header="**Independent verification - bound to commit \`$head_sha\`**"
+          verdict=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
+            | jq -r \
+              --arg header "$review_header" \
+              --arg task "$task_line" \
+              --arg package "$package_line" \
+              --arg issue "$issue_line" \
+              '[.[][] | select(
+                .user.login == "karsift-ai-infra-bot[bot]" and
+                .user.type == "Bot" and
+                (.body | startswith($header)) and
+                ((.body | split("\n") | index($header)) != null) and
+                ((.body | split("\n") | index($package)) != null) and
+                ($task == "" or ((.body | split("\n") | index($task)) != null)) and
+                ($issue == "" or ((.body | split("\n") | index($issue)) != null))
+              )] | sort_by(.created_at, .id) | last | .body // ""')
           printf '%s\n' "$verdict" > /tmp/review-verdict.md
 
           # Use the same fail-dominant parser as remediation. It tolerates

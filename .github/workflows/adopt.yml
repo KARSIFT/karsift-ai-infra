@@ -182,11 +182,27 @@ jobs:
             echo "Merged plan head $head_sha has non-passing commit statuses ($status_state); refusing adoption." >&2
             exit 1
           fi
+          plan_review_checks=$(echo "$prerequisite_checks" | jq \
+            '[.[] | select(.name == "plan-review / publish-plan-review" and .status == "completed" and .conclusion == "success")] | length')
+          if [ "$plan_review_checks" -lt 1 ]; then
+            echo "Merged plan head lacks a successful isolated plan-verdict publisher check." >&2
+            exit 1
+          fi
           if [ -x scripts/governance/validate-governance.sh ]; then
             bash scripts/governance/validate-governance.sh
           fi
-          verification=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last')
+          review_header="**Independent verification - bound to commit \`$head_sha\`**"
+          package_line="package_path: \`${{ steps.locate.outputs.package_path }}\`"
+          verification=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
+            | jq --arg header "$review_header" --arg package "$package_line" \
+              '[.[][] | select(
+                .user.login == "karsift-ai-infra-bot[bot]" and
+                .user.type == "Bot" and
+                (.body | startswith($header)) and
+                ((.body | split("\n") | index($header)) != null) and
+                ((.body | split("\n") | index($package)) != null)
+              )] | sort_by(.created_at, .id) | last // {}')
           verdict=$(echo "$verification" | jq -r '.body // ""')
           if ! echo "$verdict" | grep -Fq "bound to commit \`$head_sha\`"; then
             echo "No independent verification is bound to merged plan head $head_sha." >&2

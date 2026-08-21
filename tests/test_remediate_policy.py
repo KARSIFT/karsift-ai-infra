@@ -36,8 +36,11 @@ class RemediatePolicyTests(unittest.TestCase):
 
     def test_waiting_is_bound_to_current_exact_pr_head(self):
         self.assertIn("--json body,headRefOid", self.workflow)
-        self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
-        self.assertIn(".body | contains($binding)", self.workflow)
+        self.assertIn('review_header="**Independent verification - bound to commit', self.workflow)
+        self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', self.workflow)
+        self.assertIn('.user.type == "Bot"', self.workflow)
+        self.assertIn('package_line="package_path:', self.workflow)
+        self.assertIn("--paginate --slurp", self.workflow)
 
     def test_genuine_fail_and_infrastructure_failures_still_retry(self):
         self.assertIn('decision" != "RETRY"', self.workflow)

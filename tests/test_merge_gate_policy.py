@@ -37,9 +37,13 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("config/classify-review-verdict.py", self.workflow)
 
     def test_only_current_exact_sha_review_is_considered(self):
-        self.assertIn("--json body,author,headRefOid", self.workflow)
-        self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
-        self.assertIn(".body | contains($binding)", self.workflow)
+        self.assertIn("--json body,author,headRefName,headRefOid", self.workflow)
+        self.assertIn('review_header="**Independent verification - bound to commit', self.workflow)
+        self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', self.workflow)
+        self.assertIn('.user.type == "Bot"', self.workflow)
+        self.assertIn('review / publish-review', self.workflow)
+        self.assertIn('plan-review / publish-plan-review', self.workflow)
+        self.assertIn("--paginate --slurp", self.workflow)
 
     def test_merge_rechecks_the_reviewed_head_atomically(self):
         self.assertIn("expected_head_sha:", self.workflow)

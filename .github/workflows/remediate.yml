@@ -96,6 +96,7 @@ jobs:
           CI_FAILED: ${{ inputs.ci_failed }}
           REVIEW_JOB_FAILED: ${{ inputs.review_job_failed }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
         run: |
           set -euo pipefail
 
@@ -125,6 +126,7 @@ jobs:
           task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
           change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
           issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || echo "")
+          mapfile -t package_paths < <(printf '%s\n' "$body" | grep -oP '(?<=Package path: `)[^`]+' || true)
           attempt=$(echo "$body" | grep -oP '(?<=attempt )[0-9]+(?= of 2)' | head -1 || echo "1")
 
           echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
@@ -152,10 +154,31 @@ jobs:
 
           # Only a review explicitly bound to this run's current PR head can
           # drive a lifecycle decision. Earlier-head comments are ignored.
-          review_binding="bound to commit \`$head_sha\`"
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg binding "$review_binding" \
-              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          verdict=""
+          if [ "${#package_paths[@]}" -eq 1 ] && [ "${package_paths[0]}" = "$PACKAGE_PATH" ] &&
+             [[ "$task_id" =~ ^[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+$ ]] &&
+             [[ "$issue_number" =~ ^[0-9]+$ ]]; then
+            review_header="**Independent verification - bound to commit \`$head_sha\`**"
+            task_line="task_id: \`$task_id\`"
+            package_line="package_path: \`$PACKAGE_PATH\`"
+            issue_line="authority_issue: \`$issue_number\`"
+            verdict=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/issues/$PR_NUMBER/comments?per_page=100" \
+              | jq -r \
+                --arg header "$review_header" \
+                --arg task "$task_line" \
+                --arg package "$package_line" \
+                --arg issue "$issue_line" \
+                '[.[][] | select(
+                  .user.login == "karsift-ai-infra-bot[bot]" and
+                  .user.type == "Bot" and
+                  (.body | startswith($header)) and
+                  ((.body | split("\n") | index($header)) != null) and
+                  ((.body | split("\n") | index($task)) != null) and
+                  ((.body | split("\n") | index($package)) != null) and
+                  ((.body | split("\n") | index($issue)) != null)
+                )] | sort_by(.created_at, .id) | last | .body // ""')
+          fi
           printf '%s\n' "$verdict" > /tmp/review-verdict.md
           review_state=$(python3 karsift-ai-infra/config/classify-review-verdict.py /tmp/review-verdict.md)
           decision=$(python3 karsift-ai-infra/config/decide-remediation.py \

@@ -20,7 +20,9 @@
   verdicts are now validated and signed by the dedicated GitHub App from a
   fresh publisher job; the model-facing reviewer and implementer hold no
   issue-writing token, so the generic Actions bot cannot forge dispatch
-  authority.
+  authority. Merge, remediation, and plan adoption accept only those App-signed
+  exact-head records and require the matching isolated publisher check; plan
+  review uses the same separation.
   The caller template polls hourly instead of using a recursive catch-all
   `workflow_run` trigger.
 - Isolated privileged publication from unrestricted implementation: the model
