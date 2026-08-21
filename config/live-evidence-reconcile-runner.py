@@ -47,10 +47,36 @@ CHECK_DETAILS_RE = re.compile(
     r"^https://github\.com/([^/]+/[^/]+)/actions/runs/([0-9]+)/job/[0-9]+(?:\?.*)?$"
 )
 COMMENT_WORKFLOW_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()\-]{0,199}$")
+HTTP_STATUS_RE = re.compile(r"\bHTTP ([1-5][0-9]{2})\b")
 
 
 class ApiError(RuntimeError):
     pass
+
+
+def api_operation(method: str, endpoint: str) -> str:
+    """Return a fixed diagnostic class without exposing endpoint data."""
+    normalized_method = method.upper()
+    if normalized_method == "POST" and re.fullmatch(r"repos/[^/]+/[^/]+/git/trees", endpoint):
+        return "create_tree"
+    if normalized_method == "POST" and re.fullmatch(r"repos/[^/]+/[^/]+/git/commits", endpoint):
+        return "create_commit"
+    if normalized_method == "PATCH" and "/git/refs/" in endpoint:
+        return "update_ref"
+    if normalized_method == "POST" and re.search(r"/issues/[0-9]+/comments$", endpoint):
+        return "create_issue_comment"
+    if normalized_method == "PATCH" and re.search(r"/issues/comments/[0-9]+$", endpoint):
+        return "update_issue_comment"
+    if normalized_method == "POST" and re.search(r"/actions/workflows/[^/]+/dispatches$", endpoint):
+        return "dispatch_workflow"
+    return "read_metadata" if normalized_method == "GET" else "mutate_metadata"
+
+
+def api_failure_code(operation: str, stderr: str) -> str:
+    """Build an allowlisted error code; never copy arbitrary CLI diagnostics."""
+    status = HTTP_STATUS_RE.search(stderr)
+    suffix = f"_http_{status.group(1)}" if status else "_failed"
+    return f"github_api_{operation}{suffix}"
 
 
 class GitHub:
@@ -58,7 +84,13 @@ class GitHub:
         self.repository = repository
         self.token = token
 
-    def _run(self, args: list[str], payload: dict[str, Any] | None = None) -> Any:
+    def _run(
+        self,
+        args: list[str],
+        payload: dict[str, Any] | None = None,
+        *,
+        operation: str,
+    ) -> Any:
         env = os.environ.copy()
         env["GH_TOKEN"] = self.token
         command = ["gh", "api"] + args
@@ -71,16 +103,19 @@ class GitHub:
             check=False,
         )
         if completed.returncode != 0:
-            raise ApiError("github_api_request_failed")
+            raise ApiError(api_failure_code(operation, completed.stderr))
         if not completed.stdout.strip():
             return None
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            raise ApiError("github_api_response_invalid") from exc
+            raise ApiError(f"github_api_{operation}_response_invalid") from exc
 
     def get(self, endpoint: str) -> Any:
-        return self._run([endpoint])
+        return self._run(
+            [endpoint],
+            operation=api_operation("GET", endpoint),
+        )
 
     def get_all(self, endpoint: str, key: str | None = None) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -108,14 +143,23 @@ class GitHub:
         if completed.returncode != 0:
             if "HTTP 404" in completed.stderr:
                 return None
-            raise ApiError("github_api_request_failed")
+            raise ApiError(
+                api_failure_code(
+                    api_operation("GET", endpoint),
+                    completed.stderr,
+                )
+            )
         try:
             return json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            raise ApiError("github_api_response_invalid") from exc
+            raise ApiError("github_api_read_metadata_response_invalid") from exc
 
     def mutate(self, method: str, endpoint: str, payload: dict[str, Any]) -> Any:
-        return self._run(["--method", method, endpoint, "--input", "-"], payload)
+        return self._run(
+            ["--method", method, endpoint, "--input", "-"],
+            payload,
+            operation=api_operation(method, endpoint),
+        )
 
 
 @dataclass(frozen=True)

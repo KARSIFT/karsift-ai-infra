@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
@@ -123,6 +124,56 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 now=NOW,
                 **kwargs,
             )
+
+    def test_api_failures_report_only_allowlisted_operation_and_status(self):
+        repository = "KARSIFT/example"
+        endpoint_cases = {
+            ("POST", f"repos/{repository}/git/trees"): "create_tree",
+            ("POST", f"repos/{repository}/git/commits"): "create_commit",
+            ("PATCH", f"repos/{repository}/git/refs/heads/agent/example"): "update_ref",
+            ("POST", f"repos/{repository}/issues/7/comments"): "create_issue_comment",
+            ("PATCH", f"repos/{repository}/issues/comments/9"): "update_issue_comment",
+            (
+                "POST",
+                f"repos/{repository}/actions/workflows/synthetic.yml/dispatches",
+            ): "dispatch_workflow",
+            ("GET", f"repos/{repository}/pulls/7?private=value"): "read_metadata",
+        }
+        for (method, endpoint), expected in endpoint_cases.items():
+            self.assertEqual(runner.api_operation(method, endpoint), expected)
+
+        unsafe_stderr = (
+            "gh: secret-value and repos/KARSIFT/example/git/trees "
+            "(HTTP 403)\nresponse body with token"
+        )
+        completed = subprocess.CompletedProcess(
+            args=["gh", "api"],
+            returncode=1,
+            stdout="",
+            stderr=unsafe_stderr,
+        )
+        api = runner.GitHub(repository, "never-render-this-token")
+        with patch.object(runner.subprocess, "run", return_value=completed):
+            with self.assertRaises(runner.ApiError) as rejected:
+                api.mutate(
+                    "POST",
+                    f"repos/{repository}/git/trees",
+                    {"private": "payload"},
+                )
+        self.assertEqual(
+            str(rejected.exception),
+            "github_api_create_tree_http_403",
+        )
+        rendered = str(rejected.exception)
+        self.assertNotIn("secret-value", rendered)
+        self.assertNotIn("KARSIFT/example", rendered)
+        self.assertNotIn("token", rendered)
+
+        no_status = runner.api_failure_code(
+            "create_issue_comment",
+            "arbitrary private failure text",
+        )
+        self.assertEqual(no_status, "github_api_create_issue_comment_failed")
 
     def test_contract_parser_rejects_unknown_duplicate_and_unsafe_yaml(self):
         for suffix in (
