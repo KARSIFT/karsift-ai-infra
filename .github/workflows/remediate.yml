@@ -286,6 +286,7 @@ jobs:
       # directly from implement.yml when no trusted review record exists.
       - name: Record sanitized CI failure metadata without log replay
         if: inputs.ci_failed == 'true' && steps.parse.outputs.next_attempt != ''
+        continue-on-error: true
         env:
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
           EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}

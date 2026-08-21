@@ -75,6 +75,7 @@ class RemediatePolicyTests(unittest.TestCase):
         ci_metadata = self.workflow.split(
             "- name: Record sanitized CI failure metadata without log replay", 1
         )[1].split("- name: Record sanitized review-job-error metadata", 1)[0]
+        self.assertIn("continue-on-error: true", ci_metadata)
         self.assertNotIn("/actions/jobs/", ci_metadata)
         self.assertNotIn("/logs", ci_metadata)
         self.assertNotIn("/artifacts", ci_metadata)
