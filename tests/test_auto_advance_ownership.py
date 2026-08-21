@@ -33,6 +33,10 @@ publisher = load_module(
     "auto_advance_carrier_publisher",
     CONFIG / "auto-advance-carrier-publisher.py",
 )
+classifier = load_module(
+    "auto_advance_classifier",
+    CONFIG / "auto-advance-classifier.py",
+)
 fail_closed = load_module(
     "auto_advance_fail_closed",
     CONFIG / "auto-advance-fail-closed.py",
@@ -133,6 +137,30 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             )
             self.assertEqual(result.decision, "implement")
 
+    def test_voc102_test_03_missing_tasks_file_fails_closed_instead_of_guessing(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            package = Path(scratch) / "pkg"
+            package.mkdir()
+            argv = [
+                "auto-advance-classifier.py",
+                "--package-path",
+                str(package),
+                "--next-task-id",
+                "VOC-000-T01",
+                "--change-id",
+                "VOC-000",
+                "--issue-number",
+                "1",
+            ]
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(classifier, "write_output") as write,
+            ):
+                self.assertEqual(classifier.main(), 0)
+            classification = write.call_args.args[0]
+            self.assertEqual(classification.decision, "fail-closed")
+            self.assertEqual(classification.reason, "missing_tasks_file")
+
     def test_voc102_test_04_malformed_contract_fail_closed(self):
         with tempfile.TemporaryDirectory() as scratch:
             package = Path(scratch) / "pkg"
@@ -151,6 +179,16 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 str(package), "VOC-102-T01", ""
             )
             self.assertEqual(invalid_schema.decision, "fail-closed")
+
+            (contract_dir / "VOC-102-T01.yaml").write_text(
+                contract_yaml("VOC-102-T99"),
+                encoding="utf-8",
+            )
+            task_mismatch = ownership.classify_next_task(
+                str(package), "VOC-102-T01", ""
+            )
+            self.assertEqual(task_mismatch.decision, "fail-closed")
+            self.assertEqual(task_mismatch.reason, "task_id_mismatch")
 
     def test_voc102_test_05_missing_or_unrecognized_ownership_fail_closed(self):
         cases = [
