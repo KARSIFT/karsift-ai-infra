@@ -350,8 +350,9 @@ jobs:
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-issues: write
-          permission-pull-requests: read
+          # `gh pr comment` uses GraphQL addComment on a PullRequest subject;
+          # pull-requests:write covers the PR and its related comments.
+          permission-pull-requests: write
 
       - name: Publish App-signed plan verification comment
         env:
