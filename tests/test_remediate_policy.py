@@ -35,6 +35,10 @@ class RemediatePolicyTests(unittest.TestCase):
         )[1].split("- name: Record sanitized CI failure metadata", 1)[0]
         self.assertIn("--json headRefOid,baseRefOid,state", escalation)
         self.assertIn("remediation-ownership-escalation", escalation)
+        self.assertIn("VOC-106: Remediation operator escalation for", escalation)
+        self.assertIn('should_retry: \\`false\\`', escalation)
+        self.assertIn('package_path: \\`$PACKAGE_PATH\\`', escalation)
+        self.assertIn('run_id: \\`$GITHUB_RUN_ID\\`', escalation)
         self.assertIn("contains($marker)", escalation)
         self.assertIn("No general implementer was dispatched", escalation)
         self.assertNotIn("/logs", escalation)

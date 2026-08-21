@@ -146,6 +146,12 @@ conflicting ownership metadata fails closed in the same lane. Ordinary tasks
 stale runs, waiting verdicts, and reviewer-infrastructure failures retain their
 separate no-retry semantics.
 
+Calling repositories may expose the read-only
+`verify-remediate-operator-ownership.yml` reusable verifier for controlled live
+proof. It checks the exact carrier head, source pipeline/PR lineage, successful
+remediation decision, skipped retry jobs, and one trusted sanitized escalation
+marker. It reads Actions/PR metadata only and never downloads logs or artifacts.
+
 Before either task or plan review becomes an App-signed record, a bounded
 normalizer removes full-line commit/task/package/issue/base binding lookalikes
 from the model narrative. The clean workflow then supplies those authoritative

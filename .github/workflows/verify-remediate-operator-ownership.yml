@@ -1,0 +1,70 @@
+name: verify-remediate-operator-ownership (reusable)
+
+# Read-only post-carrier verifier for VOC-106 controlled live proof. Validates
+# allowlisted Actions/issue/PR metadata only; never reads logs or artifacts.
+# The caller must dispatch this workflow on the exact carrier branch ref so
+# checkout HEAD equals the task PR head under exact_pr_head lineage.
+
+on:
+  workflow_call:
+    inputs:
+      source_run_id:
+        description: "Pipeline run id from the operator-owned FAIL/CI remediation proof."
+        required: true
+        type: string
+      pr_number:
+        description: "Task PR number that experienced the controlled remediation proof."
+        required: true
+        type: string
+      change_id:
+        description: "Adopted package change id, e.g. VOC-106."
+        required: true
+        type: string
+      task_id:
+        description: "Operator-owned task id, e.g. VOC-106-T01."
+        required: true
+        type: string
+      package_path:
+        description: "Canonical package directory path."
+        required: true
+        type: string
+      integration_branch:
+        description: "Integration branch used as the task PR base."
+        required: false
+        type: string
+        default: "develop"
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Checkout shared verifier policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Verify remediate operator ownership metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/verify-remediate-operator-ownership-runner.py \
+            --source-run-id "${{ inputs.source_run_id }}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            --change-id "${{ inputs.change_id }}" \
+            --task-id "${{ inputs.task_id }}" \
+            --package-path "${{ inputs.package_path }}" \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --current-ref "${{ github.sha }}"

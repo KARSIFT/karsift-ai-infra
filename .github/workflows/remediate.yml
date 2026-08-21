@@ -343,6 +343,7 @@ jobs:
           TASK_ID: ${{ steps.parse.outputs.task_id }}
           CHANGE_ID: ${{ steps.parse.outputs.change_id }}
           ISSUE_NUMBER: ${{ steps.parse.outputs.issue_number }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
           OWNERSHIP_STATE: ${{ steps.parse.outputs.ownership_state }}
           OWNERSHIP_REASON: ${{ steps.parse.outputs.ownership_reason }}
           CI_FAILED: ${{ inputs.ci_failed }}
@@ -356,8 +357,7 @@ jobs:
             exit 0
           fi
 
-          target="$ISSUE_NUMBER"
-          [[ "$target" =~ ^[1-9][0-9]*$ ]] || target="$PR_NUMBER"
+          target="$PR_NUMBER"
           [[ "$TASK_ID" =~ ^[A-Za-z][A-Za-z0-9]*-[0-9]+-T[0-9]+[a-z]?$ ]] || TASK_ID="unavailable"
           [[ "$CHANGE_ID" =~ ^[A-Za-z][A-Za-z0-9]*-[0-9]+$ ]] || CHANGE_ID="unavailable"
           case "$OWNERSHIP_STATE" in OPERATOR|FAIL_CLOSED) ;; *) OWNERSHIP_STATE="FAIL_CLOSED" ;; esac
@@ -365,6 +365,7 @@ jobs:
           trigger="review_fail"
           [ "$CI_FAILED" = "true" ] && trigger="ci_failure"
           marker="<!-- remediation-ownership-escalation task=$TASK_ID head=$EXPECTED_HEAD_SHA -->"
+          prefix="VOC-106: Remediation operator escalation for \`$TASK_ID\`"
           existing=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$target/comments?per_page=100" \
             | jq -r --arg marker "$marker" '[.[][] | select(.body | contains($marker))] | length')
           if [ "$existing" -gt 0 ]; then
@@ -373,12 +374,16 @@ jobs:
           fi
           {
             echo "$marker"
-            echo "**Operator-owned remediation escalation**"
+            echo "$prefix"
             echo
             echo "A current exact-SHA remediation signal was suppressed because this task is operator-owned or its ownership metadata failed closed. No general implementer was dispatched and no implementation attempt was consumed."
             echo
+            echo "should_retry: \`false\`"
             echo "- change_id: \`$CHANGE_ID\`"
             echo "- task_id: \`$TASK_ID\`"
+            echo "- package_path: \`$PACKAGE_PATH\`"
+            echo "- pr_number: \`$PR_NUMBER\`"
+            echo "- run_id: \`$GITHUB_RUN_ID\`"
             echo "- pull_request: \`#$PR_NUMBER\`"
             echo "- head_sha: \`$EXPECTED_HEAD_SHA\`"
             echo "- base_sha: \`$EXPECTED_BASE_SHA\`"
