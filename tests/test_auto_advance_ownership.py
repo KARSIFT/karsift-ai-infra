@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 from importlib.util import module_from_spec, spec_from_file_location
+import json
 from pathlib import Path
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -226,11 +228,23 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             self.assertEqual(prefix_only, ())
 
     def test_voc102_test_07_last_task_is_out_of_scope_for_classifier(self):
-        # The advance job no-ops before classification when there is no next task.
-        self.assertIn(
-            "No next task after",
-            self.auto_advance,
+        roster = [
+            {"task_id": "VOC-102-T00", "issue": 865},
+            {"task_id": "VOC-102-T01", "issue": 866},
+        ]
+        self.assertEqual(
+            ownership.next_roster_task(roster, "VOC-102-T00"),
+            ("VOC-102-T01", 866),
         )
+        self.assertIsNone(ownership.next_roster_task(roster, "VOC-102-T01"))
+        self.assertIsNone(ownership.next_roster_task(roster, "VOC-999-T00"))
+        determine = self.auto_advance.split(
+            "- name: Determine next task, if any", 1
+        )[1].split("  prepare-live-evidence:", 1)[0]
+        no_next = determine.index("No next task after")
+        classify = determine.index("auto-advance-classifier.py")
+        self.assertLess(no_next, classify)
+        self.assertNotIn("gh issue create", determine)
 
     def test_voc102_test_11_evidence_path_is_strict_and_idempotent_helpers(self):
         self.assertEqual(
@@ -289,6 +303,78 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             publisher.validate_carrier_changed_paths(
                 {allowed, ".github/workflows/pipeline.yml"}, allowed
             )
+
+    def test_voc102_test_11_existing_carrier_repairs_marker_without_overwrite(self):
+        task_id = "VOC-102-T01"
+        evidence_relative = "t01-evidence.md"
+        pr_body = ownership.carrier_pr_body(
+            change_id="VOC-102",
+            task_id=task_id,
+            package_path=PACKAGE,
+            issue_number=866,
+            evidence_relative_path=evidence_relative,
+        )
+        existing_pr = {
+            "number": 900,
+            "title": "VOC-102: VOC-102-T01",
+            "body": pr_body,
+            "state": "OPEN",
+            "isDraft": True,
+            "author": {"login": "app/karsift-ai-infra-bot"},
+            "headRefName": "agent/voc-102-voc-102-t01",
+            "headRefOid": "a" * 40,
+            "baseRefName": "develop",
+        }
+        with tempfile.TemporaryDirectory() as scratch:
+            workdir = Path(scratch) / "carrier-work"
+            completed = "# evidence\n\nsource_run_id: `123`\n"
+
+            def fake_clone(command, **_kwargs):
+                clone_dir = Path(command[4])
+                target = clone_dir / PACKAGE / evidence_relative
+                target.parent.mkdir(parents=True)
+                target.write_text(completed, encoding="utf-8")
+                roster = clone_dir / PACKAGE / ".karsift/tasks.json"
+                roster.parent.mkdir(parents=True, exist_ok=True)
+                roster.write_text(
+                    json.dumps([{"task_id": task_id, "issue": 866}]),
+                    encoding="utf-8",
+                )
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_git(args, **_kwargs):
+                if args[:3] == ["ls-remote", "--heads", "origin"]:
+                    return f"{'a' * 40}\trefs/heads/agent/voc-102-voc-102-t01"
+                if args[:2] == ["diff", "--name-only"]:
+                    return f"{PACKAGE}/{evidence_relative}"
+                if args and args[0] == "merge-base":
+                    return "b" * 40
+                return ""
+
+            with (
+                mock.patch.object(publisher, "find_pr_for_branch", return_value=existing_pr),
+                mock.patch.object(publisher, "validate_issue_and_roster"),
+                mock.patch.object(publisher, "post_deduplicated_comment") as post,
+                mock.patch.object(publisher, "run_git", side_effect=fake_git),
+                mock.patch.object(publisher.tempfile, "mkdtemp", return_value=str(workdir)),
+                mock.patch.object(publisher.subprocess, "run", side_effect=fake_clone),
+            ):
+                publisher.ensure_carrier(
+                    repo="KARSIFT/example",
+                    token="masked-fixture-token",
+                    integration_branch="develop",
+                    change_id="VOC-102",
+                    task_id=task_id,
+                    package_path=PACKAGE,
+                    issue_number=866,
+                    evidence_relative_path=evidence_relative,
+                )
+
+            self.assertEqual(
+                (workdir / "repo" / PACKAGE / evidence_relative).read_text(),
+                completed,
+            )
+            post.assert_called_once()
 
     def test_voc102_test_12_permission_boundary(self):
         advance_block = self.auto_advance.split("  advance:", 1)[1].split("  prepare-live-evidence:", 1)[0]
