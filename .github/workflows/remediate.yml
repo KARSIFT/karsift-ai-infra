@@ -173,14 +173,6 @@ jobs:
             echo "Caller pipeline SHA $EXPECTED_HEAD_SHA is stale; live PR head is $head_sha. Refusing remediation."
             exit 0
           fi
-          if [ "$initial_decision" = "REVIEW_INFRA_FAILURE" ]; then
-            echo "should_retry=false" >> "$GITHUB_OUTPUT"
-            echo "next_attempt=" >> "$GITHUB_OUTPUT"
-            echo "review_infrastructure_failure=true" >> "$GITHUB_OUTPUT"
-            echo "The reviewer infrastructure failed before producing a code verdict; recording metadata without dispatching the implementer."
-            exit 0
-          fi
-
           # Only a review explicitly bound to this run's current PR head can
           # drive a lifecycle decision. Earlier-head comments are ignored.
           verdict=""
@@ -219,6 +211,14 @@ jobs:
             --review-state "$review_state" \
             --ci-failed "$CI_FAILED" \
             --review-job-failed "$REVIEW_JOB_FAILED")
+
+          if [ "$decision" = "REVIEW_INFRA_FAILURE" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "review_infrastructure_failure=true" >> "$GITHUB_OUTPUT"
+            echo "The reviewer infrastructure failed before producing a code verdict; recording metadata without dispatching the implementer."
+            exit 0
+          fi
 
           # The shared classifier tolerates historical markdown decoration,
           # makes any machine-readable FAIL dominant over WAITING, and keeps
@@ -342,6 +342,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
 
@@ -370,6 +372,8 @@ jobs:
             echo "transient failure in the reviewer's own tooling, not a finding about"
             echo "this PR's code). The diagnostic is intentionally metadata-only:"
             echo
+            echo "head_sha: \`$EXPECTED_HEAD_SHA\`"
+            echo "base_sha: \`$EXPECTED_BASE_SHA\`"
             echo "run_id: \`$sanitized_run_id\`"
             echo "job_id: \`$review_job_id\`"
             echo "job_name: \`$review_job_name\`"
@@ -379,6 +383,17 @@ jobs:
             echo "were copied into this comment. Inspect the Actions run through the"
             echo "repository-controlled operator path if deeper diagnosis is required."
           } > /tmp/review-failure-comment.md
+
+          # Recheck immediately before the mutation, after all diagnostic
+          # discovery and body construction, so an older run cannot annotate
+          # a replacement revision during a synchronize/cancellation race.
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR base/head pair changed before reviewer-infrastructure metadata publication; suppressing stale comment."
+            exit 0
+          fi
           gh pr comment "$PR_NUMBER" --body-file /tmp/review-failure-comment.md
 
   retry:

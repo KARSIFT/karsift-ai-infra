@@ -727,6 +727,8 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertNotIn("log_tail", review_error)
         self.assertNotIn("--allow-escape-sequences", review_error)
         self.assertIn('run_id: \\`$sanitized_run_id\\`', review_error)
+        self.assertIn('head_sha: \\`$EXPECTED_HEAD_SHA\\`', review_error)
+        self.assertIn('base_sha: \\`$EXPECTED_BASE_SHA\\`', review_error)
         self.assertIn('job_id: \\`$review_job_id\\`', review_error)
         self.assertIn('job_name: \\`$review_job_name\\`', review_error)
         self.assertIn('conclusion: \\`$review_job_conclusion\\`', review_error)

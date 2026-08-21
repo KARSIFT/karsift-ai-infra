@@ -40,6 +40,37 @@ class CursorResultTests(unittest.TestCase):
             ):
                 cursor_result.extract_result(json.dumps(payload).encode())
 
+    def test_malformed_error_state_and_non_verdict_result_are_rejected(self):
+        fixtures = (
+            {"is_error": "false", "result": "VERDICT: PASS"},
+            {"result": "VERDICT: PASS"},
+            {"is_error": False, "result": "unable to review"},
+            {"is_error": False, "result": "VERDICT: PASS\ntrailing text"},
+            {
+                "is_error": False,
+                "result": "VERDICT: PASS\nVERDICT: FAIL",
+            },
+        )
+        for payload in fixtures:
+            with self.subTest(payload=payload), self.assertRaises(
+                cursor_result.CursorResponseError
+            ):
+                cursor_result.extract_result(json.dumps(payload).encode())
+
+    def test_waiting_verdict_is_task_review_only(self):
+        raw = json.dumps(
+            {
+                "is_error": False,
+                "result": "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE",
+            }
+        ).encode()
+        with self.assertRaises(cursor_result.CursorResponseError):
+            cursor_result.extract_result(raw)
+        self.assertEqual(
+            cursor_result.extract_result(raw, allow_waiting=True),
+            "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE",
+        )
+
     def test_error_diagnostic_never_echoes_arbitrary_result_content(self):
         secret_like = "arbitrary-provider-payload-must-not-be-echoed"
         with self.assertRaises(cursor_result.CursorResponseError) as raised:
@@ -95,6 +126,8 @@ class CursorResultTests(unittest.TestCase):
                     workflow.index("config/extract-cursor-result.py"),
                     workflow.index("retry_if_transient"),
                 )
+        self.assertEqual(self.review_workflows[0].count("--allow-waiting"), 2)
+        self.assertNotIn("--allow-waiting", self.review_workflows[1])
 
     def test_tempfail_result_validation_is_always_bounded_retry_eligible(self):
         self.assertIn('[ "$rc" -ne 75 ]', self.retry_helper)

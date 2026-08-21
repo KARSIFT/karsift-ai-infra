@@ -152,6 +152,16 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         self.assertEqual(
             decider.decide(
                 **common,
+                review_state="FAIL",
+                ci_failed=False,
+                review_job_failed=True,
+            ),
+            "RETRY",
+            "an existing exact-SHA signed FAIL remains actionable",
+        )
+        self.assertEqual(
+            decider.decide(
+                **common,
                 review_state="PENDING",
                 ci_failed=True,
                 review_job_failed=True,

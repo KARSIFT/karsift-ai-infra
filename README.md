@@ -134,8 +134,9 @@ implementation retry on that state. It is also forbidden to tell the implementer
 to edit unrelated workflows merely to manufacture the evidence.
 
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, waiting state, or no verdict yet
-(with CI still green) are remediation no-ops. Only an explicit implementation
-`FAIL`, CI failure, or review-job error can consume the bounded retry.
+(with CI still green) are implementation-remediation no-ops. Only an explicit
+implementation `FAIL` or CI failure can consume the bounded implementation
+retry. A review-job error stays in the isolated reviewer-infrastructure lane.
 
 The implementer job deliberately has no `actions` permission and receives no
 general Actions inspection/dispatch credential. Operator reconciliation is a

@@ -47,7 +47,7 @@ class RemediatePolicyTests(unittest.TestCase):
     def test_genuine_fail_retries_but_review_infrastructure_is_suppressed(self):
         self.assertIn('decision" != "RETRY"', self.workflow)
         self.assertIn('echo "should_retry=true"', self.workflow)
-        self.assertIn('initial_decision" = "REVIEW_INFRA_FAILURE"', self.workflow)
+        self.assertIn('decision" = "REVIEW_INFRA_FAILURE"', self.workflow)
         self.assertIn('echo "review_infrastructure_failure=true"', self.workflow)
         self.assertIn(
             "steps.parse.outputs.review_infrastructure_failure == 'true'",
@@ -58,6 +58,13 @@ class RemediatePolicyTests(unittest.TestCase):
             "- name: Record sanitized review-job-error metadata", 1
         )[1].split("\n  retry:", 1)[0]
         self.assertNotIn("VERDICT: FAIL", metadata_step)
+        self.assertIn("--json headRefOid,baseRefOid,state", metadata_step)
+        self.assertIn('head_sha: \\`$EXPECTED_HEAD_SHA\\`', metadata_step)
+        self.assertIn('base_sha: \\`$EXPECTED_BASE_SHA\\`', metadata_step)
+        self.assertLess(
+            metadata_step.index("PR base/head pair changed"),
+            metadata_step.index('gh pr comment "$PR_NUMBER"'),
+        )
 
     def test_stale_caller_run_cannot_dispatch_newer_head(self):
         self.assertIn("expected_head_sha:", self.workflow)

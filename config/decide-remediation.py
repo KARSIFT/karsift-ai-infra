@@ -22,12 +22,12 @@ def decide(
         return "STALE"
     if ci_failed:
         return "RETRY"
+    if review_state == "FAIL":
+        return "RETRY"
     if review_job_failed:
         return "REVIEW_INFRA_FAILURE"
     if review_state == "WAITING":
         return "WAITING"
-    if review_state == "FAIL":
-        return "RETRY"
     return "NOOP"
 
 

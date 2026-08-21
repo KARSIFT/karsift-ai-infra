@@ -400,7 +400,7 @@ jobs:
             # retry loop. A live 0-exit, content-free response previously
             # escaped retry and failed only in the following step.
             python3 karsift-ai-infra/config/extract-cursor-result.py \
-              /tmp/verdict-response.json /tmp/verdict.md
+              /tmp/verdict-response.json /tmp/verdict.md --allow-waiting
           }
           # Transient-failure retry (same account/model, immediate) - see
           # retry-helpers.sh's header comment for the live OpenCode incident
@@ -417,7 +417,7 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         run: |
           python3 karsift-ai-infra/config/extract-cursor-result.py \
-            /tmp/verdict-response.json /tmp/verdict.md
+            /tmp/verdict-response.json /tmp/verdict.md --allow-waiting
 
       - name: Show verdict
         if: steps.pr.outputs.stale != 'true'
