@@ -166,6 +166,41 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             self.assertEqual(classification.decision, "fail-closed")
             self.assertEqual(classification.reason, "missing_tasks_file")
 
+    def test_voc102_test_03_unreadable_tasks_file_uses_sanitized_fail_closed_path(self):
+        for read_error in (
+            PermissionError("permission fixture"),
+            UnicodeDecodeError("utf-8", b"\xff", 0, 1, "encoding fixture"),
+        ):
+            with self.subTest(error=type(read_error).__name__):
+                with tempfile.TemporaryDirectory() as scratch:
+                    package = Path(scratch) / "pkg"
+                    package.mkdir()
+                    (package / "tasks.md").write_text("# tasks\n", encoding="utf-8")
+                    argv = [
+                        "auto-advance-classifier.py",
+                        "--package-path",
+                        str(package),
+                        "--next-task-id",
+                        "VOC-000-T01",
+                        "--change-id",
+                        "VOC-000",
+                        "--issue-number",
+                        "1",
+                    ]
+                    with (
+                        mock.patch.object(sys, "argv", argv),
+                        mock.patch.object(
+                            classifier.Path, "read_text", side_effect=read_error
+                        ),
+                        mock.patch.object(classifier, "write_output") as write,
+                    ):
+                        self.assertEqual(classifier.main(), 0)
+                    classification = write.call_args.args[0]
+                    self.assertEqual(classification.decision, "fail-closed")
+                    self.assertEqual(
+                        classification.reason, "unreadable_tasks_file"
+                    )
+
     def test_voc102_test_04_malformed_contract_fail_closed(self):
         with tempfile.TemporaryDirectory() as scratch:
             package = Path(scratch) / "pkg"

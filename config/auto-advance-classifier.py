@@ -42,8 +42,14 @@ def main() -> int:
     if not tasks_md_path.is_file():
         classification = Classification("fail-closed", "missing_tasks_file")
     else:
-        tasks_md = tasks_md_path.read_text(encoding="utf-8")
-        classification = classify_next_task(args.package_path, args.next_task_id, tasks_md)
+        try:
+            tasks_md = tasks_md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            classification = Classification("fail-closed", "unreadable_tasks_file")
+        else:
+            classification = classify_next_task(
+                args.package_path, args.next_task_id, tasks_md
+            )
     write_output(
         classification,
         {
