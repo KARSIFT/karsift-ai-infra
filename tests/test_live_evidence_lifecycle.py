@@ -253,7 +253,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.pipeline_template.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            3,
+            4,
         )
 
 

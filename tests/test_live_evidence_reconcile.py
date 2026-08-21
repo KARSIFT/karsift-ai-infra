@@ -326,7 +326,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             self.pipeline.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            3,
+            4,
         )
 
     def test_12_stale_and_non_success_runs_are_rejected(self):
@@ -475,6 +475,10 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("live_evidence_run_id", self.pipeline)
         self.assertIn("  plan-review:", self.pipeline)
         self.assertIn("uses: KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml@main", self.pipeline)
+        self.assertIn(
+            "expected_head_sha: ${{ github.event.pull_request.head.sha }}",
+            self.pipeline.split("  plan-review:", 1)[1].split("\n  extract-package-path:", 1)[0],
+        )
         self.assertIn("needs: [review, plan-review]", self.pipeline)
 
     def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):

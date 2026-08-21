@@ -33,6 +33,18 @@ class PlanPathPolicyTests(unittest.TestCase):
         self.assertIn("permission-issues: write", publisher)
         self.assertIn("App-signed plan verification", publisher)
 
+    def test_plan_review_is_bound_to_the_callers_immutable_event_head(self):
+        self.assertIn("expected_head_sha:", self.plan_review)
+        input_block = self.plan_review.split("expected_head_sha:", 1)[1].split("secrets:", 1)[0]
+        self.assertIn("required: true", input_block)
+        self.assertIn('EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}', self.plan_review)
+        self.assertIn('if [ "$live_sha" != "$EXPECTED_HEAD_SHA" ]', self.plan_review)
+        self.assertIn('if [ "$after_diff_sha" != "$EXPECTED_HEAD_SHA" ]', self.plan_review)
+        self.assertLess(
+            self.plan_review.index('gh pr view "$PR_NUMBER" --json body,title,headRefOid'),
+            self.plan_review.index('gh pr diff "$PR_NUMBER"'),
+        )
+
     def test_adoption_requires_passing_verification_for_merged_plan_revision(self):
         self.assertIn("The plan/-branch PR that just merged", self.adopt)
         self.assertIn("--json state,mergedAt,headRefOid", self.adopt)
