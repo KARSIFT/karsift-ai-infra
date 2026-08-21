@@ -224,10 +224,11 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.remediate_workflow,
         )
         self.assertGreaterEqual(
-            self.implement_workflow.count("verify-expected-head.py"), 2
+            self.implement_workflow.count("verify-expected-head.py"), 1
         )
+        self.assertIn('[ "$live_head" != "$EXPECTED_OLD_HEAD" ]', self.implement_workflow)
         self.assertIn(
-            '--force-with-lease="refs/heads/$branch:$expected_head"',
+            '--force-with-lease="$lease"',
             self.implement_workflow,
         )
 

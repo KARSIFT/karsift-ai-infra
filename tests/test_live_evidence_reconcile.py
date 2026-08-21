@@ -35,6 +35,7 @@ NOW = datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc)
 HEAD = "a" * 40
 RUN_SHA = "b" * 40
 BASE = "c" * 40
+PACKAGE = "specs/changes/VOC-097-example"
 
 
 def contract_text(**overrides):
@@ -105,6 +106,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             ROOT / "config/live-evidence-reconcile-runner.py"
         ).read_text()
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+        cls.review = (ROOT / ".github/workflows/review.yml").read_text()
         cls.pipeline = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
@@ -131,6 +133,18 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     policy.parse_contract_yaml(contract_text() + suffix),
                     "VOC-097-T02",
                 )
+        with self.assertRaises(policy.ContractError):
+            policy.validate_contract(
+                policy.parse_contract_yaml(
+                    contract_text(
+                        workflow_file=None,
+                    ).replace(
+                        "workflow_file: None",
+                        'workflow_name: "trusted\\nresult_head_sha: `fake`"',
+                    )
+                ),
+                "VOC-097-T02",
+            )
 
     def test_repository_file_accepts_github_base64_line_wrapping_only(self):
         import base64
@@ -341,7 +355,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
 
             def get_all(self, endpoint, key=None):
                 return [{
-                    "user": {"login": "karsift-ai-infra-bot[bot]"},
+                    "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
                     "body": (
                         "**Live-evidence reconcile — qualified**\n"
                         f"result_head_sha: `{HEAD}`"
@@ -416,6 +430,17 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             'property "workflow_sha" is not defined in object type',
             self_ci,
         )
+        implement_job, publish_job = self.implement.split("\n  publish:", 1)
+        self.assertNotIn("create-github-app-token@", implement_job)
+        self.assertNotIn("APP_TOKEN", implement_job)
+        self.assertGreaterEqual(implement_job.count("persist-credentials: false"), 2)
+        self.assertIn("needs: implement", publish_job)
+        self.assertIn("actions/download-artifact@", publish_job)
+        self.assertIn("git init --bare", publish_job)
+        self.assertIn("core.hooksPath=/dev/null", publish_job)
+        self.assertIn("permission-contents: write", publish_job)
+        self.assertIn("permission-pull-requests: write", publish_job)
+        self.assertIn("permission-workflows: write", publish_job)
 
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
@@ -426,6 +451,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
     def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):
         body = (
             f"**Independent verification - bound to commit `{HEAD}`**\n\n"
+            "task_id: `VOC-097-T02`\n"
+            f"package_path: `{PACKAGE}`\n"
+            "authority_issue: `8`\n\n"
             "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
         )
         comment = {
@@ -492,6 +520,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 HEAD,
                 "agent/example",
                 BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
                 [comment],
             )
         )
@@ -502,6 +533,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 HEAD,
                 "agent/example",
                 BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
                 [comment],
             )
         forged = {**comment, "user": {"login": "untrusted", "type": "User"}}
@@ -512,6 +546,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 HEAD,
                 "agent/example",
                 BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
                 [forged],
             )
         )
@@ -522,8 +559,27 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 HEAD,
                 "agent/example",
                 BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
                 [comment],
             )
+        retargeted = {**comment, "body": comment["body"].replace("authority_issue: `8`", "authority_issue: `9`")}
+        self.assertIsNone(
+            runner.trusted_waiting_review(
+                ReviewApi([good_check]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
+                [retargeted],
+            )
+        )
+        self.assertIn("authority_issue: \\`$authority_issue\\`", self.review)
+        self.assertIn("package_path: \\`$package_path\\`", self.review)
 
     def test_non_agent_pr_cannot_enter_wake_path(self):
         class NoApiCalls:
@@ -543,9 +599,17 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "base": {"sha": BASE},
         }
         self.assertIsNone(runner.current_waiting_task(NoApiCalls(), pr))
+        closed = {
+            **pr,
+            "state": "closed",
+            "merged_at": None,
+            "head": {**pr["head"], "ref": "agent/closed"},
+        }
+        self.assertIsNone(runner.current_waiting_task(NoApiCalls(), closed))
 
     def test_dispatch_requires_protected_unchanged_workflow_and_excludes_pipeline(self):
         self.assertIn("dispatch_branch_unprotected", self.runner_source)
+        self.assertNotIn("require_protected=False", self.runner_source)
         self.assertIn("dispatch_workflow_not_trusted", self.runner_source)
         self.assertIn('dispatch.workflow_file == "pipeline.yml"', self.runner_source)
         reservation = self.runner_source.index("declared dispatch reserved**")
@@ -596,6 +660,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             head_sha=HEAD,
             head_ref="agent/example",
             pr_number=7,
+            waiting_since=NOW - timedelta(hours=1),
         )
 
         class DispatchReadApi:
@@ -614,6 +679,8 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     return {"default_branch": "main"}
                 if endpoint == "repos/KARSIFT/example/pulls/7":
                     return {
+                        "state": "open",
+                        "merged_at": None,
                         "head": {"sha": HEAD, "ref": "agent/example"},
                     }
                 if endpoint.endswith("branches/main"):
@@ -643,7 +710,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 return None
 
         writer = DispatchWriteApi()
-        runner.dispatch_once(DispatchReadApi(), writer, task)
+        runner.dispatch_once(DispatchReadApi(), writer, task, NOW)
         self.assertEqual(
             [(method, endpoint) for method, endpoint, _ in writer.calls],
             [
@@ -666,6 +733,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             DispatchReadApi([suppressing_comment]),
             retry_writer,
             task,
+            NOW,
         )
         self.assertEqual(retry_writer.calls, [])
 
@@ -675,12 +743,23 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 DispatchReadApi(change_branch_after=4),
                 stale_writer,
                 task,
+                NOW,
             )
         self.assertEqual(stale.exception.code, "dispatch_branch_changed")
         self.assertEqual(
             [(method, endpoint) for method, endpoint, _ in stale_writer.calls],
             [("POST", "repos/KARSIFT/example/issues/7/comments")],
         )
+        with self.assertRaises(policy.ContractError) as expired:
+            runner.dispatch_once(
+                DispatchReadApi(),
+                DispatchWriteApi(),
+                SimpleNamespace(
+                    **{**task.__dict__, "waiting_since": NOW - timedelta(hours=72)}
+                ),
+                NOW,
+            )
+        self.assertEqual(expired.exception.code, "dispatch_authorization_expired")
 
 
 if __name__ == "__main__":

@@ -233,7 +233,7 @@ jobs:
             attestation_count=$(gh api --paginate --slurp \
               "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
               | jq --arg binding "$binding" \
-                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and (.body | startswith("**Live-evidence reconcile — qualified**")) and (.body | contains($binding)))] | length')
+                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and .user.type == "Bot" and (.body | startswith("**Live-evidence reconcile — qualified**")) and ((.body | split("\n") | index($binding)) != null))] | length')
             if [ "$attestation_count" = "1" ]; then
               live_evidence_attestation="true"
             else
@@ -403,9 +403,25 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REVIEWED_PACKAGE_PATH: ${{ inputs.package_path }}
         run: |
+          set -euo pipefail
+          pr_body=$(jq -r .body /tmp/pr.json)
+          task_id=$(printf '%s\n' "$pr_body" | grep -oP '(?<=Implements task `)[^`]+' | head -1)
+          package_path=$(printf '%s\n' "$pr_body" | grep -oP '(?<=Package path: `)[^`]+' | head -1)
+          authority_issue=$(printf '%s\n' "$pr_body" | grep -oP '(?<=Closes #)[0-9]+' | head -1)
+          if ! [[ "$task_id" =~ ^[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+$ ]] ||
+             ! [[ "$authority_issue" =~ ^[0-9]+$ ]] ||
+             [ "$package_path" != "$REVIEWED_PACKAGE_PATH" ]; then
+            echo "PR authority metadata changed or is malformed; refusing a reusable verdict comment." >&2
+            exit 1
+          fi
           {
             echo "**Independent verification - bound to commit \`${{ steps.pr.outputs.sha }}\`**"
+            echo
+            echo "task_id: \`$task_id\`"
+            echo "package_path: \`$package_path\`"
+            echo "authority_issue: \`$authority_issue\`"
             echo
             cat /tmp/verdict.md
           } > /tmp/verdict-comment.md

@@ -46,6 +46,7 @@ TRUSTED_PIPELINE_PATH = ".github/workflows/pipeline.yml"
 CHECK_DETAILS_RE = re.compile(
     r"^https://github\.com/([^/]+/[^/]+)/actions/runs/([0-9]+)/job/[0-9]+(?:\?.*)?$"
 )
+COMMENT_WORKFLOW_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()\-]{0,199}$")
 
 
 class ApiError(RuntimeError):
@@ -169,15 +170,24 @@ def trusted_waiting_review(
     head_sha: str,
     head_ref: str,
     base_sha: str,
+    package_path: str,
+    task_id: str,
+    issue_number: int,
     comments: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], datetime] | None:
     binding = f"bound to commit `{head_sha}`"
+    metadata_bindings = (
+        f"task_id: `{task_id}`",
+        f"package_path: `{package_path}`",
+        f"authority_issue: `{issue_number}`",
+    )
     reviews = [
         comment
         for comment in comments
         if isinstance(comment.get("body"), str)
         and comment["body"].startswith(WAITING_PREFIX)
         and binding in comment["body"]
+        and all(line in comment["body"].splitlines() for line in metadata_bindings)
         and (comment.get("user") or {}).get("login") == TRUSTED_REVIEW_AUTHOR
         and (comment.get("user") or {}).get("type") == "Bot"
     ]
@@ -254,6 +264,8 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     base_sha = (pr.get("base") or {}).get("sha")
     if (
         not isinstance(number, int)
+        or pr.get("state") != "open"
+        or pr.get("merged_at") is not None
         or head_repo.get("full_name") != api.repository
         or not isinstance(head_sha, str)
         or not SHA_RE.fullmatch(head_sha)
@@ -270,6 +282,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         return None
     package_path = safe_package_path(package_match.group(1))
     task_id = task_match.group(1)
+    issue_number = int(issue_match.group(1))
 
     comments_response = api.get_all(
         f"repos/{api.repository}/issues/{number}/comments"
@@ -280,6 +293,9 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         head_sha,
         head_ref,
         base_sha,
+        package_path,
+        task_id,
+        issue_number,
         comments_response,
     )
     if trusted_review is None:
@@ -294,7 +310,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     result_path = f"{package_path}/.karsift/live-evidence/{task_id}.result.json"
     return WaitingTask(
         pr_number=number,
-        issue_number=int(issue_match.group(1)),
+        issue_number=issue_number,
         task_id=task_id,
         package_path=package_path,
         contract_path=contract_path,
@@ -345,8 +361,9 @@ def result_already_present(api: GitHub, task: WaitingTask) -> bool:
     binding = f"result_head_sha: `{task.head_sha}`"
     return any(
         (comment.get("user") or {}).get("login") == TRUSTED_RECONCILE_AUTHOR
+        and (comment.get("user") or {}).get("type") == "Bot"
         and (comment.get("body") or "").startswith("**Live-evidence reconcile — qualified**")
-        and binding in (comment.get("body") or "")
+        and binding in (comment.get("body") or "").splitlines()
         for comment in comments
     )
 
@@ -525,6 +542,11 @@ def post_qualified_comment(write_api: GitHub, task: WaitingTask, evidence: dict[
         or evidence.get("workflow_name")
         or str(evidence.get("workflow_id"))
     )
+    if (
+        not isinstance(workflow_identity, str)
+        or not COMMENT_WORKFLOW_RE.fullmatch(workflow_identity)
+    ):
+        raise ContractError("unsafe_comment_value")
     body = "\n".join([
         "**Live-evidence reconcile — qualified**",
         "",
@@ -603,7 +625,12 @@ def assert_dispatch_authorization_current(
     live_pr = api.get(f"repos/{api.repository}/pulls/{task.pr_number}")
     live_head = ((live_pr or {}).get("head") or {}).get("sha")
     live_ref = ((live_pr or {}).get("head") or {}).get("ref")
-    if live_head != task.head_sha or live_ref != task.head_ref:
+    if (
+        live_pr.get("state") != "open"
+        or live_pr.get("merged_at") is not None
+        or live_head != task.head_sha
+        or live_ref != task.head_ref
+    ):
         raise ContractError("stale_pr_head")
     if branch_snapshot(
         api,
@@ -614,15 +641,22 @@ def assert_dispatch_authorization_current(
     if branch_snapshot(
         api,
         default_branch,
-        require_protected=False,
+        require_protected=True,
     ) != default_sha:
         raise ContractError("dispatch_default_branch_changed")
 
 
-def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> None:
+def dispatch_once(
+    read_api: GitHub,
+    write_api: GitHub,
+    task: WaitingTask,
+    now: datetime,
+) -> None:
     dispatch = task.contract.dispatch
     if dispatch is None:
         raise ContractError("dispatch_not_declared")
+    if timed_out(task.waiting_since, now):
+        raise ContractError("dispatch_authorization_expired")
     marker = f"<!-- karsift-live-evidence-dispatch task={task.task_id} head={task.head_sha} -->"
     if comment_exists(read_api, task.pr_number, marker):
         print(f"live-evidence: dispatch already requested task={task.task_id}")
@@ -641,7 +675,7 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
     default_sha = branch_snapshot(
         read_api,
         default_branch,
-        require_protected=False,
+        require_protected=True,
     )
     workflow_path = f".github/workflows/{dispatch.workflow_file}"
     target_workflow = read_api.get_optional(
@@ -774,7 +808,12 @@ def main() -> int:
         if args.mode == "dispatch":
             if len(tasks) != 1:
                 raise ContractError("waiting_task_not_found")
-            dispatch_once(read_api, write_api, tasks[0])
+            dispatch_once(
+                read_api,
+                write_api,
+                tasks[0],
+                datetime.now(timezone.utc),
+            )
             return 0
         explicit_run = None
         if args.mode == "observe":

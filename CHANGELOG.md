@@ -13,8 +13,15 @@
   Pull-request evidence must name the waiting PR, Checks read permission is
   explicit, and dispatch revalidates the PR and immutable branch snapshots
   immediately before its single attempt.
+  Reviewer WAITING comments bind package/task/authority metadata; only open,
+  unmerged, unexpired tasks can dispatch; both compared branches must be
+  protected; and structured comment values are single-line safe.
   The caller template polls hourly instead of using a recursive catch-all
   `workflow_run` trigger.
+- Isolated privileged publication from unrestricted implementation: the model
+  job emits a credential-free Git bundle, while a fresh runner mints the scoped
+  App token, verifies/imports the exact commit in a bare repository, disables
+  hooks, applies an explicit branch lease, and opens or updates the PR.
 - Added dependency-free strict contract parsing and deterministic rejection,
   sanitization, lineage, staleness, timeout, dispatch, and deduplication tests.
 

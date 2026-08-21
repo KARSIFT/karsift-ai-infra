@@ -19,6 +19,7 @@ from typing import Any
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 TASK_RE = re.compile(r"^[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+$")
 REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+WORKFLOW_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:/()\-]{0,199}$")
 WORKFLOW_FILE_RE = re.compile(r"^(?:\.github/workflows/)?[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$")
 INPUT_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 MAX_METADATA_DURATION_SECONDS = 7 * 24 * 60 * 60
@@ -215,6 +216,8 @@ def validate_contract(data: dict[str, Any], expected_task_id: str) -> Contract:
         workflow_file = workflow_file.removeprefix(".github/workflows/")
     if workflow_name is not None:
         workflow_name = _required_string(workflow_name, "invalid_workflow_name")
+        if not WORKFLOW_NAME_RE.fullmatch(workflow_name):
+            raise ContractError("invalid_workflow_name")
     if workflow_id is not None and (not isinstance(workflow_id, int) or workflow_id <= 0):
         raise ContractError("invalid_workflow_id")
     if workflow_file is None and workflow_name is None and workflow_id is None:
