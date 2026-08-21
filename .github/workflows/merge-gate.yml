@@ -33,6 +33,16 @@ on:
         required: false
         type: string
         default: ""
+      reuse_outcome:
+        description: "Caller ready_for_review reuse decision: reuse-evidence, full-path, or fail-closed-to-full-path."
+        required: false
+        type: string
+        default: ""
+      reuse_prior_run_id:
+        description: "Validated prior pipeline run id when reuse_outcome is reuse-evidence."
+        required: false
+        type: string
+        default: ""
       founder_username:
         description: 'Deprecated compatibility input. Founder comments are not merge authority.'
         required: false
@@ -111,6 +121,8 @@ jobs:
           pr_number=${{ github.event.pull_request.number }}
           expected_head_sha="${{ inputs.expected_head_sha }}"
           expected_base_sha="${{ inputs.expected_base_sha }}"
+          reuse_outcome="${{ inputs.reuse_outcome }}"
+          reuse_prior_run_id="${{ inputs.reuse_prior_run_id }}"
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
@@ -170,9 +182,52 @@ jobs:
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          checks_ok=$(jq -r \
-            '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-            /tmp/pr-checks.json || echo "false")
+          prior_jobs_available=false
+          current_run_id="${{ github.run_id }}"
+          if [ "$reuse_outcome" = "reuse-evidence" ] &&
+             [[ "$reuse_prior_run_id" =~ ^[0-9]+$ ]] &&
+             [ "$reuse_prior_run_id" -lt "$current_run_id" ] &&
+             gh api "repos/${{ github.repository }}/actions/runs/$reuse_prior_run_id" > /tmp/prior-run.json; then
+            prior_run_valid=$(jq -r \
+              --argjson run_id "$reuse_prior_run_id" \
+              --arg head_sha "$head_sha" \
+              --arg base_sha "$base_sha" \
+              --arg head_ref "$head_ref" \
+              --argjson pr_number "$pr_number" \
+              '.id == $run_id and .name == "pipeline" and
+               .path == ".github/workflows/pipeline.yml" and
+               .event == "pull_request" and .head_sha == $head_sha and
+               .head_branch == $head_ref and .status == "completed" and
+               .conclusion == "success" and
+               ([.pull_requests[]? | select(
+                 .number == $pr_number and .base.sha == $base_sha and
+                 .head.sha == $head_sha
+               )] | length) == 1' \
+              /tmp/prior-run.json || echo "false")
+            if [ "$prior_run_valid" = "true" ] &&
+               gh api "repos/${{ github.repository }}/actions/runs/$reuse_prior_run_id/jobs?per_page=100" > /tmp/prior-jobs.json; then
+              prior_total=$(jq -r '.total_count // 0' /tmp/prior-jobs.json)
+              prior_len=$(jq -r '.jobs | length' /tmp/prior-jobs.json)
+              if [ "$prior_total" = "$prior_len" ] && [ "$prior_len" -gt 0 ] && [ "$prior_len" -le 100 ]; then
+                prior_jobs_available=true
+              fi
+            fi
+          fi
+          if [ "$reuse_outcome" = "reuse-evidence" ]; then
+            if [ "$prior_jobs_available" = "true" ]; then
+              checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
+                --pr-checks-file /tmp/pr-checks.json \
+                --prior-jobs-file /tmp/prior-jobs.json \
+                --head-ref "$head_ref" \
+                --reuse-outcome "$reuse_outcome" || echo "false")
+            else
+              checks_ok=false
+            fi
+          else
+            checks_ok=$(jq -r \
+              '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
+              /tmp/pr-checks.json || echo "false")
+          fi
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 
           # Bot-authored PRs (Dependabot etc.) never get a `review` job run
@@ -222,9 +277,21 @@ jobs:
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          review_check_ok=$(jq -r --arg name "$review_check" \
-            '[.[] | select(.name == $name)] | length > 0 and all(.state == "SUCCESS")' \
-            /tmp/pr-checks.json)
+          if [ "$reuse_outcome" = "reuse-evidence" ]; then
+            if [ "$prior_jobs_available" = "true" ]; then
+              review_check_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py publisher \
+                --pr-checks-file /tmp/pr-checks.json \
+                --prior-jobs-file /tmp/prior-jobs.json \
+                --head-ref "$head_ref" \
+                --reuse-outcome "$reuse_outcome" || echo "false")
+            else
+              review_check_ok=false
+            fi
+          else
+            review_check_ok=$(jq -r --arg name "$review_check" \
+              '[.[] | select(.name == $name)] | length > 0 and all(.state == "SUCCESS")' \
+              /tmp/pr-checks.json)
+          fi
           if [ "$review_check_ok" != "true" ]; then
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
             exit 0
@@ -232,6 +299,10 @@ jobs:
 
           review_header="**Independent verification - bound to commit \`$head_sha\`**"
           base_line="base_sha: \`$base_sha\`"
+          run_line=""
+          if [ "$reuse_outcome" = "reuse-evidence" ]; then
+            run_line="pipeline_run_id: \`$reuse_prior_run_id\`"
+          fi
           verdict=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
             | jq -r \
@@ -240,6 +311,7 @@ jobs:
               --arg package "$package_line" \
               --arg issue "$issue_line" \
               --arg base "$base_line" \
+              --arg run "$run_line" \
               '[.[][] | select(
                 .user.login == "karsift-ai-infra-bot[bot]" and
                 .user.type == "Bot" and
@@ -247,6 +319,7 @@ jobs:
                 ((.body | split("\n") | index($header)) != null) and
                 ((.body | split("\n") | index($package)) != null) and
                 ((.body | split("\n") | index($base)) != null) and
+                ($run == "" or ((.body | split("\n") | index($run)) != null)) and
                 ($task == "" or ((.body | split("\n") | index($task)) != null)) and
                 ($issue == "" or ((.body | split("\n") | index($issue)) != null))
               )] | sort_by(.created_at, .id) | last | .body // ""')

@@ -27,6 +27,7 @@ task_id: `VOC-097-T03`
 package_path: `specs/changes/VOC-097-example`
 authority_issue: `828`
 base_sha: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
+pipeline_run_id: `123456`
 
 ## Findings
 No blocking findings.
@@ -37,7 +38,13 @@ VERDICT: PASS
         self.assertTrue(normalized.startswith("I am checking"))
         self.assertIn("## Findings", normalized)
         self.assertNotIn("bound to commit", normalized)
-        for key in ("task_id:", "package_path:", "authority_issue:", "base_sha:"):
+        for key in (
+            "task_id:",
+            "package_path:",
+            "authority_issue:",
+            "base_sha:",
+            "pipeline_run_id:",
+        ):
             self.assertNotIn(key, normalized)
         self.assertTrue(normalized.endswith("VERDICT: PASS\n"))
 
@@ -45,6 +52,7 @@ VERDICT: PASS
         raw = b"""- > ### **PACKAGE_PATH: `conflicting`**
 1234. _Base_SHA: `not-authoritative`_
 *authority_issue: `999`*
+> **PIPELINE_RUN_ID: `999999`**
 The workflow supplies the authoritative identity.
 VERDICT: PASS WITH NON-BLOCKING FINDINGS
 """

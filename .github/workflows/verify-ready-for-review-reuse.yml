@@ -1,0 +1,68 @@
+name: verify-ready-for-review-reuse (reusable)
+
+# Read-only post-transition verifier for VOC-104 controlled live proof. Validates
+# allowlisted Actions/PR metadata only; never reads logs or artifacts. The caller
+# must dispatch this workflow on the exact proof branch ref so checkout HEAD equals
+# the waiting PR head under exact_pr_head lineage.
+
+on:
+  workflow_call:
+    inputs:
+      ready_run_id:
+        description: ready_for_review pipeline run id to validate.
+        required: true
+        type: string
+      prior_run_id:
+        description: Prior successful pipeline run id with CI/review evidence.
+        required: true
+        type: string
+      source_pr_number:
+        description: Pull request that produced the ready_for_review run.
+        required: true
+        type: string
+      expected_source_head_sha:
+        description: Exact reviewed head SHA on the source pull request.
+        required: true
+        type: string
+      expected_source_base_sha:
+        description: Exact reviewed base SHA on the source pull request.
+        required: true
+        type: string
+      expected_proof_head_sha:
+        description: Exact evidence-carrier head SHA running this verifier.
+        required: true
+        type: string
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Checkout shared verifier policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Verify ready_for_review reuse metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/verify-ready-for-review-reuse-runner.py \
+            --ready-run-id "${{ inputs.ready_run_id }}" \
+            --prior-run-id "${{ inputs.prior_run_id }}" \
+            --source-pr-number "${{ inputs.source_pr_number }}" \
+            --expected-source-head-sha "${{ inputs.expected_source_head_sha }}" \
+            --expected-source-base-sha "${{ inputs.expected_source_base_sha }}" \
+            --expected-proof-head-sha "${{ inputs.expected_proof_head_sha }}" \
+            --current-ref "${{ github.sha }}"

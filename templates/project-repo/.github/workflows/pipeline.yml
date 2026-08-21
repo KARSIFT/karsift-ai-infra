@@ -59,7 +59,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -136,6 +136,30 @@ on:
         description: "verify-auto-advance-live-evidence only: canonical package directory path"
         required: false
         type: string
+      verify_ready_run_id:
+        description: "verify-ready-for-review-reuse only: ready_for_review pipeline run id"
+        required: false
+        type: string
+      verify_prior_run_id:
+        description: "verify-ready-for-review-reuse only: prior successful pipeline run id"
+        required: false
+        type: string
+      verify_reuse_source_pr_number:
+        description: "verify-ready-for-review-reuse only: source transition pull request number"
+        required: false
+        type: string
+      verify_reuse_source_head_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed head SHA"
+        required: false
+        type: string
+      verify_reuse_source_base_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed base SHA"
+        required: false
+        type: string
+      verify_reuse_proof_head_sha:
+        description: "verify-ready-for-review-reuse only: exact evidence-carrier head SHA"
+        required: false
+        type: string
 
 # A synchronize event supersedes every older pipeline for the same PR. This
 # prevents duplicate reviewer/model runs and stale remediation/merge decisions,
@@ -207,13 +231,32 @@ jobs:
       pr_number: ${{ github.event_name == 'workflow_dispatch' && inputs.plan_pr_number || github.event.pull_request.number }}
     secrets: inherit
 
-  ci:
+  ready-for-review-reuse:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/ready-for-review-reuse.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      expected_base_sha: ${{ github.event.pull_request.base.sha }}
+      event_action: ${{ github.event.action }}
+      current_run_id: ${{ github.run_id }}
+
+  ci:
+    needs: [ready-for-review-reuse]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' && github.event.action != 'closed' &&
+      needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
   plan-review:
-    needs: ci
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'plan/')
+    needs: [ready-for-review-reuse, ci]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' && github.event.action != 'closed' &&
+      startsWith(github.head_ref, 'plan/') &&
+      needs.ci.result == 'success' &&
+      needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -229,7 +272,12 @@ jobs:
   # itself parses the plan package risk declaration and fails closed when it
   # cannot determine a risk class.
   extract-package-path:
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
+    needs: [ready-for-review-reuse]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' && github.event.action != 'closed' &&
+      startsWith(github.head_ref, 'agent/') &&
+      needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'
     runs-on: ubuntu-latest
     outputs:
       package_path: ${{ steps.extract.outputs.package_path }}
@@ -251,8 +299,14 @@ jobs:
           echo "package_path=$path" >> "$GITHUB_OUTPUT"
 
   review:
-    needs: [ci, extract-package-path]
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'agent/')
+    needs: [ready-for-review-reuse, ci, extract-package-path]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' && github.event.action != 'closed' &&
+      startsWith(github.head_ref, 'agent/') &&
+      needs.ci.result == 'success' &&
+      needs.extract-package-path.result == 'success' &&
+      needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/review.yml@main
     with:
       pr_number: ${{ github.event.pull_request.number }}
@@ -311,7 +365,7 @@ jobs:
   # requiring review's specific 'success' result which a planning PR's
   # deliberately-skipped review can never produce.
   merge-gate:
-    needs: [review, plan-review]
+    needs: [ready-for-review-reuse, review, plan-review]
     if: |
       always() &&
       (
@@ -324,6 +378,8 @@ jobs:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
       expected_head_sha: ${{ github.event.pull_request.head.sha }}
       expected_base_sha: ${{ github.event.pull_request.base.sha }}
+      reuse_outcome: ${{ needs.ready-for-review-reuse.outputs.outcome }}
+      reuse_prior_run_id: ${{ needs.ready-for-review-reuse.outputs.prior_run_id }}
     secrets: inherit
 
   # Promotes a completed package after its roster closes. reconcile-release
@@ -379,6 +435,21 @@ jobs:
       task_id: ${{ inputs.verify_task_id }}
       package_path: ${{ inputs.verify_package_path }}
       integration_branch: "develop"
+
+  verify-ready-for-review-reuse:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-ready-for-review-reuse'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-ready-for-review-reuse.yml@main
+    with:
+      ready_run_id: ${{ inputs.verify_ready_run_id }}
+      prior_run_id: ${{ inputs.verify_prior_run_id }}
+      source_pr_number: ${{ inputs.verify_reuse_source_pr_number }}
+      expected_source_head_sha: ${{ inputs.verify_reuse_source_head_sha }}
+      expected_source_base_sha: ${{ inputs.verify_reuse_source_base_sha }}
+      expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a

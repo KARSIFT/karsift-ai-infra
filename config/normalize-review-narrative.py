@@ -12,7 +12,7 @@ MAX_NARRATIVE_BYTES = 122_880
 RESERVED_BINDING = re.compile(
     r"(?:"
     r"Independent verification\s*-\s*bound to commit\b.*"
-    r"|(?:task_id|package_path|authority_issue|base_sha)\s*:.*"
+    r"|(?:task_id|package_path|authority_issue|base_sha|pipeline_run_id)\s*:.*"
     r")",
     re.IGNORECASE,
 )
