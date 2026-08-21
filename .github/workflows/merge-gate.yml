@@ -109,7 +109,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ job.workflow_sha }}
           path: karsift-ai-infra
           persist-credentials: false
 

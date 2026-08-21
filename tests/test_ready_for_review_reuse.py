@@ -629,7 +629,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(merge.count("else\n              checks_ok=false"), 1)
         self.assertGreaterEqual(merge.count("else\n              review_check_ok=false"), 1)
         self.assertIn("pipeline_run_id:", merge)
-        self.assertIn("ref: ${{ github.workflow_sha }}", merge)
+        self.assertIn("ref: ${{ job.workflow_sha }}", merge)
         review = (ROOT / ".github/workflows/review.yml").read_text()
         plan_review = (ROOT / ".github/workflows/plan-review.yml").read_text()
         self.assertIn(r"pipeline_run_id: \`${{ github.run_id }}\`", review)
