@@ -37,6 +37,9 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.review_workflow = (ROOT / ".github/workflows/review.yml").read_text()
+        cls.plan_review_workflow = (
+            ROOT / ".github/workflows/plan-review.yml"
+        ).read_text()
         cls.remediate_workflow = (
             ROOT / ".github/workflows/remediate.yml"
         ).read_text()
@@ -88,6 +91,8 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             with tempfile.NamedTemporaryFile(dir=scratch) as output:
                 env = os.environ.copy()
                 env["GITHUB_OUTPUT"] = output.name
+                env["EXPECTED_HEAD_SHA"] = ""
+                env["EXPECTED_BASE_SHA"] = ""
                 completed = subprocess.run(
                     ["bash", "-c", textwrap.dedent(gh_stub) + script],
                     cwd=ROOT,
@@ -201,6 +206,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
     def test_omitted_sha_is_transition_compatible_but_runtime_fail_closed(self):
         for workflow in (
             self.review_workflow,
+            self.plan_review_workflow,
             self.remediate_workflow,
             self.merge_workflow,
         ):
@@ -211,7 +217,11 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.assertIn('default: ""', expected_head_block)
 
         self.assertIn(
-                "Caller omitted or supplied an invalid expected PR base/head SHA. Skipping reviewer model invocation.",
+            "Caller omitted or supplied an invalid expected PR base/head SHA; refusing to run plan review.",
+            self.plan_review_workflow,
+        )
+        self.assertIn(
+            "Caller omitted or supplied an invalid expected PR base/head SHA. Skipping reviewer model invocation.",
             self.review_workflow,
         )
         self.assertIn(
@@ -224,6 +234,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         )
         for workflow in (
             self.review_workflow,
+            self.plan_review_workflow,
             self.remediate_workflow,
             self.merge_workflow,
         ):
@@ -236,6 +247,13 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         self.assertEqual(review_result.returncode, 0, review_result.stderr)
         self.assertIn("stale=true", review_output)
         self.assertIn("Skipping reviewer model invocation", review_result.stdout)
+
+        plan_review_result, _ = self._execute_missing_sha_path(
+            self.plan_review_workflow,
+            "Fetch PR diff, metadata, and exact SHA",
+        )
+        self.assertNotEqual(plan_review_result.returncode, 0)
+        self.assertIn("refusing to run plan review", plan_review_result.stderr)
 
         merge_result, merge_output = self._execute_missing_sha_path(
             self.merge_workflow,

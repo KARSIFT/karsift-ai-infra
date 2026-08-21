@@ -47,12 +47,14 @@ on:
         type: string
       expected_head_sha:
         description: "Immutable PR head SHA from the caller's pull_request event. Plan review refuses a missing, invalid, or superseded revision."
-        required: true
+        required: false
         type: string
+        default: ""
       expected_base_sha:
         description: "Immutable PR base SHA from the same pull_request event. The reviewed diff is constructed only from this base and expected_head_sha."
-        required: true
+        required: false
         type: string
+        default: ""
     secrets:
       CURSOR_API_KEY:
         required: true
