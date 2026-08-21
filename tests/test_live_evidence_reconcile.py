@@ -311,7 +311,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("fresh exact-SHA independent review", self.runner_source)
         self.assertLess(
             self.runner_source.index(
-                "post_qualified_comment(write_api, task, evidence, new_sha)"
+                "post_qualified_comment(read_api, write_api, task, evidence, new_sha)"
             ),
             self.runner_source.index(
                 "advance_result_ref(read_api, write_api, task, new_sha)"
@@ -321,6 +321,19 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "fast synchronize run can never observe the result commit",
             self.runner_source,
         )
+        append_block = self.runner_source.split("def append_result_commit", 1)[1].split(
+            "def advance_result_ref", 1
+        )[0]
+        advance_block = self.runner_source.split("def advance_result_ref", 1)[1].split(
+            "def post_qualified_comment", 1
+        )[0]
+        comment_block = self.runner_source.split("def post_qualified_comment", 1)[1].split(
+            "def comment_exists", 1
+        )[0]
+        self.assertGreaterEqual(append_block.count("assert_pr_pair_current"), 2)
+        self.assertIn("assert_pr_pair_current", advance_block)
+        self.assertIn("assert_pr_pair_current", comment_block)
+        self.assertIn('f"base_sha: `{task.base_sha}`"', comment_block)
         self.assertIn("pull_request:", self.pipeline)
         self.assertEqual(
             self.pipeline.count(
@@ -328,6 +341,38 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             ),
             4,
         )
+
+    def test_live_evidence_mutations_require_the_discovered_base_head_pair(self):
+        task = SimpleNamespace(
+            pr_number=7,
+            head_sha=HEAD,
+            head_ref="agent/example",
+            base_sha=BASE,
+        )
+
+        class PairApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, base_sha=BASE):
+                self.base_sha = base_sha
+
+            def get(self, endpoint):
+                self.endpoint = endpoint
+                return {
+                    "state": "open",
+                    "merged_at": None,
+                    "head": {
+                        "sha": HEAD,
+                        "ref": "agent/example",
+                        "repo": {"full_name": self.repository},
+                    },
+                    "base": {"sha": self.base_sha},
+                }
+
+        runner.assert_pr_pair_current(PairApi(), task)
+        with self.assertRaises(policy.ContractError) as stale:
+            runner.assert_pr_pair_current(PairApi("f" * 40), task)
+        self.assertEqual(stale.exception.code, "stale_pr_pair")
 
     def test_12_stale_and_non_success_runs_are_rejected(self):
         contract = parsed_contract(max_age="1h")
@@ -349,7 +394,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("comment_exists", self.runner_source)
 
     def test_14_duplicate_result_short_circuits_reconciliation(self):
-        task = SimpleNamespace(result_path="result.json", head_sha=HEAD)
+        task = SimpleNamespace(result_path="result.json", head_sha=HEAD, base_sha=BASE)
         task.pr_number = 12
         class AttestedApi:
             repository = "KARSIFT/example"
@@ -359,9 +404,16 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
                     "body": (
                         "**Live-evidence reconcile — qualified**\n"
-                        f"result_head_sha: `{HEAD}`"
+                        f"result_head_sha: `{HEAD}`\n"
+                        f"base_sha: `{BASE}`"
                     ),
                 }]
+
+        class StaleBaseAttestedApi(AttestedApi):
+            def get_all(self, endpoint, key=None):
+                comments = super().get_all(endpoint, key)
+                comments[0]["body"] = comments[0]["body"].replace(BASE, "f" * 40)
+                return comments
 
         with patch.object(
             runner,
@@ -369,6 +421,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             return_value='{"schema_version":1,"state":"qualified","run_id":12345}',
         ):
             self.assertTrue(runner.result_already_present(AttestedApi(), task))
+            self.assertFalse(runner.result_already_present(StaleBaseAttestedApi(), task))
+        self.assertIn('base_binding="base_sha:', self.review)
+        self.assertIn('index($base)', self.review)
         self.assertIn(
             "group: live-evidence-reconcile-${{ github.repository }}",
             self.workflow,
@@ -737,6 +792,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             package_path=PACKAGE,
             head_sha=HEAD,
             head_ref="agent/example",
+            base_sha=BASE,
             pr_number=7,
             waiting_comment_id=42,
             waiting_since=NOW - timedelta(hours=1),

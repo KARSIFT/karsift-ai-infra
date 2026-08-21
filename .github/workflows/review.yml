@@ -267,10 +267,11 @@ jobs:
           result_path="${{ inputs.package_path }}/.karsift/live-evidence/$task_id.result.json"
           if [ -n "$task_id" ] && [ -f "$result_path" ]; then
             binding="result_head_sha: \`${{ steps.pr.outputs.sha }}\`"
+            base_binding="base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
             attestation_count=$(gh api --paginate --slurp \
               "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
-              | jq --arg binding "$binding" \
-                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and .user.type == "Bot" and (.body | startswith("**Live-evidence reconcile — qualified**")) and ((.body | split("\n") | index($binding)) != null))] | length')
+              | jq --arg binding "$binding" --arg base "$base_binding" \
+                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and .user.type == "Bot" and (.body | startswith("**Live-evidence reconcile — qualified**")) and ((.body | split("\n") | index($binding)) != null) and ((.body | split("\n") | index($base)) != null))] | length')
             if [ "$attestation_count" = "1" ]; then
               live_evidence_attestation="true"
             else

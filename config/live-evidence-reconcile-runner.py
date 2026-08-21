@@ -128,6 +128,7 @@ class WaitingTask:
     result_path: str
     head_sha: str
     head_ref: str
+    base_sha: str
     waiting_comment_id: int
     waiting_since: datetime
     contract: Contract
@@ -322,6 +323,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         result_path=result_path,
         head_sha=head_sha.lower(),
         head_ref=head_ref,
+        base_sha=base_sha.lower(),
         waiting_comment_id=waiting_comment_id,
         waiting_since=waiting_since,
         contract=contract,
@@ -365,11 +367,13 @@ def result_already_present(api: GitHub, task: WaitingTask) -> bool:
         f"repos/{api.repository}/issues/{task.pr_number}/comments"
     )
     binding = f"result_head_sha: `{task.head_sha}`"
+    base_binding = f"base_sha: `{task.base_sha}`"
     return any(
         (comment.get("user") or {}).get("login") == TRUSTED_RECONCILE_AUTHOR
         and (comment.get("user") or {}).get("type") == "Bot"
         and (comment.get("body") or "").startswith("**Live-evidence reconcile — qualified**")
         and binding in (comment.get("body") or "").splitlines()
+        and base_binding in (comment.get("body") or "").splitlines()
         for comment in comments
     )
 
@@ -467,16 +471,30 @@ def qualify(api: GitHub, task: WaitingTask, run: dict[str, Any], now: datetime) 
     )
 
 
-def append_result_commit(read_api: GitHub, write_api: GitHub, task: WaitingTask, evidence: dict[str, Any]) -> str:
-    live_pr = read_api.get(f"repos/{read_api.repository}/pulls/{task.pr_number}")
+def assert_pr_pair_current(api: GitHub, task: WaitingTask) -> None:
+    """Require the exact PR base/head authorization pair captured at discovery."""
+    live_pr = api.get(f"repos/{api.repository}/pulls/{task.pr_number}")
     live_head = ((live_pr or {}).get("head") or {}).get("sha")
     live_ref = ((live_pr or {}).get("head") or {}).get("ref")
-    if live_head != task.head_sha or live_ref != task.head_ref:
-        raise ContractError("stale_pr_head")
+    live_repo = (((live_pr or {}).get("head") or {}).get("repo") or {}).get("full_name")
+    live_base = ((live_pr or {}).get("base") or {}).get("sha")
+    if (
+        (live_pr or {}).get("state") != "open"
+        or (live_pr or {}).get("merged_at") is not None
+        or live_head != task.head_sha
+        or live_ref != task.head_ref
+        or live_repo != api.repository
+        or live_base != task.base_sha
+    ):
+        raise ContractError("stale_pr_pair")
+
+
+def append_result_commit(read_api: GitHub, write_api: GitHub, task: WaitingTask, evidence: dict[str, Any]) -> str:
+    assert_pr_pair_current(read_api, task)
     encoded_ref = quote(f"heads/{task.head_ref}", safe="/")
     ref = read_api.get(f"repos/{read_api.repository}/git/ref/{encoded_ref}")
     if ((ref or {}).get("object") or {}).get("sha") != task.head_sha:
-        raise ContractError("stale_pr_head")
+        raise ContractError("stale_pr_pair")
     commit = read_api.get(f"repos/{read_api.repository}/git/commits/{task.head_sha}")
     base_tree = ((commit or {}).get("tree") or {}).get("sha")
     if not isinstance(base_tree, str) or not SHA_RE.fullmatch(base_tree):
@@ -497,6 +515,9 @@ def append_result_commit(read_api: GitHub, write_api: GitHub, task: WaitingTask,
     tree_sha = (tree or {}).get("sha")
     if not isinstance(tree_sha, str):
         raise ApiError("tree_creation_failed")
+    # Tree creation is harmless and does not move a ref. Revalidate the
+    # authorization pair immediately before creating the exact result commit.
+    assert_pr_pair_current(read_api, task)
     created = write_api.mutate(
         "POST",
         f"repos/{write_api.repository}/git/commits",
@@ -526,11 +547,7 @@ def advance_result_ref(
     fast synchronize run can never observe the result commit before its trusted
     attestation exists.
     """
-    live_pr = read_api.get(f"repos/{read_api.repository}/pulls/{task.pr_number}")
-    live_head = ((live_pr or {}).get("head") or {}).get("sha")
-    live_ref = ((live_pr or {}).get("head") or {}).get("ref")
-    if live_head != task.head_sha or live_ref != task.head_ref:
-        raise ContractError("stale_pr_head")
+    assert_pr_pair_current(read_api, task)
     encoded_ref = quote(f"heads/{task.head_ref}", safe="/")
     ref = read_api.get(f"repos/{read_api.repository}/git/ref/{encoded_ref}")
     if ((ref or {}).get("object") or {}).get("sha") != task.head_sha:
@@ -542,7 +559,14 @@ def advance_result_ref(
     )
 
 
-def post_qualified_comment(write_api: GitHub, task: WaitingTask, evidence: dict[str, Any], new_sha: str) -> None:
+def post_qualified_comment(
+    read_api: GitHub,
+    write_api: GitHub,
+    task: WaitingTask,
+    evidence: dict[str, Any],
+    new_sha: str,
+) -> None:
+    assert_pr_pair_current(read_api, task)
     workflow_identity = (
         evidence.get("workflow_file")
         or evidence.get("workflow_name")
@@ -564,6 +588,7 @@ def post_qualified_comment(write_api: GitHub, task: WaitingTask, evidence: dict[
         f"run_id: `{evidence['run_id']}`",
         f"job_count: `{len(evidence['job_ids'])}`",
         f"result_head_sha: `{new_sha}`",
+        f"base_sha: `{task.base_sha}`",
         "",
         "Only allowlisted Actions metadata was recorded. The new PR head must receive a fresh exact-SHA independent review.",
     ])
@@ -635,7 +660,7 @@ def assert_dispatch_authorization_current(
 ) -> None:
     live_pr = api.get(f"repos/{api.repository}/pulls/{task.pr_number}")
     if not isinstance(live_pr, dict):
-        raise ContractError("stale_pr_head")
+        raise ContractError("stale_pr_pair")
     body = live_pr.get("body") or ""
     live_head_data = live_pr.get("head") or {}
     live_head = live_head_data.get("sha")
@@ -650,8 +675,9 @@ def assert_dispatch_authorization_current(
         or live_repo != api.repository
         or not isinstance(base_sha, str)
         or not SHA_RE.fullmatch(base_sha)
+        or base_sha.lower() != task.base_sha
     ):
-        raise ContractError("stale_pr_head")
+        raise ContractError("stale_pr_pair")
     if (
         PACKAGE_RE.findall(body) != [task.package_path]
         or TASK_RE.findall(body) != [task.task_id]
@@ -818,7 +844,7 @@ def reconcile_task(
         except ContractError:
             continue
         new_sha = append_result_commit(read_api, write_api, task, evidence)
-        post_qualified_comment(write_api, task, evidence, new_sha)
+        post_qualified_comment(read_api, write_api, task, evidence, new_sha)
         advance_result_ref(read_api, write_api, task, new_sha)
         print(
             f"live-evidence: qualified task={task.task_id} pr={task.pr_number} run_id={evidence['run_id']}"
