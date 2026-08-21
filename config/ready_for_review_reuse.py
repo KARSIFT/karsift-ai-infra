@@ -32,7 +32,9 @@ PLAN_PUBLISHER_JOB = "plan-review / publish-plan-review"
 MERGE_GATE_PREFIX = "merge-gate"
 REMEDIATE_PREFIX = "remediate"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-PACKAGE_RE = re.compile(r"^specs/changes/[A-Za-z0-9._-]+$")
+PACKAGE_RE = re.compile(
+    r"^specs/changes/[A-Z][A-Z0-9]*-[0-9]+-[a-z0-9][a-z0-9-]*$"
+)
 TASK_RE = re.compile(r"^[A-Z][A-Z0-9-]*-T[0-9]{2}$")
 
 
@@ -317,12 +319,9 @@ def evaluate_reuse_eligibility(
 
 
 def pr_checks_allow_reuse(*, pr_checks: list[dict], head_ref: str) -> bool:
-    """Require green rollup while allowing this decision's waiting caller jobs."""
+    """Require existing checks green without requiring not-yet-created caller jobs."""
     reusable = set(current_reusable_caller_jobs(head_ref))
     if not reusable or not pr_checks:
-        return False
-    current_names = {str(check.get("name") or "") for check in pr_checks}
-    if not reusable.issubset(current_names):
         return False
     for check in pr_checks:
         name = str(check.get("name") or "")

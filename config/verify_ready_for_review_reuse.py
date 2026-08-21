@@ -67,9 +67,12 @@ def verify_ready_jobs(
     head_ref: str,
 ) -> VerificationResult:
     ci_matches = [job for job in jobs if _job_name(job) == "ci"]
-    publisher_name = (
-        "review" if head_ref.startswith("agent/") else "plan-review"
-    )
+    if head_ref.startswith("agent/"):
+        publisher_name = "review"
+    elif head_ref.startswith("plan/"):
+        publisher_name = "plan-review"
+    else:
+        return VerificationResult(False, "unsupported_head_ref")
     publisher_matches = [job for job in jobs if _job_name(job) == publisher_name]
     ci = ci_matches[0] if len(ci_matches) == 1 else None
     publisher = publisher_matches[0] if len(publisher_matches) == 1 else None
@@ -147,9 +150,12 @@ def verify_prior_jobs(
     head_ref: str,
 ) -> VerificationResult:
     ci_matches = [job for job in jobs if _job_name(job) == REQUIRED_CI_JOB]
-    publisher_name = (
-        AGENT_PUBLISHER_JOB if head_ref.startswith("agent/") else PLAN_PUBLISHER_JOB
-    )
+    if head_ref.startswith("agent/"):
+        publisher_name = AGENT_PUBLISHER_JOB
+    elif head_ref.startswith("plan/"):
+        publisher_name = PLAN_PUBLISHER_JOB
+    else:
+        return VerificationResult(False, "unsupported_head_ref")
     publisher_matches = [job for job in jobs if _job_name(job) == publisher_name]
     ci = ci_matches[0] if len(ci_matches) == 1 else None
     publisher = publisher_matches[0] if len(publisher_matches) == 1 else None

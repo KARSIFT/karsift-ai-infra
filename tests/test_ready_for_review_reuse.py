@@ -112,8 +112,6 @@ def decide(**overrides):
         "comments": [review_comment()],
         "pipeline_runs": [pipeline_run()],
         "pr_checks": [
-            {"name": "ci", "state": "PENDING"},
-            {"name": "review", "state": "PENDING"},
             {"name": "governance-policy", "state": "SUCCESS"},
             {"name": "ready-for-review-reuse / decide", "state": "PENDING"},
         ],
@@ -133,8 +131,6 @@ class ReuseDecisionTests(unittest.TestCase):
             comments=[review_comment(plan=True, verdict="PASS WITH NON-BLOCKING FINDINGS")],
             pipeline_runs=[pipeline_run(head_branch=PLAN_REF)],
             pr_checks=[
-                {"name": "ci", "state": "PENDING"},
-                {"name": "plan-review", "state": "PENDING"},
                 {"name": "governance-policy", "state": "SUCCESS"},
             ],
         )
@@ -208,11 +204,35 @@ class ReuseDecisionTests(unittest.TestCase):
                 pr_checks=[
                     {"name": "ci", "state": "PENDING"},
                     {"name": "review", "state": "PENDING"},
+                    {"name": "governance-policy", "state": "SUCCESS"},
+                ]
+            ).outcome,
+            "reuse-evidence",
+        )
+        self.assertEqual(
+            decide(
+                pr_checks=[
+                    {"name": "ci", "state": "PENDING"},
+                    {"name": "review", "state": "PENDING"},
                     {"name": "governance-policy", "state": "FAILURE"},
                 ]
             ).outcome,
             "full-path",
         )
+
+    def test_only_canonical_package_paths_are_eligible(self):
+        invalid = (
+            "specs/changes/..",
+            "specs/changes/VOC-104",
+            "specs/changes/voc-104-lowercase-prefix",
+            "specs/changes/VOC-104-Uppercase-Suffix",
+        )
+        for package in invalid:
+            with self.subTest(package=package):
+                self.assertEqual(
+                    decide(pr_body=agent_body(package)).outcome,
+                    "full-path",
+                )
 
     def test_required_attestation_is_exact_and_unique(self):
         self.assertEqual(decide(result_path_exists=True).outcome, "full-path")
@@ -496,6 +516,17 @@ class ProofVerifierTests(unittest.TestCase):
         self.assertTrue(
             verifier.verify_prior_jobs(
                 jobs=list(pipeline_run().jobs), head_ref=AGENT_REF
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_ready_jobs(
+                jobs=ready_jobs, head_ref="unsupported/review-branch"
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_prior_jobs(
+                jobs=list(pipeline_run().jobs),
+                head_ref="unsupported/review-branch",
             ).ok
         )
 
