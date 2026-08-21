@@ -711,6 +711,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertNotIn("gh pr comment", review_job)
         self.assertIn("actions/download-artifact@", publisher_job)
         self.assertIn("permission-issues: write", publisher_job)
+        self.assertIn("permission-pull-requests: write", publisher_job)
         self.assertIn("PR base/head pair changed before verdict publication", publisher_job)
         self.assertGreaterEqual(
             publisher_job.count("GH_REPO: ${{ github.repository }}"),

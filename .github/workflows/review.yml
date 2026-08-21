@@ -561,7 +561,9 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
-          permission-pull-requests: read
+          # `gh pr comment` uses GraphQL addComment on a PullRequest subject;
+          # issues:write alone is insufficient for that mutation.
+          permission-pull-requests: write
 
       - name: Publish App-signed verification comment
         env:
