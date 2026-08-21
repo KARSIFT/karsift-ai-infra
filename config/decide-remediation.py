@@ -17,12 +17,13 @@ def decide(
     review_state: str,
     ci_failed: bool,
     review_job_failed: bool,
+    ownership_state: str = "ORDINARY",
 ) -> str:
     if expected_sha and expected_sha != current_sha:
         return "STALE"
-    if ci_failed:
-        return "RETRY"
-    if review_state == "FAIL":
+    if ci_failed or review_state == "FAIL":
+        if ownership_state in {"OPERATOR", "FAIL_CLOSED"}:
+            return "ESCALATE_OPERATOR"
         return "RETRY"
     if review_job_failed:
         return "REVIEW_INFRA_FAILURE"
@@ -38,6 +39,11 @@ def main() -> int:
     parser.add_argument("--review-state", required=True)
     parser.add_argument("--ci-failed", required=True, type=parse_bool)
     parser.add_argument("--review-job-failed", required=True, type=parse_bool)
+    parser.add_argument(
+        "--ownership-state",
+        required=True,
+        choices=("ORDINARY", "OPERATOR", "FAIL_CLOSED"),
+    )
     args = parser.parse_args()
     print(decide(**vars(args)))
     return 0
