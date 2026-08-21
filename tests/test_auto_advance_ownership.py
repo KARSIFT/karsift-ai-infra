@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import textwrap
@@ -547,6 +548,13 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             post.assert_called_once()
 
     def test_voc102_test_12_permission_boundary(self):
+        secret_interface = self.auto_advance.split("    secrets:", 1)[1].split(
+            "\njobs:", 1
+        )[0]
+        self.assertEqual(
+            set(re.findall(r"^      ([A-Z][A-Z0-9_]+):", secret_interface, re.MULTILINE)),
+            {"CURSOR_API_KEY", "KARSIFT_BOT_APP_ID", "KARSIFT_BOT_PRIVATE_KEY"},
+        )
         advance_block = self.auto_advance.split("  advance:", 1)[1].split("  prepare-live-evidence:", 1)[0]
         publisher_block = self.auto_advance.split("  prepare-live-evidence:", 1)[1].split("  fail-closed:", 1)[0]
         implement_block = self.auto_advance.split("  implement:", 1)[1]
