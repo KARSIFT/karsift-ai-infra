@@ -155,6 +155,9 @@ therefore cannot observe the App credential or forge its bot identity. The
 publisher rejects every `.github/workflows/**` change before push; those
 security-sensitive edits use a separately supervised review/publication path
 instead of executing from an unreviewed same-repository PR.
+All PR operations and bounded issue notifications in these clean jobs name the
+calling repository explicitly, because they intentionally have no checked-out
+Git worktree from which GitHub CLI could infer repository context.
 Its model-facing job also has read-only issue and pull-request permissions;
 no-change reporting is performed by a separate clean runner.
 

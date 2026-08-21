@@ -104,6 +104,81 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
                 output.seek(0)
                 return completed, output.read().decode()
 
+    def test_clean_implement_publisher_opens_pr_outside_git_worktree(self):
+        self.assertEqual(
+            self.implement_workflow.count('gh issue comment --repo "$GH_REPO"'),
+            3,
+        )
+        script = self._run_block(
+            self.implement_workflow,
+            "Open or update PR from the clean runner",
+        )
+        replacements = {
+            "${{ inputs.task_id }}": "VOC-TEST-T00",
+            "${{ inputs.change_id }}": "VOC-TEST",
+            "${{ inputs.package_path }}": "specs/changes/VOC-TEST-fixture",
+            "${{ inputs.issue_number }}": "1",
+            "${{ inputs.attempt }}": "1",
+            "${{ inputs.integration_branch }}": "develop",
+        }
+        for original, replacement in replacements.items():
+            script = script.replace(original, replacement)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            bin_path = scratch_path / "bin"
+            bin_path.mkdir()
+            invocation_log = scratch_path / "gh-invocations"
+            gh_stub = bin_path / "gh"
+            gh_stub.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    printf '%s %s\\n' "$1" "$2" >> {invocation_log}
+                    if [[ " $* " != *" --repo KARSIFT/fixture "* ]]; then
+                      exit 81
+                    fi
+                    case "$1 $2" in
+                      "pr list") printf '%s\\n' "${{EXISTING_PR:-}}" ;;
+                      "pr create"|"pr edit"|"pr comment") exit 0 ;;
+                      *) exit 82 ;;
+                    esac
+                    """
+                )
+            )
+            gh_stub.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "GH_REPO": "KARSIFT/fixture",
+                    "PUBLISH_BRANCH": "agent/voc-test-voc-test-t00",
+                    "PACKAGE_RISK": "R1",
+                    "PATH": f"{bin_path}:{env['PATH']}",
+                }
+            )
+            cases = [
+                ("", ["pr list", "pr create"]),
+                ("42", ["pr list", "pr edit", "pr comment"]),
+            ]
+            for existing_pr, expected in cases:
+                with self.subTest(existing_pr=existing_pr):
+                    invocation_log.write_text("")
+                    env["EXISTING_PR"] = existing_pr
+                    completed = subprocess.run(
+                        ["bash", "-c", script],
+                        cwd=scratch_path,
+                        env=env,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertEqual(
+                        invocation_log.read_text().splitlines(), expected
+                    )
+
     def test_verdict_fixture_matrix_is_fail_dominant(self):
         waiting = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
         failure = "VERDICT: FAIL"

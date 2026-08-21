@@ -973,13 +973,14 @@ jobs:
       - name: Report bounded implementation outcome
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [ "${{ inputs.attempt }}" = "1" ]; then
-            gh issue comment "${{ inputs.issue_number }}" --body \
+            gh issue comment --repo "$GH_REPO" "${{ inputs.issue_number }}" --body \
               "The implementer completed attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\` but produced no committed change, so no PR was opened. A later dispatch may use the bounded final attempt."
           else
-            gh issue comment "${{ inputs.issue_number }}" --body \
+            gh issue comment --repo "$GH_REPO" "${{ inputs.issue_number }}" --body \
               "The implementer failed to produce a publishable change on attempt 2/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Automatic implementation has stopped for this task."
           fi
 
@@ -1100,11 +1101,12 @@ jobs:
       - name: Open or update PR from the clean runner
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_REPO: ${{ github.repository }}
           PUBLISH_BRANCH: ${{ needs.implement.outputs.branch }}
           PACKAGE_RISK: ${{ needs.implement.outputs.risk }}
         run: |
           set -euo pipefail
-          existing=$(gh pr list --head "$PUBLISH_BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
+          existing=$(gh pr list --repo "$GH_REPO" --head "$PUBLISH_BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
           body="$(cat <<EOF
           Implements task \`${{ inputs.task_id }}\` from \`${{ inputs.change_id }}\` (\`${{ inputs.package_path }}\`).
 
@@ -1121,10 +1123,11 @@ jobs:
           EOF
           )"
           if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            gh pr edit "$existing" --body "$body"
-            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for the reviewed changes."
+            gh pr edit --repo "$GH_REPO" "$existing" --body "$body"
+            gh pr comment --repo "$GH_REPO" "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for the reviewed changes."
           else
             gh pr create \
+              --repo "$GH_REPO" \
               --base "${{ inputs.integration_branch }}" \
               --head "$PUBLISH_BRANCH" \
               --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
@@ -1135,6 +1138,7 @@ jobs:
         if: failure() && inputs.attempt >= '2'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh issue comment ${{ inputs.issue_number }} --body \
+          gh issue comment --repo "$GH_REPO" ${{ inputs.issue_number }} --body \
             "The implementer produced a committed result for task \`${{ inputs.task_id }}\`, but the isolated publication job failed on attempt ${{ inputs.attempt }}/2. The recovery bundle remains attached to this run; automatic publication stopped."
