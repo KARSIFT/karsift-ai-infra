@@ -2,10 +2,11 @@ name: live-evidence-reconcile (reusable)
 
 # Repository-controlled operator path for declared live GitHub Actions evidence.
 # It reads only run/job metadata, never logs or artifacts. Mutations use the
-# separately installed KARSIFT GitHub App; the implementer receives neither
-# Actions access nor this token. A qualifying run creates one sanitized result
-# commit, which changes the PR head and therefore forces the caller's ordinary
-# exact-SHA CI/review/merge-gate path to run again.
+# separately installed KARSIFT GitHub App. Declared workflow dispatch uses only
+# this dedicated job's scoped GITHUB_TOKEN because the App installation does not
+# require Actions write permission. The implementer receives neither token. A
+# qualifying run creates one sanitized result commit, which changes the PR head
+# and therefore forces the caller's ordinary exact-SHA review path to run again.
 
 on:
   workflow_call:
@@ -38,7 +39,7 @@ jobs:
   reconcile:
     runs-on: ubuntu-latest
     permissions:
-      actions: read
+      actions: write
       checks: read
       contents: read
       issues: read
@@ -62,7 +63,6 @@ jobs:
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-actions: write
           permission-contents: write
           permission-issues: write
 

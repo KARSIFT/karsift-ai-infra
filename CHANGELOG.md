@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Separated live-evidence workflow dispatch authority from App-authenticated
+  repository mutations. Only the dedicated reconcile job receives a scoped
+  `GITHUB_TOKEN` with Actions write access; the App no longer requests an
+  unavailable Actions grant, and caller secrets are explicit.
+
 - Canonicalized untrusted task- and plan-review narratives before constructing
   App-signed verification records. Full-line binding lookalikes are removed and
   replaced by the workflow's exact authoritative metadata, while malformed,
