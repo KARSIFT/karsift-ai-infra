@@ -74,7 +74,14 @@ def plan_body(package=PACKAGE):
     return f"New package directory: `{package}`\n"
 
 
-def review_comment(*, plan=False, verdict="PASS", login=None, comment_id=1):
+def review_comment(
+    *,
+    plan=False,
+    verdict="PASS",
+    login=None,
+    comment_id=1,
+    created_at="2026-08-21T00:00:00Z",
+):
     identity = [f"package_path: `{PACKAGE}`"] if plan else [
         "task_id: `VOC-104-T00`",
         f"package_path: `{PACKAGE}`",
@@ -82,6 +89,7 @@ def review_comment(*, plan=False, verdict="PASS", login=None, comment_id=1):
     ]
     return {
         "id": comment_id,
+        "created_at": created_at,
         "user": {
             "login": login or policy.TRUSTED_BOT_LOGIN,
             "type": "Bot" if login is None else "User",
@@ -196,6 +204,22 @@ class ReuseDecisionTests(unittest.TestCase):
             "pipeline_run_id: `99`",
         )
         self.assertEqual(decide(comments=[wrong_run]).outcome, "full-path")
+
+    def test_trusted_verdict_selection_matches_merge_gate_timestamp_then_id(self):
+        older_higher_id = review_comment(
+            verdict="FAIL",
+            comment_id=20,
+            created_at="2026-08-21T00:00:00Z",
+        )
+        newer_lower_id = review_comment(
+            verdict="PASS",
+            comment_id=10,
+            created_at="2026-08-21T00:01:00Z",
+        )
+        self.assertEqual(
+            decide(comments=[newer_lower_id, older_higher_id]).outcome,
+            "reuse-evidence",
+        )
 
     def test_non_green_unrelated_pr_check_takes_full_path(self):
         self.assertEqual(decide().outcome, "reuse-evidence")
@@ -605,6 +629,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(merge.count("else\n              checks_ok=false"), 1)
         self.assertGreaterEqual(merge.count("else\n              review_check_ok=false"), 1)
         self.assertIn("pipeline_run_id:", merge)
+        self.assertIn("ref: ${{ github.workflow_sha }}", merge)
         review = (ROOT / ".github/workflows/review.yml").read_text()
         plan_review = (ROOT / ".github/workflows/plan-review.yml").read_text()
         self.assertIn(r"pipeline_run_id: \`${{ github.run_id }}\`", review)

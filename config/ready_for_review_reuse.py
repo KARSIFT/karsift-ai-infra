@@ -192,7 +192,7 @@ def trusted_review_comment(
     package_line = f"package_path: `{package_path}`"
     issue_line = f"authority_issue: `{authority_issue}`" if authority_issue else ""
     run_line = f"pipeline_run_id: `{pipeline_run_id}`"
-    matches: list[tuple[str, int]] = []
+    matches: list[tuple[str, str, int]] = []
     for comment in comments:
         user = comment.get("user") or {}
         if user.get("login") != TRUSTED_BOT_LOGIN or user.get("type") != "Bot":
@@ -209,10 +209,19 @@ def trusted_review_comment(
             continue
         if issue_line and issue_line not in lines:
             continue
-        matches.append((body, int(comment.get("id") or 0)))
+        matches.append(
+            (
+                body,
+                str(comment.get("created_at") or ""),
+                int(comment.get("id") or 0),
+            )
+        )
     if not matches:
         return ""
-    matches.sort(key=lambda item: item[1])
+    # Match merge-gate's jq `sort_by(.created_at, .id) | last` exactly so
+    # eligibility and final merge validation cannot disagree about which
+    # otherwise-valid trusted verdict is authoritative.
+    matches.sort(key=lambda item: (item[1], item[2]))
     return matches[-1][0]
 
 
