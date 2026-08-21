@@ -56,11 +56,20 @@ jobs:
       # build; the 2026-08-08 first real run found one of each (SC2070
       # error, SC2044 warning) and both were fixed at the source, not
       # ignored here - see those commits for what they were.
+      #
+      # 2026-08-21: GitHub's current contexts reference defines
+      # `job.workflow_repository` and `job.workflow_sha` specifically for a
+      # reusable workflow to check out files co-located with its own exact
+      # revision. actionlint's bundled `job` schema does not yet include those
+      # two github.com properties. Keep these ignores exact; do not suppress
+      # other undefined job-context properties.
       - name: Run actionlint
         run: |
           ./actionlint -color \
             -ignore 'input "permission-profile" is not defined' \
             -ignore 'input "allow-bot-users" is not defined' \
+            -ignore 'property "workflow_repository" is not defined in object type' \
+            -ignore 'property "workflow_sha" is not defined in object type' \
             -ignore 'constant expression "false" in condition' \
             -ignore 'shellcheck reported issue.*:(info|style):'
 

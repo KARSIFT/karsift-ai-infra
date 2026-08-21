@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: ""
+      expected_base_sha:
+        description: "PR base SHA from the same caller run. A different live base makes review evidence and remediation stale."
+        required: false
+        type: string
+        default: ""
     secrets:
       KARSIFT_BOT_APP_ID:
         required: false
@@ -96,6 +101,8 @@ jobs:
           CI_FAILED: ${{ inputs.ci_failed }}
           REVIEW_JOB_FAILED: ${{ inputs.review_job_failed }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
         run: |
           set -euo pipefail
 
@@ -106,9 +113,10 @@ jobs:
           # "not a git repository", not an auth or permissions error. Found
           # via karsift-ai-infra-smoke-test PR #7: a genuine PASS verdict
           # should have been a silent no-op here and instead errored the job.
-          pr_json=$(gh pr view "$PR_NUMBER" --json body,headRefOid)
+          pr_json=$(gh pr view "$PR_NUMBER" --json body,headRefOid,baseRefOid)
           body=$(echo "$pr_json" | jq -r .body)
           head_sha=$(echo "$pr_json" | jq -r .headRefOid)
+          base_sha=$(echo "$pr_json" | jq -r .baseRefOid)
 
           head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
             --expected-sha "$EXPECTED_HEAD_SHA" \
@@ -121,10 +129,20 @@ jobs:
             echo "Exact-head precondition is $head_state; refusing remediation."
             exit 0
           fi
+          if ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             [ "$base_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+            echo "stale_run=true" >> "$GITHUB_OUTPUT"
+            echo "Exact-base precondition is stale or invalid; refusing remediation."
+            exit 0
+          fi
 
           task_id=$(echo "$body" | grep -oP '(?<=Implements task `)[^`]+' | head -1 || echo "")
           change_id=$(echo "$body" | grep -oP '(?<=from `)[^`]+(?=` \()' | head -1 || echo "")
           issue_number=$(echo "$body" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || echo "")
+          mapfile -t package_paths < <(printf '%s\n' "$body" | grep -oP '(?<=Package path: `)[^`]+' || true)
           attempt=$(echo "$body" | grep -oP '(?<=attempt )[0-9]+(?= of 2)' | head -1 || echo "1")
 
           echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
@@ -152,10 +170,34 @@ jobs:
 
           # Only a review explicitly bound to this run's current PR head can
           # drive a lifecycle decision. Earlier-head comments are ignored.
-          review_binding="bound to commit \`$head_sha\`"
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg binding "$review_binding" \
-              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          verdict=""
+          if [ "${#package_paths[@]}" -eq 1 ] && [ "${package_paths[0]}" = "$PACKAGE_PATH" ] &&
+             [[ "$task_id" =~ ^[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+$ ]] &&
+             [[ "$issue_number" =~ ^[0-9]+$ ]]; then
+            review_header="**Independent verification - bound to commit \`$head_sha\`**"
+            task_line="task_id: \`$task_id\`"
+            package_line="package_path: \`$PACKAGE_PATH\`"
+            issue_line="authority_issue: \`$issue_number\`"
+            base_line="base_sha: \`$base_sha\`"
+            verdict=$(gh api --paginate --slurp \
+              "repos/${{ github.repository }}/issues/$PR_NUMBER/comments?per_page=100" \
+              | jq -r \
+                --arg header "$review_header" \
+                --arg task "$task_line" \
+                --arg package "$package_line" \
+                --arg issue "$issue_line" \
+                --arg base "$base_line" \
+                '[.[][] | select(
+                  .user.login == "karsift-ai-infra-bot[bot]" and
+                  .user.type == "Bot" and
+                  (.body | startswith($header)) and
+                  ((.body | split("\n") | index($header)) != null) and
+                  ((.body | split("\n") | index($task)) != null) and
+                  ((.body | split("\n") | index($package)) != null) and
+                  ((.body | split("\n") | index($issue)) != null)
+                  and ((.body | split("\n") | index($base)) != null)
+                )] | sort_by(.created_at, .id) | last | .body // ""')
+          fi
           printf '%s\n' "$verdict" > /tmp/review-verdict.md
           review_state=$(python3 karsift-ai-infra/config/classify-review-verdict.py /tmp/review-verdict.md)
           decision=$(python3 karsift-ai-infra/config/decide-remediation.py \
@@ -280,7 +322,7 @@ jobs:
       # review never produces a verdict comment: the review job itself
       # errored (e.g. an install/network failure on the reviewer's own
       # tooling, not a code-quality finding). Mirrors that step exactly,
-      # just pulling the "review / review" job's log instead of "ci / ci"'s.
+      # pulling whichever isolated review stage failed instead of "ci / ci".
       - name: Attach review-job-error output as retry context, if the review job itself failed
         if: inputs.review_job_failed == 'true' && steps.parse.outputs.next_attempt != ''
         env:
@@ -290,12 +332,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          review_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q '.jobs[] | select(.name == "review / review") | .databaseId' | head -1)
+          review_job_id=$(gh run view "$GITHUB_RUN_ID" --json jobs -q \
+            '[.jobs[] | select((.name == "review / publish-review" or .name == "review / review") and .conclusion == "failure")][0].databaseId // empty')
 
           if [ -n "$review_job_id" ]; then
             log_tail=$(gh api "repos/${{ github.repository }}/actions/jobs/$review_job_id/logs" | tail -150)
           else
-            log_tail="(could not locate the review / review job's log for this run)"
+            log_tail="(could not locate the failed review stage's log for this run)"
           fi
 
           {
@@ -307,7 +350,7 @@ jobs:
             echo "transient failure in the reviewer's own tooling, not a finding about"
             echo "this PR's code). This is very likely unrelated to the implementation -"
             echo "re-check the log below before assuming your prior change was at fault."
-            echo "Last ~150 lines of the \`review / review\` job's log:"
+            echo "Last ~150 lines of the failed review stage's log:"
             echo
             echo '```'
             echo "$log_tail"
@@ -327,4 +370,5 @@ jobs:
       attempt: ${{ needs.decide.outputs.next_attempt }}
       integration_branch: ${{ inputs.integration_branch }}
       expected_head_sha: ${{ inputs.expected_head_sha }}
+      expected_base_sha: ${{ inputs.expected_base_sha }}
     secrets: inherit

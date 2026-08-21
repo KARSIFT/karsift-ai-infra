@@ -71,10 +71,11 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         script = script.replace("${{ inputs.pr_number }}", "1")
         script = script.replace("${{ github.event.pull_request.number }}", "1")
         script = script.replace("${{ inputs.expected_head_sha }}", "")
+        script = script.replace("${{ inputs.expected_base_sha }}", "")
         gh_stub = """
         gh() {
           if [ "$1 $2 $3" = "pr view 1" ]; then
-            printf '%s\\n' '{"body":"Risk classification: R1","title":"fixture","author":{"login":"fixture"},"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+            printf '%s\\n' '{"body":"Risk classification: R1","title":"fixture","author":{"login":"fixture"},"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
             return 0
           fi
           printf 'unexpected gh invocation: %s\\n' "$*" >&2
@@ -183,7 +184,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.assertIn('default: ""', expected_head_block)
 
         self.assertIn(
-            "Caller omitted or supplied an invalid expected PR head SHA. Skipping reviewer model invocation.",
+                "Caller omitted or supplied an invalid expected PR base/head SHA. Skipping reviewer model invocation.",
             self.review_workflow,
         )
         self.assertIn(
@@ -191,7 +192,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.remediate_workflow,
         )
         self.assertIn(
-            "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state.",
+                "Caller omitted or supplied an invalid expected PR base/head SHA. Refusing to reuse checks or review state.",
             self.merge_workflow,
         )
         for workflow in (
@@ -224,16 +225,24 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.remediate_workflow,
         )
         self.assertGreaterEqual(
-            self.implement_workflow.count("verify-expected-head.py"), 2
+            self.implement_workflow.count("verify-expected-head.py"), 1
         )
+        self.assertIn('[ "$live_head" != "$EXPECTED_OLD_HEAD" ]', self.implement_workflow)
         self.assertIn(
-            '--force-with-lease="refs/heads/$branch:$expected_head"',
+            '--force-with-lease="$lease"',
             self.implement_workflow,
         )
 
     def test_stale_review_skips_model_invocation(self):
         self.assertIn("expected_head_sha:", self.review_workflow)
+        self.assertIn("expected_base_sha:", self.review_workflow)
         self.assertIn('echo "stale=true"', self.review_workflow)
+        self.assertNotIn("gh pr diff", self.review_workflow)
+        self.assertIn(
+            "git --no-pager diff --no-ext-diff --no-textconv --find-renames",
+            self.review_workflow,
+        )
+        self.assertIn("baseRefOid,state", self.review_workflow)
         self.assertRegex(
             self.review_workflow,
             r"- name: Run independent verification\n\s+if: steps\.pr\.outputs\.stale != 'true'",
@@ -252,7 +261,13 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.pipeline_template.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            3,
+            4,
+        )
+        self.assertEqual(
+            self.pipeline_template.count(
+                "expected_base_sha: ${{ github.event.pull_request.base.sha }}"
+            ),
+            4,
         )
 
 

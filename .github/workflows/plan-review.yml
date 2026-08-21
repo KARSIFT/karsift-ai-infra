@@ -45,26 +45,63 @@ on:
       pr_number:
         required: true
         type: string
+      expected_head_sha:
+        description: "Immutable PR head SHA from the caller's pull_request event. Plan review refuses a missing, invalid, or superseded revision."
+        required: true
+        type: string
+      expected_base_sha:
+        description: "Immutable PR base SHA from the same pull_request event. The reviewed diff is constructed only from this base and expected_head_sha."
+        required: true
+        type: string
     secrets:
       CURSOR_API_KEY:
+        required: true
+      KARSIFT_BOT_APP_ID:
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
         required: true
 
 jobs:
   plan-review:
     runs-on: ubuntu-latest
+    outputs:
+      package_path: ${{ steps.pr.outputs.package_path }}
+      sha: ${{ steps.pr.outputs.sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
     steps:
       - name: Fetch PR diff, metadata, and exact SHA
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
-          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
-          echo "sha=$(jq -r .headRefOid /tmp/pr.json)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Caller omitted or supplied an invalid expected PR base/head SHA; refusing to run plan review." >&2
+            exit 1
+          fi
+
+          # Confirm the live PR still names the immutable base/head pair from
+          # the caller event. The reviewed diff itself is built locally from
+          # those commit objects after checkout; it never comes from GitHub's
+          # mutable PR-diff endpoint.
+          gh pr view "$PR_NUMBER" --json body,title,headRefOid,baseRefOid > /tmp/pr.json
+          live_sha=$(jq -r .headRefOid /tmp/pr.json)
+          live_base_sha=$(jq -r .baseRefOid /tmp/pr.json)
+          if [ "$live_sha" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$live_base_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "::error::Caller pipeline base/head pair is stale; refusing to review a superseded plan revision." >&2
+            exit 1
+          fi
+          echo "sha=$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$EXPECTED_BASE_SHA" >> "$GITHUB_OUTPUT"
 
           # plan.yml's own "Open pull request" step always writes this exact
           # line into the PR body - same convention adopt.yml's "Locate the
@@ -84,12 +121,35 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build diff from immutable base and head commits
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          actual_head=$(git rev-parse HEAD)
+          if [ "$actual_head" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Checkout did not resolve to the exact expected plan head." >&2
+            exit 1
+          fi
+          git cat-file -e "$EXPECTED_BASE_SHA^{commit}"
+          merge_base=$(git merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")
+          if ! [[ "$merge_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not resolve an immutable merge base for plan review." >&2
+            exit 1
+          fi
+          git --no-pager diff --no-ext-diff --no-textconv --find-renames \
+            "$merge_base" "$EXPECTED_HEAD_SHA" -- > /tmp/pr.diff
 
       - name: Checkout karsift-ai-infra
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
+          persist-credentials: false
 
       - name: Resolve plan_reviewer model
         id: model
@@ -210,13 +270,119 @@ jobs:
       - name: Show verdict
         run: cat /tmp/verdict.md
 
-      - name: Post verification comment
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build verification record for isolated publisher
         run: |
           {
             echo "**Independent verification - bound to commit \`${{ steps.pr.outputs.sha }}\`**"
             echo
+            echo "package_path: \`${{ steps.pr.outputs.package_path }}\`"
+            echo "base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
+            echo
             cat /tmp/verdict.md
           } > /tmp/verdict-comment.md
-          gh pr comment ${{ inputs.pr_number }} --body-file /tmp/verdict-comment.md
+
+      - name: Upload verification record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: plan-review-verdict-${{ inputs.pr_number }}-${{ steps.pr.outputs.sha }}
+          path: /tmp/verdict-comment.md
+          retention-days: 1
+
+  publish-plan-review:
+    needs: plan-review
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Download verification record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: plan-review-verdict-${{ inputs.pr_number }}-${{ needs.plan-review.outputs.sha }}
+          path: /tmp/plan-review-publish
+
+      - name: Validate exact plan head and verdict shape
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.plan-review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.plan-review.outputs.base_sha }}
+          EXPECTED_PACKAGE_PATH: ${{ needs.plan-review.outputs.package_path }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Plan-review publication identity is malformed." >&2
+            exit 1
+          fi
+          gh pr view "$PR_NUMBER" --json body,headRefOid,baseRefOid,state > /tmp/live-pr.json
+          python3 - /tmp/plan-review-publish/verdict-comment.md /tmp/live-pr.json \
+            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_PACKAGE_PATH" <<'PYEOF'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          verdict_path, pr_path, expected_sha, expected_base, expected_package = sys.argv[1:6]
+          raw = Path(verdict_path).read_bytes()
+          if not raw or len(raw) > 131_072:
+              raise SystemExit("Plan verification record is empty or too large.")
+          text = raw.decode("utf-8")
+          pr = json.loads(Path(pr_path).read_text())
+          if (
+              pr.get("state") != "OPEN"
+              or pr.get("headRefOid") != expected_sha
+              or pr.get("baseRefOid") != expected_base
+          ):
+              raise SystemExit("Plan PR base/head pair changed before verdict publication.")
+          packages = re.findall(r"New package directory: `([^`]+)`", pr.get("body") or "")
+          if packages != [expected_package]:
+              raise SystemExit("Plan package metadata changed or is ambiguous.")
+          lines = text.splitlines()
+          required = (
+              f"**Independent verification - bound to commit `{expected_sha}`**",
+              f"package_path: `{expected_package}`",
+              f"base_sha: `{expected_base}`",
+          )
+          if not lines or lines[0] != required[0] or any(lines.count(line) != 1 for line in required):
+              raise SystemExit("Plan verification binding is invalid or ambiguous.")
+          verdicts = [
+              line for line in lines
+              if re.fullmatch(r"VERDICT: (?:FAIL|PASS|PASS WITH NON-BLOCKING FINDINGS)", line)
+          ]
+          if len(verdicts) != 1 or verdicts[0] != next(
+              (line for line in reversed(lines) if line.strip()), ""
+          ):
+              raise SystemExit("Plan verification must end in one unambiguous verdict.")
+          PYEOF
+
+      - name: Mint verdict-signing App token on the clean runner
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+
+      - name: Publish App-signed plan verification comment
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.plan-review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.plan-review.outputs.base_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "Plan PR base/head pair changed immediately before App publication." >&2
+            exit 1
+          fi
+          gh pr comment "$PR_NUMBER" \
+            --body-file /tmp/plan-review-publish/verdict-comment.md

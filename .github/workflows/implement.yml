@@ -63,6 +63,11 @@ on:
         required: false
         type: string
         default: ""
+      expected_base_sha:
+        description: "Required on remediation attempts: exact PR base bound into the authenticated prior-review evidence."
+        required: false
+        type: string
+        default: ""
     secrets:
       OPENAI_API_KEY:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
@@ -96,6 +101,12 @@ on:
 jobs:
   implement:
     runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.branch.outputs.branch }}
+      base_sha: ${{ steps.branch.outputs.base_sha }}
+      has_changes: ${{ steps.commit.outputs.has_changes }}
+      head_sha: ${{ steps.bundle.outputs.head_sha }}
+      risk: ${{ steps.package.outputs.risk }}
     concurrency:
       # One implementer at a time per adopted package. A queued manual
       # dispatch still has to pass the dependency preflight below, so this is
@@ -103,20 +114,22 @@ jobs:
       group: implement-${{ github.repository }}-${{ inputs.change_id }}
       cancel-in-progress: false
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      contents: read
+      issues: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Checkout karsift-ai-infra
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
+          persist-credentials: false
 
       - name: Refuse to run without an adopted, authorized package
         id: package
@@ -266,19 +279,27 @@ jobs:
       # state instead of the current failure.
       - name: Create implementation branch
         id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           slug=$(echo "${{ inputs.task_id }}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
           change_lower=$(echo "${{ inputs.change_id }}" | tr '[:upper:]' '[:lower:]')
           branch="agent/${change_lower}-${slug}"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          git fetch origin "${{ inputs.integration_branch }}"
+          git -c credential.helper= \
+            -c 'credential.https://github.com.helper=!gh auth git-credential' \
+            fetch origin "${{ inputs.integration_branch }}"
           if [ "${{ inputs.attempt }}" != "1" ]; then
-            if ! git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
+            if ! git -c credential.helper= \
+              -c 'credential.https://github.com.helper=!gh auth git-credential' \
+              ls-remote --exit-code --heads origin "$branch" | grep -q .; then
               echo "Remediation attempt has no existing remote branch $branch; refusing to spend model work on an unbound retry." >&2
               exit 1
             fi
-            git fetch origin "$branch"
+            git -c credential.helper= \
+              -c 'credential.https://github.com.helper=!gh auth git-credential' \
+              fetch origin "$branch"
             remote_head=$(git rev-parse "origin/$branch")
             head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
               --expected-sha "${{ inputs.expected_head_sha }}" \
@@ -344,13 +365,44 @@ jobs:
         if: inputs.attempt != '1'
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
-          pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
+          pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
           if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
-            gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-              --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""' \
-              > /tmp/prior-review.txt 2>/dev/null || true
+            live_pr=$(gh pr view "$pr_number" --json headRefOid,baseRefOid)
+            live_sha=$(jq -r .headRefOid <<<"$live_pr")
+            live_base_sha=$(jq -r .baseRefOid <<<"$live_pr")
+            check_ok=$(gh pr checks "$pr_number" --json name,state -q \
+              '[.[] | select(.name == "review / publish-review")] | length > 0 and all(.state == "SUCCESS")' \
+              2>/dev/null || echo "false")
+            if [ "$live_sha" = "${{ inputs.expected_head_sha }}" ] &&
+               [ "$live_base_sha" = "$EXPECTED_BASE_SHA" ] && [ "$check_ok" = "true" ]; then
+              header="**Independent verification - bound to commit \`$live_sha\`**"
+              task_line="task_id: \`${{ inputs.task_id }}\`"
+              package_line="package_path: \`${{ inputs.package_path }}\`"
+              issue_line="authority_issue: \`${{ inputs.issue_number }}\`"
+              base_line="base_sha: \`$live_base_sha\`"
+              gh api --paginate --slurp \
+                "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
+                | jq -r \
+                  --arg header "$header" \
+                  --arg task "$task_line" \
+                  --arg package "$package_line" \
+                  --arg issue "$issue_line" \
+                  --arg base "$base_line" \
+                  '[.[][] | select(
+                    .user.login == "karsift-ai-infra-bot[bot]" and
+                    .user.type == "Bot" and
+                    (.body | startswith($header)) and
+                    ((.body | split("\n") | index($header)) != null) and
+                    ((.body | split("\n") | index($task)) != null) and
+                    ((.body | split("\n") | index($package)) != null) and
+                    ((.body | split("\n") | index($issue)) != null)
+                    and ((.body | split("\n") | index($base)) != null)
+                  )] | sort_by(.created_at, .id) | last | .body // ""' \
+                  > /tmp/prior-review.txt
+            fi
           fi
           touch /tmp/prior-review.txt
 
@@ -723,44 +775,6 @@ jobs:
           done
           echo "outcome=skipped" >> "$GITHUB_OUTPUT"
 
-      # `secrets` isn't a recognized context inside a step-level `if:` here
-      # (GitHub Actions rejects it outright: "Unrecognized named-value:
-      # 'secrets'") - route the presence check through a plain env var and
-      # a shell step's output instead, which is the reliable pattern.
-      - name: Check for GitHub App credentials
-        id: has-app
-        if: steps.implementer.outputs.outcome == 'success'
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Minted BEFORE "Commit and push" (moved here 2026-07-28, VOC-031-T07a)
-      # - not just for "Open or update PR" as this step's name used to imply.
-      # The default GITHUB_TOKEN structurally can never push a change to
-      # .github/workflows/* regardless of this job's own `permissions:
-      # workflows: write` block - GitHub enforces that at the token-type
-      # level, not the requested-scope level, and rejects the push outright
-      # ("refusing to allow a GitHub App to create or update workflow ...
-      # without workflows permission"). Live failure: VOC-031-T07/T07a, a
-      # task whose own scope was to add a new .github/workflows/*.yml file -
-      # every attempt's implementer succeeded but the push silently failed
-      # after, discarding real completed work. A GitHub App installation
-      # token (if this project has one configured, see has-app above) CAN
-      # carry workflows: write if granted at the App level - using it for
-      # the push, not just PR creation, is the actual fix.
-      - name: Mint App installation token for push and PR creation
-        id: app-token
-        if: steps.implementer.outputs.outcome == 'success' && steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-
       - name: Commit implementer's work
         id: commit
         if: steps.implementer.outputs.outcome == 'success'
@@ -916,6 +930,7 @@ jobs:
         run: |
           set -euo pipefail
           git bundle create /tmp/implementer-work.bundle "${{ steps.branch.outputs.base_sha }}..HEAD"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Upload recovery artifact
         if: steps.commit.outputs.has_changes == 'true'
@@ -925,85 +940,161 @@ jobs:
           path: /tmp/implementer-work.bundle
           retention-days: 14
 
-      - name: Push branch
-        id: push
-        if: steps.commit.outputs.has_changes == 'true'
-        continue-on-error: true
+      # A timeout/cancellation is not the literal outcome `failure`; test the
+      # normalized output and fail loud for every non-success state. The clean
+      # report job below preserves bounded issue visibility without returning
+      # an issue-writing credential to this model-controlled runner.
+      - name: Fail job if implementer step failed
+        if: steps.implementer.outputs.outcome != 'success'
+        run: exit 1
+
+  # No model-controlled runner ever receives an issue-writing token. Preserve
+  # the prior no-change/final-attempt observability from a clean runner.
+  report-no-change:
+    needs: implement
+    if: >-
+      always() &&
+      needs.implement.outputs.has_changes != 'true' &&
+      (needs.implement.result == 'success' || inputs.attempt == '2')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report bounded implementation outcome
         env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
-          # Overrides actions/checkout's default GITHUB_TOKEN credential for
-          # this push only, when an App token was minted above - see that
-          # step's comment for why this specific push needs it (a task that
-          # adds/modifies .github/workflows/*, which GITHUB_TOKEN can never
-          # push regardless of this job's declared permissions).
-          #
-          # actions/checkout persists its own GITHUB_TOKEN credential as a
-          # global `http.https://github.com/.extraheader` config value -
-          # that extraheader takes precedence over whatever credential is
-          # embedded in the remote URL, so `git remote set-url` alone is not
-          # enough: the push silently kept authenticating as the OLD token
-          # even after the URL was changed, and kept hitting the exact same
-          # `workflows` permission rejection despite the App token
-          # confirmed-minted with the right permission. Live failure
-          # (2026-07-28, VOC-031-T07a, 3 repeat failures after the App
-          # permission was actually fixed) - unsetting the extraheader
-          # first is required for the URL-embedded token to actually win.
-          if [ -n "$APP_TOKEN" ]; then
-            git config --local --unset-all http.https://github.com/.extraheader || true
-            git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
+          if [ "${{ inputs.attempt }}" = "1" ]; then
+            gh issue comment "${{ inputs.issue_number }}" --body \
+              "The implementer completed attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\` but produced no committed change, so no PR was opened. A later dispatch may use the bounded final attempt."
+          else
+            gh issue comment "${{ inputs.issue_number }}" --body \
+              "The implementer failed to produce a publishable change on attempt 2/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Automatic implementation has stopped for this task."
           fi
 
-          # --force-with-lease: on attempt 1 the remote branch doesn't
-          # exist yet, so this behaves like a normal push. On a
-          # remediation attempt (attempt > 1), the branch already exists
-          # from the previous try and this run started from a fresh
-          # checkout of integration_branch rather than that old branch -
-          # force-updating replaces the previous (reviewed, failed)
-          # revision with the corrected one instead of trying to merge
-          # them, which is the outcome we actually want.
-          #
-          # --force-with-lease refuses to push unless the local repo's
-          # own record of the remote branch's tip matches reality - and
-          # this checkout never fetched that branch (it started fresh
-          # from integration_branch), so on vocanova-platform-sandbox's
-          # first live remediation attempt that record didn't exist at
-          # all and the push was rejected outright as "stale info," even
-          # though the implementer itself had succeeded. Fetching the
-          # branch first (a no-op, exit-0 on attempt 1 when it doesn't
-          # exist yet) gives the lease a real baseline to compare against.
-          branch="${{ steps.branch.outputs.branch }}"
+  # The implementer above has unrestricted shell access. It therefore cannot
+  # safely share a runner with any step that receives the privileged App token:
+  # hooks, PATH/GITHUB_ENV changes, or replaced tools could capture it. This
+  # fresh job consumes only the committed Git bundle and performs no checkout or
+  # execution of repository code before publishing it.
+  publish:
+    needs: implement
+    if: needs.implement.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download committed work bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: implement-${{ inputs.change_id }}-${{ inputs.task_id }}-attempt${{ inputs.attempt }}
+          path: /tmp/implementer-publish
+
+      - name: Check for GitHub App credentials
+        id: has-app
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint least-privilege App token on the clean runner
+        id: app-token
+        if: steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Publish exact bundled commit from an isolated bare repository
+        env:
+          PUBLISH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUBLISH_BRANCH: ${{ needs.implement.outputs.branch }}
+          PUBLISH_HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
+          PUBLISH_BASE_SHA: ${{ needs.implement.outputs.base_sha }}
+          EXPECTED_OLD_HEAD: ${{ inputs.expected_head_sha }}
+        run: |
+          set -euo pipefail
+          bundle=/tmp/implementer-publish/implementer-work.bundle
+          if [ ! -f "$bundle" ]; then
+            echo "Committed-work bundle is missing; refusing publication." >&2
+            exit 1
+          fi
+          if ! [[ "$PUBLISH_BRANCH" =~ ^agent/[A-Za-z0-9._/-]+$ ]] ||
+             ! [[ "$PUBLISH_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$PUBLISH_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Publication metadata is malformed; refusing publication." >&2
+            exit 1
+          fi
+
+          publish_dir=$(mktemp -d)
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+          export GIT_TERMINAL_PROMPT=0
+          git init --bare "$publish_dir/repository.git"
+          git_dir="$publish_dir/repository.git"
+          remote="https://x-access-token:${PUBLISH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git --git-dir="$git_dir" remote add origin "$remote"
+          git --git-dir="$git_dir" fetch --no-tags origin \
+            "${{ inputs.integration_branch }}:refs/heads/${{ inputs.integration_branch }}"
+          git --git-dir="$git_dir" bundle verify "$bundle"
+          git --git-dir="$git_dir" fetch "$bundle" \
+            "$PUBLISH_HEAD_SHA:refs/heads/$PUBLISH_BRANCH"
+          bundled_head=$(git --git-dir="$git_dir" rev-parse "refs/heads/$PUBLISH_BRANCH")
+          if [ "$bundled_head" != "$PUBLISH_HEAD_SHA" ] ||
+             ! git --git-dir="$git_dir" merge-base --is-ancestor \
+               "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA"; then
+            echo "Bundle does not contain the authorized commit lineage." >&2
+            exit 1
+          fi
+
+          if git --git-dir="$git_dir" diff-tree --no-commit-id --name-only -r \
+            "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA" \
+            | grep -E '^\.github/workflows/' >/dev/null; then
+            echo "Automated implementation cannot publish workflow-file changes; supervised review and publication are required." >&2
+            exit 1
+          fi
+
+          live_head=$(git --git-dir="$git_dir" ls-remote --heads origin \
+            "refs/heads/$PUBLISH_BRANCH" | awk '{print $1}')
           if [ "${{ inputs.attempt }}" != "1" ]; then
-            expected_head="${{ inputs.expected_head_sha }}"
-            live_head=$(git ls-remote --heads origin "refs/heads/$branch" | awk '{print $1}')
-            head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
-              --expected-sha "$expected_head" \
-              --current-sha "$live_head")
-            if [ "$head_state" != "CURRENT" ]; then
-              echo "PR head changed after remediation started ($head_state); refusing stale push." >&2
+            if ! [[ "$EXPECTED_OLD_HEAD" =~ ^[0-9a-f]{40}$ ]] ||
+               [ "$live_head" != "$EXPECTED_OLD_HEAD" ]; then
+              echo "PR head changed after remediation started; refusing stale push." >&2
               exit 1
             fi
-            git push --force-with-lease="refs/heads/$branch:$expected_head" -u origin "$branch"
+            lease="refs/heads/$PUBLISH_BRANCH:$EXPECTED_OLD_HEAD"
           else
-            git fetch origin "$branch" 2>/dev/null || true
-            git push --force-with-lease -u origin "$branch"
+            if [ -n "$live_head" ] && [ "$live_head" != "$PUBLISH_HEAD_SHA" ]; then
+              echo "Attempt-1 branch unexpectedly exists at another commit." >&2
+              exit 1
+            fi
+            lease="refs/heads/$PUBLISH_BRANCH:$live_head"
           fi
+          git --git-dir="$git_dir" -c core.hooksPath=/dev/null push --no-verify \
+            --force-with-lease="$lease" origin \
+            "refs/heads/$PUBLISH_BRANCH:refs/heads/$PUBLISH_BRANCH"
 
-      # On a remediation attempt, the force-push above already updated the
-      # existing PR (pushing new commits to a PR's head branch updates it
-      # automatically - GitHub doesn't need a second `gh pr create` call,
-      # and that call would just fail with "already exists"). Check first
-      # and only create when there's genuinely no PR yet.
-      - name: Open or update PR
-        if: steps.commit.outputs.has_changes == 'true' && steps.push.outcome == 'success'
+      - name: Open or update PR from the clean runner
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUBLISH_BRANCH: ${{ needs.implement.outputs.branch }}
+          PACKAGE_RISK: ${{ needs.implement.outputs.risk }}
         run: |
           set -euo pipefail
-          existing=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
-
+          existing=$(gh pr list --head "$PUBLISH_BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
           body="$(cat <<EOF
           Implements task \`${{ inputs.task_id }}\` from \`${{ inputs.change_id }}\` (\`${{ inputs.package_path }}\`).
 
@@ -1014,117 +1105,26 @@ jobs:
           and required human approval are still pending - this PR is not authorized
           to merge on its own.
 
-          Risk classification: ${{ steps.package.outputs.risk }}
+          Risk classification: $PACKAGE_RISK
 
           Package path: \`${{ inputs.package_path }}\`
           EOF
           )"
-
           if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            # The body's "attempt N of 2" text is remediate.yml's only
-            # source for the current attempt number - a comment-only update
-            # left it permanently reading "attempt 1 of 2" from PR
-            # creation, forever. remediate.yml then always recomputed
-            # next_attempt as 1+1=2, no matter how many retries had
-            # actually happened: the two-attempt cap was never real, and a
-            # PR whose review kept failing for reasons unrelated to content
-            # (e.g. a scope mismatch between the PR's stated task and what
-            # attempt 2 actually delivered) could retry indefinitely.
-            # Discovered on VOC-013-T00's real remediation run: a second
-            # retry fired after the cap should have been hit. Editing the
-            # body on every update, not just commenting, keeps this the
-            # single source of truth remediate.yml already trusts it to be.
             gh pr edit "$existing" --body "$body"
-            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for what changed in response to the previous review."
-            exit 0
-          fi
-
-          gh pr create \
-            --base "${{ inputs.integration_branch }}" \
-            --head "${{ steps.branch.outputs.branch }}" \
-            --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
-            --body "$body"
-
-      # Two stacked bugs found live on VOC-028-T05, both now fixed:
-      # 1. `!= 'success'`, not `== 'failure'` - a step that hits its own
-      #    timeout-minutes is cancelled by the runner, and continue-on-error
-      #    preserves that as outcome == 'cancelled' (not 'failure').
-      # 2. `steps.implementer.outputs.outcome`, not `steps.implementer.outcome`
-      #    (missing `.outputs`) - `steps.<id>.outcome` (no `.outputs`) is the
-      #    *step's own* execution result (did "Normalize implementer outcome"
-      #    itself run without erroring - an `echo` command, so always
-      #    'success' no matter what it echoed), completely different from
-      #    `steps.<id>.outputs.<name>`, the custom output value that step
-      #    wrote. Fix #1 alone (still using the wrong field) made zero
-      #    observable difference - re-timed-out on the very next T05 retry
-      #    with the identical silent-success symptom, which is what
-      #    surfaced this second, more fundamental bug. Together: neither
-      #    "Escalate on final failed attempt" nor "Fail job if implementer
-      #    step failed" had EVER actually fired on any real implementer
-      #    failure since this Normalize/outcome pattern was introduced -
-      #    both conditions were unconditionally false. Also fixed the same
-      #    bug on line ~394 ("Commit and push"'s own `if:`), which had been
-      #    running unconditionally regardless of implementer outcome for
-      #    the same reason (harmless in practice only because its own
-      #    internal git-diff check happens to no-op when nothing changed).
-      # `steps.push.outcome == 'failure'` added 2026-07-28 alongside the
-      # commit/push step split (see "Bundle committed work as a recovery
-      # artifact" above) - previously the push happened inside "Commit and
-      # push" itself, so a push failure's own non-zero exit (under
-      # set -euo pipefail) failed that whole step before has_changes=true
-      # was ever written, which this condition's `has_changes == 'false'`
-      # branch caught. After the split, has_changes is set right after a
-      # successful COMMIT, independent of push outcome - without this extra
-      # check, a push-only failure (the `workflows` permission gap that hit
-      # VOC-031-T07/T07a repeatedly) would satisfy neither existing
-      # condition and silently skip the escalation comment on attempt 2.
-      # Attempt-1 counterpart to "Escalate on final failed attempt" below,
-      # for exactly the case that condition's `inputs.attempt >= '2'` guard
-      # deliberately excludes: the implementer itself ran successfully but
-      # chose not to change anything (has_changes == 'false') - not a crash,
-      # a deliberate decision (e.g. a blocked precondition it explained in
-      # its own response). Before this step existed, that outcome left the
-      # job reporting a bare `success` with zero trace anywhere except this
-      # run's own logs - neither "Escalate on final failed attempt" nor
-      # "Fail job if implementer step failed" fires for it on attempt 1
-      # (outcome IS 'success', so both conditions are false), so the task
-      # issue just sat open with no visible explanation and no automatic
-      # retry trigger. Found live on VOC-049-T01 (vocanova-platform-sandbox,
-      # see KARSIFT/karsift-ai-infra#15): the implementer correctly refused
-      # to promote against stale evidence, but nothing said so anywhere a
-      # human would see without digging through Actions logs - required a
-      # manual close with a written justification to unblock. This doesn't
-      # retry or resolve anything automatically (that's still #15's own
-      # open question) - it just makes "nothing happened, and here's why"
-      # observable on the issue itself instead of silent.
-      - name: Comment implementer's own explanation when no changes were made (attempt 1)
-        if: steps.implementer.outputs.outcome == 'success' && steps.commit.outputs.has_changes == 'false' && inputs.attempt == '1'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          response=$(jq -r '.result // "(no result field)"' /tmp/cursor-response.json 2>/dev/null || echo "(no parseable response)")
-          gh issue comment ${{ inputs.issue_number }} --body "$(cat <<EOF
-          The implementer ran successfully on attempt 1/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`, but made no changes - no PR was opened. This is not a failure and the job did not stop; it may retry on attempt 2 if this task is dispatched again, or a human may need to look at why below before that happens.
-
-          Implementer's own explanation:
-
-          $response
-          EOF
-          )"
-
-      - name: Escalate on final failed attempt
-        if: (steps.implementer.outputs.outcome != 'success' || steps.commit.outputs.has_changes == 'false' || steps.push.outcome == 'failure') && inputs.attempt >= '2'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ steps.push.outcome }}" = "failure" ]; then
-            gh issue comment ${{ inputs.issue_number }} --body \
-              "The implementer succeeded on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`, but pushing the result failed (see this run's logs). Stopping - not retrying automatically. A human needs to look at this task. The completed work was NOT lost - download this run's \`implement-${{ inputs.change_id }}-${{ inputs.task_id }}-attempt${{ inputs.attempt }}\` artifact, \`git bundle unbundle\` it onto a checkout of \`${{ inputs.integration_branch }}\`, and push it by hand instead of waiting for a re-run to redo the implementer's work."
+            gh pr comment "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for the reviewed changes."
           else
-            gh issue comment ${{ inputs.issue_number }} --body \
-              "The implementer failed to produce a change on attempt ${{ inputs.attempt }}/2 for task \`${{ inputs.task_id }}\` in \`${{ inputs.change_id }}\`. Stopping - not retrying automatically. A human needs to look at this task."
+            gh pr create \
+              --base "${{ inputs.integration_branch }}" \
+              --head "$PUBLISH_BRANCH" \
+              --title "${{ inputs.change_id }}: ${{ inputs.task_id }}" \
+              --body "$body"
           fi
 
-      - name: Fail job if implementer step failed
-        if: steps.implementer.outputs.outcome != 'success' || steps.push.outcome == 'failure'
-        run: exit 1
+      - name: Escalate final publication failure
+        if: failure() && inputs.attempt >= '2'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue comment ${{ inputs.issue_number }} --body \
+            "The implementer produced a committed result for task \`${{ inputs.task_id }}\`, but the isolated publication job failed on attempt ${{ inputs.attempt }}/2. The recovery bundle remains attached to this run; automatic publication stopped."

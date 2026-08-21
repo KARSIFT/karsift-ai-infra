@@ -143,12 +143,23 @@ jobs:
         run: |
           set -euo pipefail
           pip install --quiet pyyaml
-          pr_json=$(gh pr view "${{ inputs.pr_number }}" --json state,mergedAt,headRefOid)
+          pr_json=$(gh pr view "${{ inputs.pr_number }}" --json state,mergedAt,headRefOid,mergeCommit)
           state=$(echo "$pr_json" | jq -r .state)
           merged_at=$(echo "$pr_json" | jq -r '.mergedAt // ""')
           head_sha=$(echo "$pr_json" | jq -r .headRefOid)
+          merge_commit_sha=$(echo "$pr_json" | jq -r '.mergeCommit.oid // ""')
           if [ "$state" != "MERGED" ] || [ -z "$merged_at" ]; then
             echo "PR #${{ inputs.pr_number }} is not merged; refusing adoption." >&2
+            exit 1
+          fi
+          if ! [[ "$merge_commit_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Merged plan has no immutable merge commit identity; refusing adoption." >&2
+            exit 1
+          fi
+          reviewed_base_sha=$(gh api "repos/${{ github.repository }}/commits/$merge_commit_sha" \
+            --jq '.parents[0].sha // ""')
+          if ! [[ "$reviewed_base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Could not derive the pre-merge base from the plan merge commit; refusing adoption." >&2
             exit 1
           fi
           # Do not use `gh pr checks` here. Besides newer gh versions rejecting
@@ -182,11 +193,29 @@ jobs:
             echo "Merged plan head $head_sha has non-passing commit statuses ($status_state); refusing adoption." >&2
             exit 1
           fi
+          plan_review_checks=$(echo "$prerequisite_checks" | jq \
+            '[.[] | select(.name == "plan-review / publish-plan-review" and .status == "completed" and .conclusion == "success")] | length')
+          if [ "$plan_review_checks" -lt 1 ]; then
+            echo "Merged plan head lacks a successful isolated plan-verdict publisher check." >&2
+            exit 1
+          fi
           if [ -x scripts/governance/validate-governance.sh ]; then
             bash scripts/governance/validate-governance.sh
           fi
-          verification=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
-            --jq '[.[] | select(.body | startswith("**Independent verification"))] | last')
+          review_header="**Independent verification - bound to commit \`$head_sha\`**"
+          package_line="package_path: \`${{ steps.locate.outputs.package_path }}\`"
+          base_line="base_sha: \`$reviewed_base_sha\`"
+          verification=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
+            | jq --arg header "$review_header" --arg package "$package_line" --arg base "$base_line" \
+              '[.[][] | select(
+                .user.login == "karsift-ai-infra-bot[bot]" and
+                .user.type == "Bot" and
+                (.body | startswith($header)) and
+                ((.body | split("\n") | index($header)) != null) and
+                ((.body | split("\n") | index($package)) != null) and
+                ((.body | split("\n") | index($base)) != null)
+              )] | sort_by(.created_at, .id) | last // {}')
           verdict=$(echo "$verification" | jq -r '.body // ""')
           if ! echo "$verdict" | grep -Fq "bound to commit \`$head_sha\`"; then
             echo "No independent verification is bound to merged plan head $head_sha." >&2

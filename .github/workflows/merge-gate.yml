@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: ""
+      expected_base_sha:
+        description: "PR base SHA from the same caller run. A different live base invalidates checks and signed review evidence."
+        required: false
+        type: string
+        default: ""
       founder_username:
         description: 'Deprecated compatibility input. Founder comments are not merge authority.'
         required: false
@@ -85,6 +90,7 @@ jobs:
       checks_ok: ${{ steps.status.outputs.checks_ok }}
       verdict: ${{ steps.status.outputs.verdict }}
       head_sha: ${{ steps.status.outputs.head_sha }}
+      base_sha: ${{ steps.status.outputs.base_sha }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
@@ -103,14 +109,18 @@ jobs:
           set -euo pipefail
           pr_number=${{ github.event.pull_request.number }}
           expected_head_sha="${{ inputs.expected_head_sha }}"
+          expected_base_sha="${{ inputs.expected_base_sha }}"
 
           # Fail closed: no parseable declaration means "unknown", and unknown
           # is never auto-mergeable, at any value of auto_merge_enabled.
-          pr_json=$(gh pr view "$pr_number" --json body,author,headRefOid)
+          pr_json=$(gh pr view "$pr_number" --json body,author,headRefName,headRefOid,baseRefOid)
           body=$(echo "$pr_json" | jq -r '.body')
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
+          head_ref=$(echo "$pr_json" | jq -r '.headRefName')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
+          base_sha=$(echo "$pr_json" | jq -r '.baseRefOid')
           echo "head_sha=$expected_head_sha" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$expected_base_sha" >> "$GITHUB_OUTPUT"
           risk=$(echo "$body" | grep -ioP '^[[:space:]]*Risk classification:[[:space:]]*R[0-4]\b' \
             | grep -oP 'R[0-4]' | head -1 || true)
           if [ -z "$risk" ]; then
@@ -118,16 +128,17 @@ jobs:
           fi
           echo "risk=$risk" >> "$GITHUB_OUTPUT"
 
-          if ! [[ "$expected_head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if ! [[ "$expected_head_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$expected_base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
-            echo "Caller omitted or supplied an invalid expected PR head SHA. Refusing to reuse checks or review state."
+            echo "Caller omitted or supplied an invalid expected PR base/head SHA. Refusing to reuse checks or review state."
             exit 0
           fi
-          if [ "$head_sha" != "$expected_head_sha" ]; then
+          if [ "$head_sha" != "$expected_head_sha" ] || [ "$base_sha" != "$expected_base_sha" ]; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
-            echo "Caller pipeline SHA $expected_head_sha is stale; live PR head is $head_sha. Refusing to reuse checks or review state."
+            echo "Caller pipeline base/head pair is stale. Refusing to reuse checks or review state."
             exit 0
           fi
 
@@ -147,9 +158,14 @@ jobs:
           # count. The single-job "approved"-comment path mostly avoided
           # this by luck (fewer concurrent jobs, less chance of catching one
           # mid-flight), not by design - it has the identical bug below.
-          checks_ok=$(gh pr checks "$pr_number" --json name,state -q \
+          if ! gh pr checks "$pr_number" --json name,state > /tmp/pr-checks.json; then
+            echo "checks_ok=false" >> "$GITHUB_OUTPUT"
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          checks_ok=$(jq -r \
             '[.[] | select( ((.name|startswith("merge-gate")) or (.name|startswith("remediate"))) | not )] | map(.state) | all(. == "SUCCESS" or . == "SKIPPED")' \
-            || echo "false")
+            /tmp/pr-checks.json || echo "false")
           echo "checks_ok=$checks_ok" >> "$GITHUB_OUTPUT"
 
           # Bot-authored PRs (Dependabot etc.) never get a `review` job run
@@ -171,10 +187,62 @@ jobs:
             exit 0
           fi
 
-          review_binding="bound to commit \`$head_sha\`"
-          verdict=$(gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-            | jq -r --arg binding "$review_binding" \
-              '[.[] | select((.body | startswith("**Independent verification")) and (.body | contains($binding)))] | last | .body // ""')
+          review_check=""
+          task_line=""
+          issue_line=""
+          package_line=""
+          if [[ "$head_ref" == agent/* ]]; then
+            review_check="review / publish-review"
+            mapfile -t tasks < <(printf '%s\n' "$body" | grep -oP '(?<=Implements task `)[^`]+' || true)
+            mapfile -t packages < <(printf '%s\n' "$body" | grep -oP '(?<=Package path: `)[^`]+' || true)
+            mapfile -t issues < <(printf '%s\n' "$body" | grep -oP '(?<=Closes #)[0-9]+' || true)
+            if [ "${#tasks[@]}" -ne 1 ] || [ "${#packages[@]}" -ne 1 ] || [ "${#issues[@]}" -ne 1 ]; then
+              echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            task_line="task_id: \`${tasks[0]}\`"
+            package_line="package_path: \`${packages[0]}\`"
+            issue_line="authority_issue: \`${issues[0]}\`"
+          elif [[ "$head_ref" == plan/* ]]; then
+            review_check="plan-review / publish-plan-review"
+            mapfile -t packages < <(printf '%s\n' "$body" | grep -oP '(?<=New package directory: `)[^`]+' || true)
+            if [ "${#packages[@]}" -ne 1 ]; then
+              echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            package_line="package_path: \`${packages[0]}\`"
+          else
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          review_check_ok=$(jq -r --arg name "$review_check" \
+            '[.[] | select(.name == $name)] | length > 0 and all(.state == "SUCCESS")' \
+            /tmp/pr-checks.json)
+          if [ "$review_check_ok" != "true" ]; then
+            echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          review_header="**Independent verification - bound to commit \`$head_sha\`**"
+          base_line="base_sha: \`$base_sha\`"
+          verdict=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
+            | jq -r \
+              --arg header "$review_header" \
+              --arg task "$task_line" \
+              --arg package "$package_line" \
+              --arg issue "$issue_line" \
+              --arg base "$base_line" \
+              '[.[][] | select(
+                .user.login == "karsift-ai-infra-bot[bot]" and
+                .user.type == "Bot" and
+                (.body | startswith($header)) and
+                ((.body | split("\n") | index($header)) != null) and
+                ((.body | split("\n") | index($package)) != null) and
+                ((.body | split("\n") | index($base)) != null) and
+                ($task == "" or ((.body | split("\n") | index($task)) != null)) and
+                ($issue == "" or ((.body | split("\n") | index($issue)) != null))
+              )] | sort_by(.created_at, .id) | last | .body // ""')
           printf '%s\n' "$verdict" > /tmp/review-verdict.md
 
           # Use the same fail-dominant parser as remediation. It tolerates
@@ -254,12 +322,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REVIEWED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
+          REVIEWED_BASE_SHA: ${{ needs.report-status.outputs.base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
           # step above - see that step's comment (karsift-ai-infra#22).
           for attempt in 1 2 3; do
-            if gh pr merge ${{ github.event.pull_request.number }} --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
+            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+            if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+               [ "$(jq -r .headRefOid <<<"$live_pair")" != "$REVIEWED_HEAD_SHA" ] ||
+               [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$REVIEWED_BASE_SHA" ]; then
+              echo "PR base/head pair changed immediately before merge; refusing stale evidence." >&2
+              exit 1
+            fi
+            if gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
               exit 0
             fi
             echo "Merge attempt $attempt/3 failed - retrying in 5s (possible ruleset-propagation lag)." >&2

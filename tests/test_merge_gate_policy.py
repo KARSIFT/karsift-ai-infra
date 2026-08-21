@@ -37,13 +37,23 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("config/classify-review-verdict.py", self.workflow)
 
     def test_only_current_exact_sha_review_is_considered(self):
-        self.assertIn("--json body,author,headRefOid", self.workflow)
-        self.assertIn('review_binding="bound to commit \\`$head_sha\\`"', self.workflow)
-        self.assertIn(".body | contains($binding)", self.workflow)
+        self.assertIn("--json body,author,headRefName,headRefOid,baseRefOid", self.workflow)
+        self.assertIn('review_header="**Independent verification - bound to commit', self.workflow)
+        self.assertIn('base_line="base_sha:', self.workflow)
+        self.assertIn('index($base)', self.workflow)
+        self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', self.workflow)
+        self.assertIn('.user.type == "Bot"', self.workflow)
+        self.assertIn('review / publish-review', self.workflow)
+        self.assertIn('plan-review / publish-plan-review', self.workflow)
+        self.assertIn("--paginate --slurp", self.workflow)
 
-    def test_merge_rechecks_the_reviewed_head_atomically(self):
+    def test_merge_rechecks_the_reviewed_base_and_head(self):
         self.assertIn("expected_head_sha:", self.workflow)
+        self.assertIn("expected_base_sha:", self.workflow)
         self.assertIn("head_sha: ${{ steps.status.outputs.head_sha }}", self.workflow)
+        self.assertIn("base_sha: ${{ steps.status.outputs.base_sha }}", self.workflow)
+        self.assertIn('gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state', self.auto_merge)
+        self.assertIn('!= "$REVIEWED_BASE_SHA"', self.auto_merge)
         self.assertIn("--match-head-commit \"$REVIEWED_HEAD_SHA\"", self.auto_merge)
 
 

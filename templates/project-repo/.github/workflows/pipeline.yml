@@ -42,6 +42,10 @@ name: pipeline
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+  # Polling avoids a workflow_run-on-pipeline recursion loop and can discover
+  # any workflow identity declared by a contract without a static name list.
+  schedule:
+    - cron: "17 * * * *"
   issue_comment:
     types: [created]
   issues:
@@ -52,7 +56,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -96,6 +100,19 @@ on:
         description: "reconcile-release only: release audit issue whose promotion must be retried"
         required: false
         type: string
+      live_evidence_pr_number:
+        description: "reconcile-live-evidence only: optional target PR; required for declared dispatch"
+        required: false
+        type: string
+      live_evidence_run_id:
+        description: "reconcile-live-evidence only: optional Actions run id to observe immediately"
+        required: false
+        type: string
+      live_evidence_dispatch:
+        description: "reconcile-live-evidence only: dispatch exactly the target PR contract"
+        required: false
+        type: boolean
+        default: false
 
 # A synchronize event supersedes every older pipeline for the same PR. This
 # prevents duplicate reviewer/model runs and stale remediation/merge decisions,
@@ -171,6 +188,16 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
+  plan-review:
+    needs: ci
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'plan/')
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      expected_base_sha: ${{ github.event.pull_request.base.sha }}
+    secrets: inherit
+
   # Planning PRs (head branch prefixed "plan/" by plan.yml) create a package
   # rather than implementing one, so they never carry the "Package path:"
   # line this job requires - the startsWith guard below skips this (and
@@ -209,6 +236,7 @@ jobs:
       package_path: ${{ needs.extract-package-path.outputs.package_path }}
       integration_branch: "develop"   # match the value used for implement, above
       expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      expected_base_sha: ${{ github.event.pull_request.base.sha }}
     secrets: inherit
 
   # Runs after ci and every review. A no-op unless ci failed outright or the
@@ -240,6 +268,7 @@ jobs:
       ci_failed: ${{ needs.ci.result == 'failure' }}
       review_job_failed: ${{ needs.review.result == 'failure' }}
       expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      expected_base_sha: ${{ github.event.pull_request.base.sha }}
     secrets: inherit
 
   # `needs: review` + the `always()` guard below fixes a real race: on a
@@ -259,17 +288,19 @@ jobs:
   # requiring review's specific 'success' result which a planning PR's
   # deliberately-skipped review can never produce.
   merge-gate:
-    needs: review
+    needs: [review, plan-review]
     if: |
       always() &&
       (
         github.event_name == 'pull_request' && github.event.action != 'closed' &&
-        (needs.review.result == 'success' || needs.review.result == 'skipped')
+        (needs.review.result == 'success' || needs.review.result == 'skipped') &&
+        (needs.plan-review.result == 'success' || needs.plan-review.result == 'skipped')
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
       expected_head_sha: ${{ github.event.pull_request.head.sha }}
+      expected_base_sha: ${{ github.event.pull_request.base.sha }}
     secrets: inherit
 
   # Promotes a completed package after its roster closes. reconcile-release
@@ -301,4 +332,19 @@ jobs:
     uses: KARSIFT/karsift-ai-infra/.github/workflows/auto-advance.yml@main
     with:
       integration_branch: "develop"   # match the value used elsewhere in this file
+    secrets: inherit
+
+  # Separate operator path: hourly polling reads Actions metadata for waiting
+  # contracts. Manual mode can validate one run immediately or dispatch only a
+  # workflow/inputs declared by one target contract. A qualification writes a
+  # sanitized result commit, which naturally starts fresh exact-SHA PR review.
+  live-evidence-reconcile:
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-live-evidence')
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/live-evidence-reconcile.yml@main
+    with:
+      mode: ${{ github.event_name == 'schedule' && 'reconcile' || (inputs.live_evidence_dispatch && 'dispatch' || (inputs.live_evidence_run_id != '' && 'observe' || 'reconcile')) }}
+      workflow_run_id: ${{ inputs.live_evidence_run_id || '' }}
+      pr_number: ${{ inputs.live_evidence_pr_number || '' }}
     secrets: inherit

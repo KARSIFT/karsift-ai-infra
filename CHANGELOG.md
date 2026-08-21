@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Added `live-evidence-reconcile.yml`, a serialized, App-authenticated operator
+  path that validates declared Actions metadata, records one sanitized result
+  commit, forces fresh exact-SHA review, optionally dispatches only declared
+  workflow inputs through a crash-safe trusted reservation, and escalates one
+  72-hour timeout. Waiting provenance is correlated to the exact active caller
+  pipeline run, and run candidates are paginated with a fail-closed bound. The
+  operator token uses a pinned post-fix action revision that enforces the three
+  requested repository permissions instead of inheriting the full installation.
+  Pull-request evidence must name the waiting PR, Checks read permission is
+  explicit, and dispatch revalidates the current PR body, latest trusted
+  WAITING verdict, deadline, and immutable branch snapshots immediately before
+  its single attempt.
+  Reviewer WAITING comments bind package/task/authority metadata; only open,
+  unmerged, unexpired tasks can dispatch; both compared branches must be
+  protected; and structured comment values are single-line safe. Reviewer
+  verdicts are now validated and signed by the dedicated GitHub App from a
+  fresh publisher job; the model-facing reviewer and implementer hold no
+  issue-writing token, so the generic Actions bot cannot forge dispatch
+  authority. Merge, remediation, and plan adoption accept only those App-signed
+  exact-head records and require the matching isolated publisher check; plan
+  review uses the same separation.
+  The caller template polls hourly instead of using a recursive catch-all
+  `workflow_run` trigger.
+- Isolated privileged publication from unrestricted implementation: the model
+  job emits a credential-free Git bundle, while a fresh runner mints the scoped
+  App token, verifies/imports the exact commit in a bare repository, disables
+  hooks, applies an explicit branch lease, and opens or updates the PR.
+  Model-authored workflow-file changes are rejected before push and the token
+  has no workflows permission, preventing an unreviewed same-repository PR from
+  becoming a secret-bearing execution path. Retry context accepts only the
+  exact-head App-signed reviewer record and matching publisher check.
+- Isolated privileged publication from unrestricted planning as well: the
+  planner receives no persistent checkout credential and emits only a Git
+  bundle or clarifying-question artifact. A fresh runner validates exact commit
+  lineage and package-only scope before minting a repository-scoped App token,
+  pushing the plan branch, and opening the draft PR or updating its source
+  issue.
+- Added dependency-free strict contract parsing and deterministic rejection,
+  sanitization, lineage, staleness, timeout, dispatch, and deduplication tests.
+
 - Added an exact-SHA `WAITING FOR OPERATOR LIVE EVIDENCE` review lifecycle:
   merge stays fail-closed, remediation does not spend an implementation retry,
   and genuine implementation/CI/reviewer failures retain their bounded retry.
