@@ -203,10 +203,12 @@ broad `workflow_run` trigger that recursively observes the pipeline itself. It:
 The result commit changes the PR head. The calling project's normal
 `pull_request: synchronize` path therefore runs CI and independent review again,
 bound to the post-reconcile SHA; a PASS from the older waiting head cannot carry
-forward. Mutations use a short-lived installation token from the KARSIFT GitHub
-App. The reusable job's own `GITHUB_TOKEN` remains read-only, and the implementer
-never receives the App token. The App token is repository-scoped and requests
-only Actions, contents, and issues write permissions through an immutable
+forward. Result-commit, ref, and trusted-comment mutations use a short-lived
+installation token from the KARSIFT GitHub App. Declared workflow dispatch alone
+uses the dedicated reconcile job's `GITHUB_TOKEN` with `actions: write`; other
+caller jobs retain their existing permission floor, and the implementer receives
+neither token. The App token is repository-scoped and requests only contents and
+issues write permissions through an immutable
 post-fix `create-github-app-token` revision whose parser honors the
 `permission-*` inputs. Waiting is accepted only
 when the successful check resolves to the exact PR, head, branch, active caller

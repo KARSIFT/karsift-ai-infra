@@ -346,8 +346,16 @@ jobs:
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-live-evidence')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/live-evidence-reconcile.yml@main
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
     with:
       mode: ${{ github.event_name == 'schedule' && 'reconcile' || (inputs.live_evidence_dispatch && 'dispatch' || (inputs.live_evidence_run_id != '' && 'observe' || 'reconcile')) }}
       workflow_run_id: ${{ inputs.live_evidence_run_id || '' }}
       pr_number: ${{ inputs.live_evidence_pr_number || '' }}
-    secrets: inherit
+    secrets:
+      KARSIFT_BOT_APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+      KARSIFT_BOT_PRIVATE_KEY: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}

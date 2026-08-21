@@ -457,8 +457,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         operator_job_permissions = self.workflow.split("    permissions:", 1)[1].split(
             "    steps:", 1
         )[0]
-        self.assertNotIn("actions: write", operator_job_permissions)
-        self.assertIn("actions: read", operator_job_permissions)
+        self.assertIn("actions: write", operator_job_permissions)
         self.assertIn("checks: read", operator_job_permissions)
         implement_permissions = self.implement.split("permissions:", 1)[1].split(
             "steps:", 1
@@ -476,9 +475,14 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547",
             self.workflow,
         )
-        self.assertIn("permission-actions: write", self.workflow)
+        self.assertNotIn("permission-actions: write", self.workflow)
         self.assertIn("permission-contents: write", self.workflow)
         self.assertIn("permission-issues: write", self.workflow)
+        operator_caller = self.pipeline.split("  live-evidence-reconcile:", 1)[1]
+        self.assertIn("      actions: write", operator_caller)
+        self.assertNotIn("    secrets: inherit", operator_caller)
+        self.assertIn("KARSIFT_BOT_APP_ID:", operator_caller)
+        self.assertIn("KARSIFT_BOT_PRIVATE_KEY:", operator_caller)
         self.assertIn("repository: ${{ job.workflow_repository }}", self.workflow)
         self.assertIn("ref: ${{ job.workflow_sha }}", self.workflow)
         self_ci = (ROOT / ".github/workflows/self-ci.yml").read_text()
@@ -877,23 +881,41 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     return {"id": 99}
                 return None
 
+        class DispatchActionsApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self):
+                self.calls = []
+
+            def mutate(self, method, endpoint, payload):
+                self.calls.append((method, endpoint, payload))
+                return None
+
         trusted_waiting = ({"id": 42}, task.waiting_since)
         writer = DispatchWriteApi()
+        actions_writer = DispatchActionsApi()
         with patch.object(
             runner, "trusted_waiting_review", return_value=trusted_waiting
         ), patch.object(
             runner, "current_utc_time", return_value=NOW
         ):
-            runner.dispatch_once(DispatchReadApi(), writer, task, NOW)
+            runner.dispatch_once(
+                DispatchReadApi(), writer, actions_writer, task, NOW
+            )
         self.assertEqual(
             [(method, endpoint) for method, endpoint, _ in writer.calls],
             [
                 ("POST", "repos/KARSIFT/example/issues/7/comments"),
+                ("PATCH", "repos/KARSIFT/example/issues/comments/99"),
+            ],
+        )
+        self.assertEqual(
+            [(method, endpoint) for method, endpoint, _ in actions_writer.calls],
+            [
                 (
                     "POST",
                     "repos/KARSIFT/example/actions/workflows/deploy-production.yml/dispatches",
-                ),
-                ("PATCH", "repos/KARSIFT/example/issues/comments/99"),
+                )
             ],
         )
 
@@ -909,6 +931,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.dispatch_once(
                 DispatchReadApi([suppressing_comment]),
                 retry_writer,
+                DispatchActionsApi(),
                 task,
                 NOW,
             )
@@ -923,6 +946,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.dispatch_once(
                 DispatchReadApi(change_branch_after=4),
                 stale_writer,
+                DispatchActionsApi(),
                 task,
                 NOW,
             )
@@ -935,6 +959,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.dispatch_once(
                 DispatchReadApi(),
                 DispatchWriteApi(),
+                DispatchActionsApi(),
                 SimpleNamespace(
                     **{**task.__dict__, "waiting_since": NOW - timedelta(hours=72)}
                 ),
@@ -960,6 +985,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.dispatch_once(
                 changed_authority_api,
                 DispatchWriteApi(),
+                DispatchActionsApi(),
                 task,
                 NOW,
             )
@@ -973,6 +999,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.dispatch_once(
                 DispatchReadApi(),
                 DispatchWriteApi(),
+                DispatchActionsApi(),
                 task,
                 NOW,
             )

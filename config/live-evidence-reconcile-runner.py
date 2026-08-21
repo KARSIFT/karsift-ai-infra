@@ -725,6 +725,7 @@ def assert_dispatch_authorization_current(
 def dispatch_once(
     read_api: GitHub,
     write_api: GitHub,
+    actions_api: GitHub,
     task: WaitingTask,
     now: datetime,
 ) -> None:
@@ -804,9 +805,11 @@ def dispatch_once(
         default_branch,
         default_sha,
     )
-    write_api.mutate(
+    # Dispatch uses only the dedicated job's scoped GITHUB_TOKEN. The App
+    # token remains limited to trusted comments and result/ref mutations.
+    actions_api.mutate(
         "POST",
-        f"repos/{write_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",
+        f"repos/{actions_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",
         {"ref": task.contract.branch, "inputs": dispatch.inputs},
     )
     write_api.mutate(
@@ -887,6 +890,7 @@ def main() -> int:
             dispatch_once(
                 read_api,
                 write_api,
+                read_api,
                 tasks[0],
                 datetime.now(timezone.utc),
             )
