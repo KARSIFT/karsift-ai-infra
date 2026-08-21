@@ -1,0 +1,86 @@
+name: ready-for-review-reuse (reusable)
+
+# Read-only eligibility decision for VOC-104. Evaluates whether a
+# ready_for_review event may reuse prior exact-SHA CI and App PASS evidence.
+# Emits reuse-evidence, full-path, or fail-closed-to-full-path for caller jobs.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: Pull request number for the triggering event.
+        required: true
+        type: string
+      expected_head_sha:
+        description: Head SHA from the caller pipeline run.
+        required: true
+        type: string
+      expected_base_sha:
+        description: Base SHA from the caller pipeline run.
+        required: true
+        type: string
+      event_action:
+        description: GitHub pull_request activity name.
+        required: true
+        type: string
+      current_run_id:
+        description: Caller pipeline run id to exclude from prior evidence.
+        required: true
+        type: string
+    outputs:
+      outcome:
+        description: reuse-evidence, full-path, or fail-closed-to-full-path
+        value: ${{ jobs.decide.outputs.outcome }}
+      reason:
+        description: Sanitized eligibility reason for diagnosis.
+        value: ${{ jobs.decide.outputs.reason }}
+      prior_run_id:
+        description: Validated prior pipeline run id when reuse-evidence.
+        value: ${{ jobs.decide.outputs.prior_run_id }}
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      pull-requests: read
+    outputs:
+      outcome: ${{ steps.decide.outputs.outcome || steps.full-path.outputs.outcome || 'fail-closed-to-full-path' }}
+      reason: ${{ steps.decide.outputs.reason || steps.full-path.outputs.reason || 'helper_failed' }}
+      prior_run_id: ${{ steps.decide.outputs.prior_run_id || '' }}
+    steps:
+      - name: Select the normal path for non-ready activity
+        id: full-path
+        if: inputs.event_action != 'ready_for_review'
+        run: |
+          echo "outcome=full-path" >> "$GITHUB_OUTPUT"
+          echo "reason=not_ready_for_review" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: inputs.event_action == 'ready_for_review'
+
+      - name: Checkout shared reuse policy
+        if: inputs.event_action == 'ready_for_review'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Evaluate ready_for_review reuse eligibility
+        id: decide
+        if: inputs.event_action == 'ready_for_review'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/ready-for-review-reuse-runner.py \
+            --pr-number "${{ inputs.pr_number }}" \
+            --expected-head-sha "${{ inputs.expected_head_sha }}" \
+            --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --event-action "${{ inputs.event_action }}" \
+            --current-run-id "${{ inputs.current_run_id }}"

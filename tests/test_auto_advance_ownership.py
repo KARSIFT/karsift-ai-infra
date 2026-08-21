@@ -714,7 +714,8 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertNotRegex(verifier_runner, r"[\"']artifacts[\"']")
 
         template = self.project_pipeline_template
-        self.assertIn("verify-auto-advance-live-evidence]", template)
+        self.assertIn("verify-auto-advance-live-evidence", template)
+        self.assertIn("verify-ready-for-review-reuse]", template)
         template_auto_advance = template.split("  auto-advance:", 1)[1].split(
             "  verify-auto-advance-live-evidence:", 1
         )[0]

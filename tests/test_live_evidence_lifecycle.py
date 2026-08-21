@@ -75,6 +75,8 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
         script = script.replace("${{ github.event.pull_request.number }}", "1")
         script = script.replace("${{ inputs.expected_head_sha }}", "")
         script = script.replace("${{ inputs.expected_base_sha }}", "")
+        script = script.replace("${{ inputs.reuse_outcome }}", "full-path")
+        script = script.replace("${{ inputs.reuse_prior_run_id }}", "")
         gh_stub = """
         gh() {
           if [ "$1 $2 $3" = "pr view 1" ]; then
@@ -381,13 +383,13 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             self.pipeline_template.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            4,
+            5,
         )
         self.assertEqual(
             self.pipeline_template.count(
                 "expected_base_sha: ${{ github.event.pull_request.base.sha }}"
             ),
-            4,
+            5,
         )
 
 

@@ -391,7 +391,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             self.pipeline.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            4,
+            5,
         )
 
     def test_live_evidence_mutations_require_the_discovered_base_head_pair(self):
@@ -613,7 +613,10 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "expected_base_sha: ${{ github.event.pull_request.base.sha }}",
             self.pipeline.split("  plan-review:", 1)[1].split("\n  extract-package-path:", 1)[0],
         )
-        self.assertIn("needs: [review, plan-review]", self.pipeline)
+        self.assertIn(
+            "needs: [ready-for-review-reuse, review, plan-review]",
+            self.pipeline,
+        )
 
     def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):
         body = (

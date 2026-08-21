@@ -1,0 +1,63 @@
+name: verify-ready-for-review-reuse (reusable)
+
+# Read-only post-transition verifier for VOC-104 controlled live proof. Validates
+# allowlisted Actions/PR metadata only; never reads logs or artifacts. The caller
+# must dispatch this workflow on the exact proof branch ref so checkout HEAD equals
+# the waiting PR head under exact_pr_head lineage.
+
+on:
+  workflow_call:
+    inputs:
+      ready_run_id:
+        description: ready_for_review pipeline run id to validate.
+        required: true
+        type: string
+      prior_run_id:
+        description: Prior successful pipeline run id with CI/review evidence.
+        required: true
+        type: string
+      pr_number:
+        description: Proof pull request number.
+        required: true
+        type: string
+      expected_head_sha:
+        description: Exact reviewed head SHA.
+        required: true
+        type: string
+      expected_base_sha:
+        description: Exact reviewed base SHA.
+        required: true
+        type: string
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Checkout shared verifier policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Verify ready_for_review reuse metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/verify-ready-for-review-reuse-runner.py \
+            --ready-run-id "${{ inputs.ready_run_id }}" \
+            --prior-run-id "${{ inputs.prior_run_id }}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            --expected-head-sha "${{ inputs.expected_head_sha }}" \
+            --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --current-ref "${{ github.sha }}"
