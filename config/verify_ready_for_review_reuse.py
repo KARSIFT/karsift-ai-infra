@@ -115,7 +115,7 @@ def verify_ready_jobs(
     jobs: list[dict],
     head_ref: str,
 ) -> VerificationResult:
-    ci_matches = [job for job in jobs if _job_name(job) == "ci"]
+    ci_matches = [job for job in jobs if _job_name(job) == REQUIRED_CI_JOB]
     if head_ref.startswith("agent/"):
         publisher_name = "review"
     elif head_ref.startswith("plan/"):
@@ -129,8 +129,27 @@ def verify_ready_jobs(
         job for job in jobs if _job_name(job) == "merge-gate / report-status"
     ]
     merge_auto = [job for job in jobs if _job_name(job) == "merge-gate / auto-merge"]
-    if ci is None or _job_conclusion(ci) != "skipped":
-        return VerificationResult(False, "ci_not_skipped")
+    if ci is None or _job_conclusion(ci) != "success":
+        return VerificationResult(False, "ci_reuse_context_not_successful")
+    ci_steps = ci.get("steps") or []
+    if not isinstance(ci_steps, list):
+        return VerificationResult(False, "ci_steps_malformed")
+    reuse_markers = [
+        step
+        for step in ci_steps
+        if isinstance(step, dict)
+        and str(step.get("name") or "") == "Record exact-SHA CI evidence reuse"
+    ]
+    full_checks = [
+        step
+        for step in ci_steps
+        if isinstance(step, dict)
+        and str(step.get("name") or "") == "Detect and run pnpm checks"
+    ]
+    if len(reuse_markers) != 1 or _job_conclusion(reuse_markers[0]) != "success":
+        return VerificationResult(False, "ci_reuse_marker_not_successful")
+    if len(full_checks) != 1 or _job_conclusion(full_checks[0]) != "skipped":
+        return VerificationResult(False, "ci_full_validation_not_skipped")
     if publisher is None or _job_conclusion(publisher) != "skipped":
         return VerificationResult(False, "review_not_skipped")
     if len(merge_report) != 1 or _job_conclusion(merge_report[0]) != "success":

@@ -88,14 +88,29 @@ def required_success_jobs(head_ref: str) -> tuple[str, ...]:
     return (REQUIRED_CI_JOB, publisher)
 
 
-def current_reusable_caller_jobs(head_ref: str) -> tuple[str, ...]:
+def current_reuse_decision_jobs(head_ref: str) -> tuple[str, ...]:
     if head_ref.startswith("agent/"):
-        # extract-package-path also waits on this decision job. During the
-        # decision it can legitimately be queued/PENDING alongside ci and
-        # review, then becomes SKIPPED when reuse-evidence is emitted.
-        return ("ci", "extract-package-path", "review")
+        # While eligibility is running, GitHub exposes the reusable CI caller
+        # as `ci`; once invoked it becomes the required `ci / ci` context.
+        return ("ci", REQUIRED_CI_JOB, "extract-package-path", "review")
     if head_ref.startswith("plan/"):
-        return ("ci", "plan-review")
+        return ("ci", REQUIRED_CI_JOB, "plan-review")
+    return ()
+
+
+def current_reuse_merge_jobs(head_ref: str) -> tuple[str, ...]:
+    if head_ref.startswith("agent/"):
+        return (REQUIRED_CI_JOB, "extract-package-path", "review")
+    if head_ref.startswith("plan/"):
+        return (REQUIRED_CI_JOB, "plan-review")
+    return ()
+
+
+def current_publisher_caller_jobs(head_ref: str) -> tuple[str, ...]:
+    if head_ref.startswith("agent/"):
+        return ("extract-package-path", "review")
+    if head_ref.startswith("plan/"):
+        return ("plan-review",)
     return ()
 
 
@@ -335,7 +350,7 @@ def evaluate_reuse_eligibility(
 
 def pr_checks_allow_reuse(*, pr_checks: list[dict], head_ref: str) -> bool:
     """Require existing checks green without requiring not-yet-created caller jobs."""
-    reusable = set(current_reusable_caller_jobs(head_ref))
+    reusable = set(current_reuse_decision_jobs(head_ref))
     if not reusable or not pr_checks:
         return False
     for check in pr_checks:
@@ -364,7 +379,7 @@ def compute_checks_ok_with_reuse(
     if reuse_outcome != "reuse-evidence":
         return compute_checks_ok(pr_checks)
     prior_required = set(required_success_jobs(head_ref))
-    current_reusable = set(current_reusable_caller_jobs(head_ref))
+    current_reusable = set(current_reuse_merge_jobs(head_ref))
     if not prior_required or not current_reusable:
         return False
     for required in prior_required:
@@ -418,7 +433,7 @@ def publisher_check_ok(
             len(prior_matches) == 1
             and _job_conclusion(prior_matches[0]) == "success"
         )
-        current_publisher = current_reusable_caller_jobs(head_ref)[1:]
+        current_publisher = current_publisher_caller_jobs(head_ref)
         caller_checks = [
             check
             for check in pr_checks

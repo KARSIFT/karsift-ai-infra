@@ -152,6 +152,15 @@ general Actions inspection/dispatch credential. Operator reconciliation is a
 separate repository-controlled responsibility; adding it must not broaden the
 implementer's permissions or secrets.
 
+On an eligible unchanged draft-to-ready transition, `ci.yml` still emits the
+repository ruleset's required `ci / ci` check context, but runs only a named
+exact-SHA reuse marker. Checkout and application validation remain skipped. This
+small compatibility context is necessary because GitHub evaluates the newest
+required check context; omitting the reusable CI caller changes its visible name
+to `ci` and leaves `ci / ci` unsatisfied even when prior evidence is valid. The
+post-transition verifier requires the marker to succeed and the full validation
+step to be skipped.
+
 The unrestricted implementer also never shares a runner with the GitHub App
 token. It produces and uploads a Git bundle with persisted checkout credentials
 disabled; a separate clean `publish` job downloads that artifact, mints a
