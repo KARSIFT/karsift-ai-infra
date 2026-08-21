@@ -479,6 +479,10 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "expected_head_sha: ${{ github.event.pull_request.head.sha }}",
             self.pipeline.split("  plan-review:", 1)[1].split("\n  extract-package-path:", 1)[0],
         )
+        self.assertIn(
+            "expected_base_sha: ${{ github.event.pull_request.base.sha }}",
+            self.pipeline.split("  plan-review:", 1)[1].split("\n  extract-package-path:", 1)[0],
+        )
         self.assertIn("needs: [review, plan-review]", self.pipeline)
 
     def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):

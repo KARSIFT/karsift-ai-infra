@@ -33,17 +33,21 @@ class PlanPathPolicyTests(unittest.TestCase):
         self.assertIn("permission-issues: write", publisher)
         self.assertIn("App-signed plan verification", publisher)
 
-    def test_plan_review_is_bound_to_the_callers_immutable_event_head(self):
+    def test_plan_review_is_bound_to_the_callers_immutable_event_base_and_head(self):
         self.assertIn("expected_head_sha:", self.plan_review)
+        self.assertIn("expected_base_sha:", self.plan_review)
         input_block = self.plan_review.split("expected_head_sha:", 1)[1].split("secrets:", 1)[0]
         self.assertIn("required: true", input_block)
         self.assertIn('EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}', self.plan_review)
-        self.assertIn('if [ "$live_sha" != "$EXPECTED_HEAD_SHA" ]', self.plan_review)
-        self.assertIn('if [ "$after_diff_sha" != "$EXPECTED_HEAD_SHA" ]', self.plan_review)
-        self.assertLess(
-            self.plan_review.index('gh pr view "$PR_NUMBER" --json body,title,headRefOid'),
-            self.plan_review.index('gh pr diff "$PR_NUMBER"'),
-        )
+        self.assertIn('EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}', self.plan_review)
+        self.assertIn('if [ "$live_sha" != "$EXPECTED_HEAD_SHA" ] ||', self.plan_review)
+        self.assertIn('[ "$live_base_sha" != "$EXPECTED_BASE_SHA" ]', self.plan_review)
+        self.assertNotIn('gh pr diff', self.plan_review)
+        self.assertIn('git --no-pager diff --no-ext-diff --no-textconv --find-renames', self.plan_review)
+        self.assertIn('actual_head=$(git rev-parse HEAD)', self.plan_review)
+        self.assertIn(r'base_sha: \`${{ steps.pr.outputs.base_sha }}\`', self.plan_review)
+        self.assertIn("baseRefOid,state", self.plan_review)
+        self.assertIn('pr.get("baseRefOid") != expected_base', self.plan_review)
 
     def test_adoption_requires_passing_verification_for_merged_plan_revision(self):
         self.assertIn("The plan/-branch PR that just merged", self.adopt)
