@@ -36,6 +36,10 @@ on:
 
 jobs:
   verify:
+    # Keep the inner display-name segment explicit. GitHub composes the caller
+    # job name and this stable value as `<caller> / verify`, which the reviewed
+    # live-evidence contract observes on the real workflow run.
+    name: verify
     runs-on: ubuntu-latest
     permissions:
       actions: read

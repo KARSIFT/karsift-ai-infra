@@ -568,6 +568,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertNotIn("actions: write", verify_permissions)
         self.assertNotIn("create-github-app-token", self.verify_workflow)
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", self.verify_workflow)
+        self.assertIn("    name: verify", self.verify_workflow)
         self.assertNotIn("name: verify-auto-advance-live-evidence / verify", self.verify_workflow)
 
         publisher_source = (
