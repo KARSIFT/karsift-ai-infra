@@ -158,8 +158,8 @@ exact-SHA reuse marker. Checkout and application validation remain skipped. This
 small compatibility context is necessary because GitHub evaluates the newest
 required check context; omitting the reusable CI caller changes its visible name
 to `ci` and leaves `ci / ci` unsatisfied even when prior evidence is valid. The
-post-transition verifier requires the marker to succeed and the full validation
-step to be skipped. Merge-gate also requires exactly one current `ci / ci`
+post-transition verifier requires the marker to succeed and both checkout steps
+plus the full validation step to be skipped. Merge-gate also requires exactly one current `ci / ci`
 context in `SUCCESS`; prior evidence can never replace a skipped or ambiguous
 current compatibility context.
 

@@ -710,6 +710,14 @@ class ProofVerifierTests(unittest.TestCase):
                         "name": "Detect and run pnpm checks",
                         "conclusion": "skipped",
                     },
+                    {
+                        "name": "Run actions/checkout@pinned",
+                        "conclusion": "skipped",
+                    },
+                    {
+                        "name": "Checkout karsift-ai-infra",
+                        "conclusion": "skipped",
+                    },
                 ],
             },
             {"name": "review", "conclusion": "skipped"},
@@ -761,6 +769,23 @@ class ProofVerifierTests(unittest.TestCase):
             ).reason,
             "ci_steps_malformed",
         )
+        checkout_reran = [dict(job) for job in ready_jobs]
+        checkout_reran[0] = {
+            **checkout_reran[0],
+            "steps": [
+                dict(step, conclusion="success")
+                if step["name"].startswith("Run actions/checkout@")
+                else dict(step)
+                for step in ready_jobs[0]["steps"]
+            ],
+        }
+        self.assertEqual(
+            verifier.verify_ready_jobs(
+                jobs=checkout_reran,
+                head_ref=AGENT_REF,
+            ).reason,
+            "ci_checkout_not_skipped",
+        )
         self.assertTrue(
             verifier.verify_prior_jobs(
                 jobs=list(pipeline_run().jobs), head_ref=AGENT_REF
@@ -790,6 +815,14 @@ class ProofVerifierTests(unittest.TestCase):
                     },
                     {
                         "name": "Detect and run pnpm checks",
+                        "conclusion": "skipped",
+                    },
+                    {
+                        "name": "Run actions/checkout@pinned",
+                        "conclusion": "skipped",
+                    },
+                    {
+                        "name": "Checkout karsift-ai-infra",
                         "conclusion": "skipped",
                     },
                 ],
