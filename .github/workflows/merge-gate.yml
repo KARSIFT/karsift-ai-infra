@@ -191,9 +191,11 @@ jobs:
           fi
           prior_jobs_available=false
           current_run_id="${{ github.run_id }}"
+          current_policy_matches=false
           if [ "$reuse_outcome" = "reuse-evidence" ] &&
              [[ "$reuse_prior_run_id" =~ ^[0-9]+$ ]] &&
              [ "$reuse_prior_run_id" -lt "$current_run_id" ] &&
+             gh api "repos/${{ github.repository }}/actions/runs/$current_run_id" > /tmp/current-run.json &&
              gh api "repos/${{ github.repository }}/actions/runs/$reuse_prior_run_id" > /tmp/prior-run.json; then
             prior_run_valid=$(jq -r \
               --argjson run_id "$reuse_prior_run_id" \
@@ -219,9 +221,14 @@ jobs:
                 prior_jobs_available=true
               fi
             fi
+            current_policy_matches=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py policy \
+              --current-run-file /tmp/current-run.json \
+              --prior-run-file /tmp/prior-run.json || echo "false")
           fi
           if [ "$reuse_outcome" = "reuse-evidence" ]; then
-            if [ "$prior_jobs_available" = "true" ] && [ "$current_ci_result" = "success" ]; then
+            if [ "$prior_jobs_available" = "true" ] &&
+               [ "$current_policy_matches" = "true" ] &&
+               [ "$current_ci_result" = "success" ]; then
               checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
                 --pr-checks-file /tmp/pr-checks.json \
                 --prior-jobs-file /tmp/prior-jobs.json \

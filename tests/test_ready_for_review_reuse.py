@@ -29,12 +29,29 @@ if RUNNER_SPEC is None or RUNNER_SPEC.loader is None:
 runner = module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(runner)
 
+VERIFY_RUNNER_SPEC = spec_from_file_location(
+    "verify_ready_for_review_reuse_runner",
+    CONFIG / "verify-ready-for-review-reuse-runner.py",
+)
+if VERIFY_RUNNER_SPEC is None or VERIFY_RUNNER_SPEC.loader is None:
+    raise AssertionError("cannot load ready_for_review proof runner")
+verify_runner = module_from_spec(VERIFY_RUNNER_SPEC)
+VERIFY_RUNNER_SPEC.loader.exec_module(verify_runner)
+
 
 HEAD = "a" * 40
 BASE = "b" * 40
+POLICY = "d" * 40
 AGENT_REF = "agent/voc-104-voc-104-t00"
 PLAN_REF = "plan/voc-104-ready-for-review-reruns-unchanged-exact-sha-ci"
 PACKAGE = "specs/changes/VOC-104-ready-for-review-reruns-unchanged-exact-sha-ci"
+
+
+def policy_refs(sha=POLICY):
+    return [
+        {"path": f"{path}@main", "ref": "refs/heads/main", "sha": sha}
+        for path in sorted(policy.POLICY_WORKFLOW_PATHS)
+    ]
 
 
 def pipeline_run(
@@ -50,6 +67,7 @@ def pipeline_run(
     status="completed",
     conclusion="success",
     duplicate_ci=False,
+    policy_sha=POLICY,
 ):
     publisher_name = (
         policy.PLAN_PUBLISHER_JOB
@@ -72,6 +90,7 @@ def pipeline_run(
         status=status,
         conclusion=conclusion,
         jobs=tuple(jobs),
+        policy_sha=policy_sha,
     )
 
 
@@ -139,6 +158,7 @@ def decide(**overrides):
             {"name": "ready-for-review-reuse / decide", "state": "PENDING"},
         ],
         "current_run_id": 200,
+        "current_policy_sha": POLICY,
         "result_path_exists": False,
     }
     values.update(overrides)
@@ -195,10 +215,37 @@ class ReuseDecisionTests(unittest.TestCase):
             pipeline_run(duplicate_ci=True),
             pipeline_run(ci="failure"),
             pipeline_run(publisher="skipped"),
+            pipeline_run(policy_sha="e" * 40),
         )
         for run in bad_runs:
             with self.subTest(run=run):
                 self.assertEqual(decide(pipeline_runs=[run]).outcome, "full-path")
+
+    def test_missing_or_changed_current_policy_revision_never_reuses(self):
+        self.assertEqual(
+            decide(current_policy_sha="").outcome,
+            "fail-closed-to-full-path",
+        )
+        self.assertEqual(
+            decide(current_policy_sha="e" * 40).outcome,
+            "full-path",
+        )
+
+    def test_shared_policy_revision_requires_one_complete_immutable_set(self):
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": policy_refs()}),
+            POLICY,
+        )
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": policy_refs()[:-1]}),
+            "",
+        )
+        mixed = policy_refs()
+        mixed[0] = {**mixed[0], "sha": "e" * 40}
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": mixed}),
+            "",
+        )
 
     def test_only_trusted_exact_identity_comment_qualifies(self):
         self.assertEqual(decide(comments=[]).outcome, "full-path")
@@ -569,6 +616,7 @@ class ProofVerifierTests(unittest.TestCase):
         prs=None,
         event="pull_request",
         base_sha=BASE,
+        policy_sha=POLICY,
     ):
         return {
             "id": run_id,
@@ -581,6 +629,7 @@ class ProofVerifierTests(unittest.TestCase):
             "status": "completed",
             "conclusion": "success",
             "pull_requests": [] if prs is None else prs,
+            "referenced_workflows": policy_refs(policy_sha),
         }
 
     def test_empty_pull_request_array_is_bound_by_exact_head_and_branch(self):
@@ -817,6 +866,69 @@ class ProofVerifierTests(unittest.TestCase):
             ).ok
         )
 
+    def test_ready_and_prior_policy_revisions_must_match(self):
+        self.assertTrue(
+            verifier.verify_policy_lineage(
+                ready_run=self.run_metadata(),
+                prior_run=self.run_metadata(run_id=100),
+            ).ok
+        )
+        mismatch = verifier.verify_policy_lineage(
+            ready_run=self.run_metadata(),
+            prior_run=self.run_metadata(run_id=100, policy_sha="e" * 40),
+        )
+        self.assertFalse(mismatch.ok)
+        self.assertEqual(mismatch.reason, "policy_revision_mismatch")
+
+    def test_proof_recomputes_the_latest_eligible_prior_run(self):
+        runs = [
+            self.run_metadata(run_id=100),
+            self.run_metadata(run_id=150),
+            self.run_metadata(run_id=175, policy_sha="e" * 40),
+            self.run_metadata(run_id=300),
+        ]
+
+        class FakeApi:
+            repository = "KARSIFT/example"
+
+            def gh(self, args):
+                endpoint = args[-1]
+                if "actions/runs?event=pull_request" in endpoint:
+                    return json.dumps(
+                        {"total_count": len(runs), "workflow_runs": runs}
+                    )
+                match = re.search(r"actions/runs/([0-9]+)/jobs", endpoint)
+                if match:
+                    run_id = int(match.group(1))
+                    publisher = (
+                        "skipped" if run_id == 300 else "success"
+                    )
+                    return json.dumps(
+                        {
+                            "total_count": 2,
+                            "jobs": [
+                                {"name": policy.REQUIRED_CI_JOB, "conclusion": "success"},
+                                {
+                                    "name": policy.AGENT_PUBLISHER_JOB,
+                                    "conclusion": publisher,
+                                },
+                            ],
+                        }
+                    )
+                raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+        chosen = verify_runner.selected_prior_run(
+            FakeApi(),
+            pr_number=9,
+            head_sha=HEAD,
+            base_sha=BASE,
+            head_ref=AGENT_REF,
+            ready_run_id=300,
+            ready_policy_sha=POLICY,
+        )
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen.run_id, 150)
+
     def test_ready_job_requires_workflow_controlled_action_marker(self):
         jobs = [
             {
@@ -907,6 +1019,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("prior_jobs_available=true", merge)
         self.assertIn('current_ci_result="${{ inputs.current_ci_result }}"', merge)
         self.assertIn('[ "$current_ci_result" = "success" ]', merge)
+        self.assertIn("merge-gate-reuse-checks.py policy", merge)
+        self.assertIn('[ "$current_policy_matches" = "true" ]', merge)
         self.assertGreaterEqual(
             merge.count("merge-gate-reuse-checks.py checks"),
             2,

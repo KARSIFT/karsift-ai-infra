@@ -15,12 +15,16 @@ from verify_ready_for_review_reuse import (
     verify_current_ref,
     verify_prior_jobs,
     verify_prior_run,
+    verify_policy_lineage,
     verify_ready_jobs,
     verify_ready_run,
 )
 from ready_for_review_reuse import (
+    PipelineRunSummary,
     classify_verdict,
     parse_identity_lines,
+    select_prior_run,
+    shared_policy_sha,
     trusted_review_comment,
 )
 
@@ -91,6 +95,75 @@ def load_comments(api: GitHubApi, pr_number: int) -> list[dict]:
     if not isinstance(payload, list) or any(not isinstance(page, list) for page in payload):
         raise VerificationError("comment_set_invalid")
     return [comment for page in payload for comment in page]
+
+
+def selected_prior_run(
+    api: GitHubApi,
+    *,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+    head_ref: str,
+    ready_run_id: int,
+    ready_policy_sha: str,
+) -> PipelineRunSummary | None:
+    payload = json.loads(
+        api.gh(
+            [
+                "api",
+                f"/repos/{api.repository}/actions/runs?event=pull_request&head_sha={head_sha}&per_page=100",
+            ]
+        )
+    )
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if (
+        not isinstance(runs, list)
+        or int(payload.get("total_count") or 0) > len(runs)
+        or len(runs) > 100
+    ):
+        raise VerificationError("run_set_incomplete")
+    summaries: list[PipelineRunSummary] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            raise VerificationError("run_set_invalid")
+        associations = run.get("pull_requests") or []
+        if associations:
+            matches = [
+                pr
+                for pr in associations
+                if pr.get("number") == pr_number
+                and str((pr.get("base") or {}).get("sha") or "").lower()
+                == base_sha.lower()
+                and str((pr.get("head") or {}).get("sha") or "").lower()
+                == head_sha.lower()
+            ]
+            if len(matches) != 1:
+                continue
+        run_id = int(run.get("id") or 0)
+        if run_id <= 0:
+            continue
+        summaries.append(
+            PipelineRunSummary(
+                run_id=run_id,
+                workflow_path=str(run.get("path") or ""),
+                event=str(run.get("event") or ""),
+                head_sha=str(run.get("head_sha") or "").lower(),
+                head_branch=str(run.get("head_branch") or ""),
+                base_sha=base_sha.lower(),
+                status=str(run.get("status") or ""),
+                conclusion=str(run.get("conclusion") or "") or None,
+                jobs=tuple(load_jobs(api, run_id)),
+                policy_sha=shared_policy_sha(run),
+            )
+        )
+    return select_prior_run(
+        runs=summaries,
+        head_ref=head_ref,
+        expected_head_sha=head_sha,
+        expected_base_sha=base_sha,
+        current_run_id=ready_run_id,
+        expected_policy_sha=ready_policy_sha,
+    )
 
 
 def main() -> int:
@@ -201,6 +274,18 @@ def main() -> int:
                 head_ref=head_ref,
             )
         )
+        require(verify_policy_lineage(ready_run=ready_run, prior_run=prior_run))
+        chosen_prior = selected_prior_run(
+            api,
+            pr_number=args.source_pr_number,
+            head_sha=source_head,
+            base_sha=source_base,
+            head_ref=head_ref,
+            ready_run_id=args.ready_run_id,
+            ready_policy_sha=shared_policy_sha(ready_run),
+        )
+        if chosen_prior is None or chosen_prior.run_id != args.prior_run_id:
+            raise VerificationError("selected_prior_run_mismatch")
         identity = parse_identity_lines(
             body=str(source_pr.get("body") or ""),
             head_ref=head_ref,

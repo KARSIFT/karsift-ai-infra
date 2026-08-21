@@ -12,6 +12,7 @@ from ready_for_review_reuse import (
     REQUIRED_CI_JOB,
     _job_conclusion,
     _job_name,
+    shared_policy_sha,
 )
 
 
@@ -186,6 +187,16 @@ def verify_ready_jobs(
     ]
     if len(reuse_jobs) != 1 or _job_conclusion(reuse_jobs[0]) != "success":
         return VerificationResult(False, "reuse_decision_job_missing")
+    return VerificationResult(True)
+
+
+def verify_policy_lineage(*, ready_run: dict, prior_run: dict) -> VerificationResult:
+    ready_policy = shared_policy_sha(ready_run)
+    prior_policy = shared_policy_sha(prior_run)
+    if not ready_policy or not prior_policy:
+        return VerificationResult(False, "policy_revision_missing")
+    if ready_policy != prior_policy:
+        return VerificationResult(False, "policy_revision_mismatch")
     return VerificationResult(True)
 
 

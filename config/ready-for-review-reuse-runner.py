@@ -16,6 +16,7 @@ from ready_for_review_reuse import (
     PipelineRunSummary,
     ReuseDecision,
     evaluate_reuse_eligibility,
+    shared_policy_sha,
 )
 
 
@@ -144,9 +145,27 @@ def load_pipeline_runs(
                 status=str(run.get("status") or ""),
                 conclusion=str(run.get("conclusion") or "") or None,
                 jobs=tuple(jobs),
+                policy_sha=shared_policy_sha(run),
             )
         )
     return summaries
+
+
+def load_current_policy_sha(api: GitHubApi, current_run_id: int) -> str:
+    run = json.loads(
+        api.gh(
+            [
+                "api",
+                f"/repos/{api.repository}/actions/runs/{current_run_id}",
+            ]
+        )
+    )
+    if not isinstance(run, dict) or int(run.get("id") or 0) != current_run_id:
+        raise MetadataError("invalid_current_run_payload")
+    policy_sha = shared_policy_sha(run)
+    if not policy_sha:
+        raise MetadataError("invalid_current_policy_revision")
+    return policy_sha
 
 
 def load_pr_checks(api: GitHubApi, pr_number: int) -> list[dict]:
@@ -215,6 +234,7 @@ def main() -> int:
             live_head,
             live_base,
         )
+        current_policy_sha = load_current_policy_sha(api, args.current_run_id)
         pr_checks = load_pr_checks(api, args.pr_number)
         head_ref = str(pr.get("headRefName") or "")
         body = str(pr.get("body") or "")
@@ -245,6 +265,7 @@ def main() -> int:
             pipeline_runs=pipeline_runs,
             pr_checks=pr_checks,
             current_run_id=args.current_run_id,
+            current_policy_sha=current_policy_sha,
             result_path_exists=result_exists,
         )
     except MetadataError as exc:
