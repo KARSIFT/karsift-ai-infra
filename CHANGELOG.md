@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Made the clean implementation publisher's PR operations and bounded issue
+  notifications explicitly target the calling repository. The isolated
+  bare-repository job can now open or update a PR after pushing its verified
+  bundle without depending on a checked-out Git worktree; a deterministic
+  non-worktree fixture guards the recovery path.
+
 - Restored schema-level rollout compatibility for `plan-review.yml` exact
   base/head inputs. Older default-branch callers can start unrelated issue
   events again, while omitted or invalid SHAs still fail closed before plan
