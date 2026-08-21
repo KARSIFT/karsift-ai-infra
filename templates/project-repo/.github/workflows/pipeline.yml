@@ -245,9 +245,13 @@ jobs:
     needs: [ready-for-review-reuse]
     if: |
       always() &&
-      github.event_name == 'pull_request' && github.event.action != 'closed' &&
-      needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'
+      github.event_name == 'pull_request' && github.event.action != 'closed'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
+    with:
+      # GitHub rulesets evaluate the newest required `ci / ci` context. Keep
+      # that context successful on the optimized path without rerunning the
+      # application checks; merge-gate still revalidates the prior run.
+      reuse_evidence: ${{ needs.ready-for-review-reuse.outputs.outcome == 'reuse-evidence' }}
 
   plan-review:
     needs: [ready-for-review-reuse, ci]

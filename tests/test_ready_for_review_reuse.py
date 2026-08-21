@@ -674,7 +674,20 @@ class ProofVerifierTests(unittest.TestCase):
 
     def test_ready_and_prior_job_shapes_are_exact(self):
         ready_jobs = [
-            {"name": "ci", "conclusion": "skipped"},
+            {
+                "name": "ci / ci",
+                "conclusion": "success",
+                "steps": [
+                    {
+                        "name": "Record exact-SHA CI evidence reuse",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "Detect and run pnpm checks",
+                        "conclusion": "skipped",
+                    },
+                ],
+            },
             {"name": "review", "conclusion": "skipped"},
             {
                 "name": "ready-for-review-reuse / decide (ready_for_review)",
@@ -694,6 +707,36 @@ class ProofVerifierTests(unittest.TestCase):
         )
         self.assertFalse(blocked.ok)
         self.assertEqual(blocked.reason, "merge_gate_auto_not_successful")
+        full_ci_reran = [dict(job) for job in ready_jobs]
+        full_ci_reran[0] = {
+            **full_ci_reran[0],
+            "steps": [
+                {
+                    "name": "Record exact-SHA CI evidence reuse",
+                    "conclusion": "success",
+                },
+                {
+                    "name": "Detect and run pnpm checks",
+                    "conclusion": "success",
+                },
+            ],
+        }
+        self.assertEqual(
+            verifier.verify_ready_jobs(
+                jobs=full_ci_reran,
+                head_ref=AGENT_REF,
+            ).reason,
+            "ci_full_validation_not_skipped",
+        )
+        malformed_ci_steps = [dict(job) for job in ready_jobs]
+        malformed_ci_steps[0] = {**malformed_ci_steps[0], "steps": "invalid"}
+        self.assertEqual(
+            verifier.verify_ready_jobs(
+                jobs=malformed_ci_steps,
+                head_ref=AGENT_REF,
+            ).reason,
+            "ci_steps_malformed",
+        )
         self.assertTrue(
             verifier.verify_prior_jobs(
                 jobs=list(pipeline_run().jobs), head_ref=AGENT_REF
@@ -713,7 +756,20 @@ class ProofVerifierTests(unittest.TestCase):
 
     def test_ready_job_requires_workflow_controlled_action_marker(self):
         jobs = [
-            {"name": "ci", "conclusion": "skipped"},
+            {
+                "name": "ci / ci",
+                "conclusion": "success",
+                "steps": [
+                    {
+                        "name": "Record exact-SHA CI evidence reuse",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "Detect and run pnpm checks",
+                        "conclusion": "skipped",
+                    },
+                ],
+            },
             {"name": "review", "conclusion": "skipped"},
             {
                 "name": "ready-for-review-reuse / decide (synchronize)",
@@ -854,6 +910,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("always() &&", template)
         self.assertIn("needs.ci.result == 'success'", template)
         self.assertIn("reuse_prior_run_id:", template)
+        ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("reuse_evidence:", ci_workflow)
+        self.assertIn("Record exact-SHA CI evidence reuse", ci_workflow)
+        self.assertIn("if: ${{ !inputs.reuse_evidence }}", ci_workflow)
         reuse_workflow = (
             ROOT / ".github/workflows/ready-for-review-reuse.yml"
         ).read_text()
@@ -872,7 +932,21 @@ class WorkflowContractTests(unittest.TestCase):
         # full-path, and explicit fail-closed outcome all satisfy the caller's
         # `!= reuse-evidence` guard. Assert every expensive caller job retains
         # `always()` so a failed decision dependency cannot suppress it.
-        for job_name in ("ci", "extract-package-path", "review", "plan-review"):
+        ci_match = re.search(
+            r"(?ms)^  ci:\n(.*?)(?=^  [A-Za-z0-9][A-Za-z0-9-]*:\n|\Z)",
+            template,
+        )
+        self.assertIsNotNone(ci_match)
+        self.assertIn("always() &&", ci_match.group(1))
+        self.assertIn(
+            "reuse_evidence: ${{ needs.ready-for-review-reuse.outputs.outcome == 'reuse-evidence' }}",
+            ci_match.group(1),
+        )
+        self.assertNotIn(
+            "needs.ready-for-review-reuse.outputs.outcome != 'reuse-evidence'",
+            ci_match.group(1),
+        )
+        for job_name in ("extract-package-path", "review", "plan-review"):
             match = re.search(
                 rf"(?ms)^  {re.escape(job_name)}:\n(.*?)(?=^  [A-Za-z0-9][A-Za-z0-9-]*:\n|\Z)",
                 template,

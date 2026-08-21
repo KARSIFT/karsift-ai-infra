@@ -11,20 +11,33 @@ name: ci (reusable)
 # approximation that can silently drift from what this job actually checks.
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      reuse_evidence:
+        description: "Emit the required CI context without repeating checks after exact-SHA reuse was approved."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
+      - name: Record exact-SHA CI evidence reuse
+        if: inputs.reuse_evidence
+        run: echo "Exact-SHA CI evidence was revalidated by the reuse policy and merge gate."
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: ${{ !inputs.reuse_evidence }}
 
       - name: Checkout karsift-ai-infra
+        if: ${{ !inputs.reuse_evidence }}
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
 
       - name: Detect and run pnpm checks
+        if: ${{ !inputs.reuse_evidence }}
         shell: bash
         run: bash karsift-ai-infra/config/run-app-checks.sh
