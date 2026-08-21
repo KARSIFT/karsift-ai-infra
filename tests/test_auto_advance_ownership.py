@@ -451,6 +451,63 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             git.assert_any_call(["add", evidence_path], cwd=workdir / "repo")
             post.assert_called_once()
 
+    def test_voc102_test_11_fresh_carrier_creates_file_branch_and_draft_pr(self):
+        task_id = "VOC-102-T01"
+        evidence_relative = "t01-evidence.md"
+        evidence_path = f"{PACKAGE}/{evidence_relative}"
+        with tempfile.TemporaryDirectory() as scratch:
+            workdir = Path(scratch) / "carrier-work"
+
+            def fake_clone(command, **_kwargs):
+                clone_dir = Path(command[4])
+                (clone_dir / PACKAGE).mkdir(parents=True, exist_ok=True)
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            def fake_git(args, **_kwargs):
+                if args[:3] == ["ls-remote", "--heads", "origin"]:
+                    return ""
+                return ""
+
+            with (
+                mock.patch.object(publisher, "find_pr_for_branch", return_value=None),
+                mock.patch.object(publisher, "validate_issue_and_roster"),
+                mock.patch.object(publisher, "post_deduplicated_comment") as post,
+                mock.patch.object(publisher, "run_gh") as github,
+                mock.patch.object(publisher, "run_git", side_effect=fake_git) as git,
+                mock.patch.object(publisher.tempfile, "mkdtemp", return_value=str(workdir)),
+                mock.patch.object(publisher.subprocess, "run", side_effect=fake_clone),
+            ):
+                publisher.ensure_carrier(
+                    repo="KARSIFT/example",
+                    token="masked-fixture-token",
+                    integration_branch="develop",
+                    change_id="VOC-102",
+                    task_id=task_id,
+                    package_path=PACKAGE,
+                    issue_number=866,
+                    evidence_relative_path=evidence_relative,
+                )
+
+            target = workdir / "repo" / evidence_path
+            self.assertEqual(
+                target.read_text(encoding="utf-8"),
+                ownership.pending_evidence_body(task_id, "VOC-102", PACKAGE),
+            )
+            git.assert_any_call(["add", evidence_path], cwd=workdir / "repo")
+            git.assert_any_call(
+                ["commit", "-m", f"{task_id}: pending operator live-evidence carrier"],
+                cwd=workdir / "repo",
+            )
+            git.assert_any_call(
+                ["push", "-u", "origin", "agent/voc-102-voc-102-t01"],
+                cwd=workdir / "repo",
+                env=mock.ANY,
+            )
+            create_args = github.call_args.args[0]
+            self.assertEqual(create_args[:2], ["pr", "create"])
+            self.assertIn("--draft", create_args)
+            post.assert_called_once()
+
     def test_voc102_test_12_permission_boundary(self):
         advance_block = self.auto_advance.split("  advance:", 1)[1].split("  prepare-live-evidence:", 1)[0]
         publisher_block = self.auto_advance.split("  prepare-live-evidence:", 1)[1].split("  fail-closed:", 1)[0]
@@ -687,6 +744,127 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             current_ref="b" * 40,
         )
         self.assertEqual(stale.reason, "stale_or_invalid_carrier")
+
+    def test_voc102_test_13_complete_verifier_rejection_matrix(self):
+        closed = datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc)
+        closed_at = closed.isoformat().replace("+00:00", "Z")
+        source_run = {
+            "repository": {"full_name": "KARSIFT/example"},
+            "name": "pipeline",
+            "display_title": "VOC-102: VOC-102-T00 - implementation",
+            "event": "issues",
+            "head_branch": "main",
+            "path": ".github/workflows/pipeline.yml",
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": (closed + timedelta(seconds=2)).isoformat().replace(
+                "+00:00", "Z"
+            ),
+        }
+
+        source_cases = {
+            "wrong_repository": {"repository": {"full_name": "KARSIFT/other"}},
+            "wrong_workflow": {"name": "other"},
+            "wrong_source_issue": {"display_title": "different"},
+            "wrong_event": {"event": "workflow_dispatch"},
+            "wrong_default_branch": {"head_branch": "develop"},
+            "source_run_not_successful": {"conclusion": "failure"},
+            "missing_source_timestamp": {"created_at": "not-a-timestamp"},
+            "source_run_not_bound_to_close": {
+                "created_at": (closed + timedelta(minutes=11)).isoformat().replace(
+                    "+00:00", "Z"
+                )
+            },
+        }
+        for reason, mutation in source_cases.items():
+            with self.subTest(source_reason=reason):
+                candidate = dict(source_run)
+                candidate.update(mutation)
+                result = verifier.verify_source_run(
+                    run=candidate,
+                    repository="KARSIFT/example",
+                    default_branch="main",
+                    predecessor_title=source_run["display_title"],
+                    predecessor_closed_at=closed_at,
+                )
+                self.assertEqual(result.reason, reason)
+
+        good_jobs = [
+            {"name": "auto-advance / advance", "conclusion": "success"},
+            {"name": "auto-advance / prepare-live-evidence", "conclusion": "success"},
+            {"name": "auto-advance / fail-closed", "conclusion": "skipped"},
+            {"name": "auto-advance / implement", "conclusion": "skipped"},
+        ]
+        job_cases = {
+            "source_job_mismatch": good_jobs[1:],
+            "implement_skip_not_observed": good_jobs[:-1],
+            "implement_job_executed": [*good_jobs[:-1], {"name": "auto-advance / implement", "conclusion": "success"}],
+        }
+        for reason, jobs in job_cases.items():
+            with self.subTest(job_reason=reason):
+                self.assertEqual(verifier.verify_source_jobs(jobs).reason, reason)
+
+        pr_body = ownership.carrier_pr_body(
+            change_id="VOC-102",
+            task_id="VOC-102-T01",
+            package_path=PACKAGE,
+            issue_number=866,
+            evidence_relative_path="t01-evidence.md",
+        )
+        base_pr = {
+            "number": 1,
+            "title": "VOC-102: VOC-102-T01",
+            "body": pr_body,
+            "state": "OPEN",
+            "isDraft": True,
+            "author": {"login": "app/karsift-ai-infra-bot"},
+            "headRefName": ownership.branch_name("VOC-102", "VOC-102-T01"),
+            "headRefOid": "a" * 40,
+            "baseRefName": "develop",
+        }
+        base_comments = [{
+            "body": ownership.WAITING_MARKER_PREFIX,
+            "author": {"login": "app/karsift-ai-infra-bot"},
+        }]
+
+        def carrier(**overrides):
+            values = {
+                "pr": dict(base_pr),
+                "prs_on_branch": [{"number": 1}],
+                "comments": list(base_comments),
+                "change_id": "VOC-102",
+                "task_id": "VOC-102-T01",
+                "package_path": PACKAGE,
+                "issue_number": 866,
+                "integration_branch": "develop",
+                "evidence_text": "source_run_id: `123`\n",
+                "source_run_id": 123,
+                "current_ref": "a" * 40,
+            }
+            values.update(overrides)
+            return verifier.verify_carrier_state(**values)
+
+        carrier_cases = [
+            ("invalid_current_ref", {"current_ref": "short"}),
+            ("stale_or_invalid_carrier", {"pr": {**base_pr, "isDraft": False}}),
+            ("untrusted_carrier_author", {"pr": {**base_pr, "author": {"login": "untrusted-user"}}}),
+            ("duplicate_carrier", {"prs_on_branch": [{"number": 1}, {"number": 2}]}),
+            ("untrusted_carrier", {"pr": {**base_pr, "body": "wrong"}}),
+            ("duplicate_or_missing_marker", {"comments": []}),
+            ("duplicate_or_missing_marker", {"comments": [*base_comments, *base_comments]}),
+            ("untrusted_waiting_marker", {"comments": [{"body": ownership.WAITING_MARKER_PREFIX, "author": {"login": "untrusted-user"}}]}),
+            ("missing_evidence_file", {"evidence_text": None}),
+            ("source_run_not_recorded", {"evidence_text": "source_run_id: `999`\n"}),
+        ]
+        for reason, overrides in carrier_cases:
+            with self.subTest(carrier_reason=reason, overrides=overrides):
+                self.assertEqual(carrier(**overrides).reason, reason)
+
+        self.assertTrue(verifier.verify_issue_state("OPEN", "OPEN", "wrong_state").ok)
+        self.assertEqual(
+            verifier.verify_issue_state("CLOSED", "OPEN", "wrong_state").reason,
+            "wrong_state",
+        )
 
 
 if __name__ == "__main__":
