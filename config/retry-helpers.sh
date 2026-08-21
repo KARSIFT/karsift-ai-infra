@@ -14,20 +14,22 @@
 # manual reruns succeeded immediately - textbook transient flakiness, not a
 # real content/logic failure.
 #
-# Heuristic: retry ONLY a failure that is fast (<60s) or produced near-empty
-# output (<200 bytes combined stderr/stdout) - a bare content-free crash. A
-# failure that ran long or produced real output is NOT retried here; it
+# Heuristic: retry ONLY a failure that is fast (<60s), produced near-empty
+# output (<200 bytes combined stderr/stdout), or explicitly returned EX_TEMPFAIL
+# (75) after a caller's bounded response validator found no usable result. A
+# different failure that ran long and produced real output is NOT retried here; it
 # falls straight through to whatever fallback/escalation logic the call site
 # already has (quota-swap to a second account, model escalation, or final
 # job failure) - that's much more likely a genuine content/model problem,
 # and blindly retrying it would just burn 2x the time hiding a signal that
 # should surface loudly instead.
 #
-# Deliberately safe against masking a real reviewer verdict: `opencode run`/
-# `claude -p` both exit 0 whenever they produce ANY response, regardless of
-# whether that response says PASS or FAIL - this wrapper's first check
-# (`rc -eq 0` -> return immediately) means a normal FAIL verdict never
-# reaches the retry heuristic at all. No change to reviewer judgment.
+# Deliberately safe against masking a real reviewer verdict: model CLIs exit 0
+# whenever they produce a valid response, regardless of whether that response
+# says PASS or FAIL. Review call sites validate the documented response shape
+# inside their command function, converting a 0-exit but missing/blank result
+# into a sanitized nonzero status. A valid FAIL verdict remains exit 0 and
+# never reaches the retry heuristic. No change to reviewer judgment.
 #
 # Bounded to 2 extra same-model attempts, 5s then 15s backoff, so total
 # added wall-clock on the worst case (3 fast failures in a row) is under a
@@ -83,7 +85,9 @@ retry_if_transient() {
 
     out_bytes=$(cat "${log_files[@]}" 2>/dev/null | wc -c)
 
-    if [ "$attempt" -ge "$max_extra_attempts" ] || { [ "$duration" -ge 60 ] && [ "$out_bytes" -ge 200 ]; }; then
+    if [ "$attempt" -ge "$max_extra_attempts" ] || {
+      [ "$rc" -ne 75 ] && [ "$duration" -ge 60 ] && [ "$out_bytes" -ge 200 ]
+    }; then
       return "$rc"
     fi
 

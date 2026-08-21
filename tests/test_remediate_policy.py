@@ -13,7 +13,7 @@ class RemediatePolicyTests(unittest.TestCase):
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
         cls.review_prompt = (ROOT / "prompts/review.md").read_text()
 
-    def test_only_ci_review_failure_or_review_job_error_can_retry(self):
+    def test_only_ci_or_genuine_review_failure_can_retry(self):
         self.assertIn("config/decide-remediation.py", self.workflow)
         self.assertIn('--ci-failed "$CI_FAILED"', self.workflow)
         self.assertIn('--review-job-failed "$REVIEW_JOB_FAILED"', self.workflow)
@@ -44,9 +44,20 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn('package_line="package_path:', self.workflow)
         self.assertIn("--paginate --slurp", self.workflow)
 
-    def test_genuine_fail_and_infrastructure_failures_still_retry(self):
+    def test_genuine_fail_retries_but_review_infrastructure_is_suppressed(self):
         self.assertIn('decision" != "RETRY"', self.workflow)
         self.assertIn('echo "should_retry=true"', self.workflow)
+        self.assertIn('initial_decision" = "REVIEW_INFRA_FAILURE"', self.workflow)
+        self.assertIn('echo "review_infrastructure_failure=true"', self.workflow)
+        self.assertIn(
+            "steps.parse.outputs.review_infrastructure_failure == 'true'",
+            self.workflow,
+        )
+        self.assertIn("without implementation retry", self.workflow)
+        metadata_step = self.workflow.split(
+            "- name: Record sanitized review-job-error metadata", 1
+        )[1].split("\n  retry:", 1)[0]
+        self.assertNotIn("VERDICT: FAIL", metadata_step)
 
     def test_stale_caller_run_cannot_dispatch_newer_head(self):
         self.assertIn("expected_head_sha:", self.workflow)

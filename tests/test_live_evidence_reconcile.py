@@ -720,7 +720,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
 
     def test_review_error_retry_context_is_metadata_only(self):
         review_error = self.remediate.split(
-            "- name: Attach review-job-error output as retry context",
+            "- name: Record sanitized review-job-error metadata without implementation retry",
             1,
         )[1].split("\n  retry:", 1)[0]
         self.assertNotIn("/actions/jobs/", review_error)

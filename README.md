@@ -241,6 +241,13 @@ before model work, revalidates it immediately before publishing, and uses an
 explicit SHA-valued force-with-lease. A commit arriving in either timing window
 therefore survives instead of being overwritten by the stale retry.
 
+Reviewer responses are shape-validated inside the bounded transient-retry loop.
+A provider process that exits successfully but omits its documented non-empty
+result is retried as reviewer infrastructure, with sanitized diagnostics only.
+If all reviewer attempts fail, remediation records bounded Actions metadata but
+does not dispatch the implementer or consume its one code-remediation attempt.
+Only a genuine App-signed FAIL verdict or failed CI can start implementation.
+
 ## Ordered autonomous task execution
 
 Adoption starts the first task automatically. The adopted roster records an explicit

@@ -20,8 +20,10 @@ def decide(
 ) -> str:
     if expected_sha and expected_sha != current_sha:
         return "STALE"
-    if ci_failed or review_job_failed:
+    if ci_failed:
         return "RETRY"
+    if review_job_failed:
+        return "REVIEW_INFRA_FAILURE"
     if review_state == "WAITING":
         return "WAITING"
     if review_state == "FAIL":
