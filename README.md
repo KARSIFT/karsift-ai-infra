@@ -150,6 +150,12 @@ declared commit into a new bare repository, and pushes with hooks disabled plus
 an explicit lease. Repository hooks, PATH changes, or tools left by model code
 therefore cannot observe the App credential or forge its bot identity.
 
+The unrestricted planner uses the same privilege boundary. Its runner has no
+persisted checkout credential while the model is active and can only upload a
+Git bundle or clarifying-question artifact. A fresh `publish-plan` runner
+validates the exact bundle lineage and rejects any changed path outside the new
+package directory before it receives a repository-scoped publishing token.
+
 `live-evidence-reconcile.yml` implements that separate responsibility. Calling
 repositories invoke it from an hourly schedule (or an explicit reconcile
 dispatch), so it can poll any workflow named by a task contract without adding a
@@ -167,9 +173,10 @@ broad `workflow_run` trigger that recursively observes the pipeline itself. It:
   to the protected default-branch copy (the caller pipeline itself is always
   forbidden).
   A trusted App-authored reservation precedes the single API attempt, so an
-  uncertain outcome cannot be retried into a duplicate dispatch. PR head/ref
-  plus immutable target/default branch snapshots are revalidated both before
-  reservation and immediately before the dispatch API call;
+  uncertain outcome cannot be retried into a duplicate dispatch. The PR's
+  head/ref, body-bound package/task/authority issue, latest trusted WAITING
+  verdict, 72-hour deadline, and immutable target/default branch snapshots are
+  re-read both before reservation and immediately before the dispatch API call;
 - serializes per calling repository, records one allowlisted
   `<task_id>.result.json`, and updates the PR ref without force; and
 - emits one timeout escalation after 72 hours without invoking implementation

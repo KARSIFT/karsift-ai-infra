@@ -122,6 +122,15 @@ on:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    outputs:
+      base_sha: ${{ steps.branch.outputs.base_sha }}
+      branch: ${{ steps.branch.outputs.branch }}
+      has_changes: ${{ steps.commit.outputs.has_changes }}
+      head_sha: ${{ steps.bundle.outputs.head_sha }}
+      needs_info: ${{ steps.needs-info.outputs.needed }}
+      package_id: ${{ steps.id.outputs.id }}
+      package_path: ${{ steps.branch.outputs.package_path }}
+      slug: ${{ steps.branch.outputs.slug }}
     permissions:
       contents: write
       issues: write
@@ -130,31 +139,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
+          persist-credentials: false
 
       - name: Checkout karsift-ai-infra
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
-
-      - name: Check for GitHub App credentials
-        id: has-app
-        env:
-          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
-        run: |
-          if [ -n "$APP_ID" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Mint App installation token
-        id: app-token
-        if: steps.has-app.outputs.configured == 'true'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          persist-credentials: false
 
       # Fetches the whole thread, not just the issue body - a follow-up
       # comment (from a human answering the planner's own clarifying
@@ -166,7 +158,7 @@ jobs:
         id: issue
         if: inputs.source_issue_number != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           n="${{ inputs.source_issue_number }}"
@@ -184,7 +176,7 @@ jobs:
       - name: Ensure karsift labels exist
         if: inputs.source_issue_number != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh label create "karsift:needs-info" --color "B60205" \
             --description "Planner needs more information before it can draft a package - reply on this issue to continue" \
@@ -200,6 +192,8 @@ jobs:
       # (branch names, commits, IDs) stays out of the model's hands.
       - name: Allocate next package ID
         id: id
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           prefix="${{ inputs.id_prefix }}"
@@ -251,7 +245,10 @@ jobs:
           for _ in $(seq 1 50); do
             padded=$(printf "%03d" "$candidate")
             attempt="${prefix}-${padded}"
-            if git push origin "HEAD:refs/karsift-ids/${attempt}" 2>/dev/null; then
+            if git -c credential.helper= \
+              -c 'credential.https://github.com.helper=!gh auth git-credential' \
+              push "https://github.com/${GITHUB_REPOSITORY}.git" \
+              "HEAD:refs/karsift-ids/${attempt}" 2>/dev/null; then
               claimed="$attempt"
               break
             fi
@@ -427,6 +424,14 @@ jobs:
       # comment for the specific checks. `--force` (not `--mode plan`) is
       # used because the planner has to actually write the draft package's
       # files, the same reason implement.yml's implementer role uses it.
+      - name: Remove caller checkout credential before unrestricted planner
+        run: |
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          if git config --local --get-regexp 'credential\.|http\..*extraheader' >/dev/null 2>&1; then
+            echo "Checkout credentials remain configured; refusing to start planner." >&2
+            exit 1
+          fi
+
       - name: Install Cursor CLI
         run: |
           curl https://cursor.com/install -fsS | bash
@@ -582,28 +587,13 @@ jobs:
       # so-labeled issue back into this same workflow) is what lets the reply
       # - from a human OR another agent - resume planning without a human
       # having to manually re-dispatch anything.
-      - name: Post clarifying question and stop
+      - name: Preserve clarifying question for clean publisher
         if: steps.needs-info.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-        run: |
-          set -euo pipefail
-          if [ -z "${{ inputs.source_issue_number }}" ]; then
-            echo "Planner needs more information but no source_issue_number was given to reply on:" >&2
-            cat ".karsift-plan-needs-info.md" >&2
-            exit 1
-          fi
-          n="${{ inputs.source_issue_number }}"
-          gh issue comment "$n" --body "$(cat <<EOF
-          **Planner needs more information before it can draft a package for this issue.**
-
-          $(cat .karsift-plan-needs-info.md)
-
-          Reply on this issue with the missing information to continue - no need to re-dispatch anything by hand.
-          EOF
-          )"
-          gh issue edit "$n" --add-label "karsift:needs-info" --remove-label "karsift:planned" 2>/dev/null || \
-            gh issue edit "$n" --add-label "karsift:needs-info"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: plan-${{ steps.id.outputs.id }}-needs-info
+          path: .karsift-plan-needs-info.md
+          retention-days: 1
 
       # Fail loud, not silent: a planner that wrote outside its own package
       # directory is a scope violation, not a judgment call worth a warning.
@@ -664,7 +654,7 @@ jobs:
               yaml.safe_dump(data, f, sort_keys=False)
           PYEOF
 
-      - name: Commit and push
+      - name: Commit planned package
         id: commit
         if: steps.planner.outcome == 'success' && steps.needs-info.outputs.needed != 'true'
         run: |
@@ -689,9 +679,24 @@ jobs:
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "Plan: ${{ steps.id.outputs.id }} - ${{ steps.branch.outputs.slug }}"
-            git push --force-with-lease -u origin "${{ steps.branch.outputs.branch }}"
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Bundle planned package for clean publisher
+        id: bundle
+        if: steps.commit.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          git bundle create /tmp/planner-work.bundle "${{ steps.branch.outputs.base_sha }}..HEAD"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload planned package bundle
+        if: steps.commit.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: plan-${{ steps.id.outputs.id }}-bundle
+          path: /tmp/planner-work.bundle
+          retention-days: 14
 
       # Deliberately no "Package path: `...`" line (that literal wording) in
       # this PR body - extract-package-path/review/remediate are actually
@@ -701,33 +706,179 @@ jobs:
       # avoids extract-package-path's regex ever matching a planning PR by
       # accident if that guard is ever loosened.
       #
-      # A "Risk classification: R#" line IS required, though - found live
-      # 2026-07-25 dispatching VOC-026/P1 (PR #81): a prior version of this
-      # step omitted it too, on the mistaken belief it served the same
-      # guard purpose as "Package path:". It doesn't - governance-policy.yml
-      # runs on every PR regardless of branch prefix, and
-      # classify-change-risk.sh --require-declaration fails closed (exit 1)
-      # whenever the diff touches an R1+ path (change.yaml always does) and
-      # the PR body has no such line - which blocked PR #81 outright. Read
-      # back from the risk the planner itself proposed in change.yaml's own
-      # `risk:` field, defaulting to the template's floor if absent/unparseable.
-      - name: Open PR
+      - name: Fail job if planner step failed
+        if: steps.planner.outcome == 'failure'
+        run: exit 1
+
+  # The planner has unrestricted shell access. It never shares a runner with
+  # the App token used to publish its output. This clean job accepts only a
+  # Git bundle (or a needs-info text artifact), revalidates deterministic
+  # metadata and package-only scope, then mints the least-privilege token.
+  publish-plan:
+    needs: plan
+    if: needs.plan.outputs.needs_info == 'true' || needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Download clarifying question
+        if: needs.plan.outputs.needs_info == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: plan-${{ needs.plan.outputs.package_id }}-needs-info
+          path: /tmp/planner-needs-info
+
+      - name: Post clarifying question from clean runner
+        if: needs.plan.outputs.needs_info == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_ISSUE: ${{ inputs.source_issue_number }}
+        run: |
+          set -euo pipefail
+          question=/tmp/planner-needs-info/.karsift-plan-needs-info.md
+          if ! [[ "$SOURCE_ISSUE" =~ ^[1-9][0-9]*$ ]] || [ ! -s "$question" ]; then
+            echo "Needs-info result lacks a valid source issue or question." >&2
+            exit 1
+          fi
+          {
+            echo "**Planner needs more information before it can draft a package for this issue.**"
+            echo
+            cat "$question"
+            echo
+            echo "Reply on this issue with the missing information to continue; no manual re-dispatch is needed."
+          } > /tmp/needs-info-comment.md
+          gh issue comment "$SOURCE_ISSUE" --body-file /tmp/needs-info-comment.md
+          gh issue edit "$SOURCE_ISSUE" --add-label "karsift:needs-info" \
+            --remove-label "karsift:planned" 2>/dev/null || \
+            gh issue edit "$SOURCE_ISSUE" --add-label "karsift:needs-info"
+
+      - name: Download planned package bundle
+        if: needs.plan.outputs.has_changes == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: plan-${{ needs.plan.outputs.package_id }}-bundle
+          path: /tmp/planner-publish
+
+      - name: Check for GitHub App credentials
+        id: has-app
+        if: needs.plan.outputs.has_changes == 'true'
+        env:
+          APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+        run: |
+          if [ -n "$APP_ID" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint least-privilege App token on the clean runner
+        id: app-token
+        if: needs.plan.outputs.has_changes == 'true' && steps.has-app.outputs.configured == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Validate and publish exact planned package
+        id: publish
+        if: needs.plan.outputs.has_changes == 'true'
+        env:
+          PUBLISH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUBLISH_BRANCH: ${{ needs.plan.outputs.branch }}
+          PUBLISH_HEAD_SHA: ${{ needs.plan.outputs.head_sha }}
+          PUBLISH_BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+          PACKAGE_PATH: ${{ needs.plan.outputs.package_path }}
+          INTEGRATION_BRANCH: ${{ inputs.integration_branch }}
+        run: |
+          set -euo pipefail
+          bundle=/tmp/planner-publish/planner-work.bundle
+          if [ ! -f "$bundle" ] ||
+             ! [[ "$PUBLISH_BRANCH" =~ ^plan/[a-z0-9][a-z0-9._/-]*$ ]] ||
+             ! [[ "$PUBLISH_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$PUBLISH_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$PACKAGE_PATH" =~ ^specs/changes/[A-Za-z0-9._-]+$ ]] ||
+             ! git check-ref-format "refs/heads/$INTEGRATION_BRANCH" >/dev/null; then
+            echo "Plan publication metadata is malformed; refusing publication." >&2
+            exit 1
+          fi
+
+          publish_dir=$(mktemp -d)
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+          export GIT_TERMINAL_PROMPT=0
+          git init --bare "$publish_dir/repository.git"
+          git_dir="$publish_dir/repository.git"
+          remote="https://x-access-token:${PUBLISH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git --git-dir="$git_dir" remote add origin "$remote"
+          git --git-dir="$git_dir" fetch --no-tags origin \
+            "$INTEGRATION_BRANCH:refs/heads/$INTEGRATION_BRANCH"
+          git --git-dir="$git_dir" bundle verify "$bundle"
+          git --git-dir="$git_dir" fetch "$bundle" \
+            "$PUBLISH_HEAD_SHA:refs/heads/$PUBLISH_BRANCH"
+          bundled_head=$(git --git-dir="$git_dir" rev-parse "refs/heads/$PUBLISH_BRANCH")
+          if [ "$bundled_head" != "$PUBLISH_HEAD_SHA" ] ||
+             ! git --git-dir="$git_dir" merge-base --is-ancestor \
+               "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA"; then
+            echo "Bundle does not contain the authorized commit lineage." >&2
+            exit 1
+          fi
+
+          changed=$(git --git-dir="$git_dir" diff-tree --no-commit-id \
+            --name-only -r "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA")
+          if [ -z "$changed" ] ||
+             printf '%s\n' "$changed" | grep -Ev "^${PACKAGE_PATH//./\\.}/" >/dev/null; then
+            echo "Planner bundle changed files outside its package directory." >&2
+            exit 1
+          fi
+          change_yaml=$(git --git-dir="$git_dir" show \
+            "$PUBLISH_HEAD_SHA:$PACKAGE_PATH/change.yaml" 2>/dev/null || true)
+          declared_risk=$(printf '%s\n' "$change_yaml" | \
+            grep -m1 -E '^risk:[[:space:]]*R[0-4][[:space:]]*$' | grep -oE 'R[0-4]' || true)
+          declared_risk="${declared_risk:-R1}"
+          echo "risk=$declared_risk" >> "$GITHUB_OUTPUT"
+
+          live_head=$(git --git-dir="$git_dir" ls-remote --heads origin \
+            "refs/heads/$PUBLISH_BRANCH" | awk '{print $1}')
+          if [ -n "$live_head" ] && [ "$live_head" != "$PUBLISH_HEAD_SHA" ]; then
+            echo "Plan branch unexpectedly exists at another commit." >&2
+            exit 1
+          fi
+          lease="refs/heads/$PUBLISH_BRANCH:$live_head"
+          git --git-dir="$git_dir" -c core.hooksPath=/dev/null push --no-verify \
+            --force-with-lease="$lease" origin \
+            "refs/heads/$PUBLISH_BRANCH:refs/heads/$PUBLISH_BRANCH"
+
+      # A risk declaration is required on every planning PR because the
+      # governance policy checks change.yaml even though this is still only a
+      # draft. The value above is read again from the immutable bundle here.
+      - name: Open draft PR from clean runner
         id: pr
-        if: steps.commit.outputs.has_changes == 'true'
+        if: needs.plan.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           REQUEST: ${{ inputs.request }}
           SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
+          SOURCE_ISSUE: ${{ inputs.source_issue_number }}
         run: |
           set -euo pipefail
-          declared_risk=$(grep -m1 -E '^risk:[[:space:]]*R[0-4]' "${{ steps.branch.outputs.package_path }}/change.yaml" | grep -oE 'R[0-4]' || true)
-          declared_risk="${declared_risk:-R1}"
           {
             echo "Draft change package proposed by the planner role (model resolved from"
             echo "karsift-ai-infra/config/roles.yml)."
             echo
-            if [ -n "${{ inputs.source_issue_number }}" ]; then
-              echo "In response to issue #${{ inputs.source_issue_number }}."
+            if [ -n "$SOURCE_ISSUE" ]; then
+              if ! [[ "$SOURCE_ISSUE" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Source issue is malformed; refusing PR creation." >&2
+                exit 1
+              fi
+              echo "In response to issue #$SOURCE_ISSUE."
             fi
             if [ -n "$SOURCE_DOCUMENT_PATH" ]; then
               echo "Drafted from \`$SOURCE_DOCUMENT_PATH\`."
@@ -742,28 +893,29 @@ jobs:
             echo "merge gate must pass; adopt.yml records authority and opens per-task"
             echo "tracking issues only after this exact plan revision merges."
             echo
-            echo "New package directory: \`${{ steps.branch.outputs.package_path }}\`"
+            echo "New package directory: \`${{ needs.plan.outputs.package_path }}\`"
             echo
-            echo "Risk classification: $declared_risk"
+            echo "Risk classification: ${{ steps.publish.outputs.risk }}"
           } > /tmp/pr-body.txt
           url=$(gh pr create \
             --base "${{ inputs.integration_branch }}" \
-            --head "${{ steps.branch.outputs.branch }}" \
-            --title "Plan: ${{ steps.id.outputs.id }} - ${{ steps.branch.outputs.slug }}" \
+            --head "${{ needs.plan.outputs.branch }}" \
+            --title "Plan: ${{ needs.plan.outputs.package_id }} - ${{ needs.plan.outputs.slug }}" \
             --body-file /tmp/pr-body.txt)
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Link source issue to the draft PR
-        if: steps.commit.outputs.has_changes == 'true' && inputs.source_issue_number != ''
+        if: needs.plan.outputs.has_changes == 'true' && inputs.source_issue_number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
           n="${{ inputs.source_issue_number }}"
+          if ! [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Source issue is malformed; refusing issue update." >&2
+            exit 1
+          fi
           gh issue comment "$n" --body "Draft change package proposed: ${{ steps.pr.outputs.url }}"
-          gh issue edit "$n" --add-label "karsift:planned" --remove-label "karsift:needs-info" 2>/dev/null || \
+          gh issue edit "$n" --add-label "karsift:planned" \
+            --remove-label "karsift:needs-info" 2>/dev/null || \
             gh issue edit "$n" --add-label "karsift:planned"
-
-      - name: Fail job if planner step failed
-        if: steps.planner.outcome == 'failure'
-        run: exit 1

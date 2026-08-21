@@ -11,8 +11,9 @@
   operator token uses a pinned post-fix action revision that enforces the three
   requested repository permissions instead of inheriting the full installation.
   Pull-request evidence must name the waiting PR, Checks read permission is
-  explicit, and dispatch revalidates the PR and immutable branch snapshots
-  immediately before its single attempt.
+  explicit, and dispatch revalidates the current PR body, latest trusted
+  WAITING verdict, deadline, and immutable branch snapshots immediately before
+  its single attempt.
   Reviewer WAITING comments bind package/task/authority metadata; only open,
   unmerged, unexpired tasks can dispatch; both compared branches must be
   protected; and structured comment values are single-line safe.
@@ -22,6 +23,12 @@
   job emits a credential-free Git bundle, while a fresh runner mints the scoped
   App token, verifies/imports the exact commit in a bare repository, disables
   hooks, applies an explicit branch lease, and opens or updates the PR.
+- Isolated privileged publication from unrestricted planning as well: the
+  planner receives no persistent checkout credential and emits only a Git
+  bundle or clarifying-question artifact. A fresh runner validates exact commit
+  lineage and package-only scope before minting a repository-scoped App token,
+  pushing the plan branch, and opening the draft PR or updating its source
+  issue.
 - Added dependency-free strict contract parsing and deterministic rejection,
   sanitization, lineage, staleness, timeout, dispatch, and deduplication tests.
 

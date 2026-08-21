@@ -106,6 +106,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             ROOT / "config/live-evidence-reconcile-runner.py"
         ).read_text()
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+        cls.plan = (ROOT / ".github/workflows/plan.yml").read_text()
         cls.review = (ROOT / ".github/workflows/review.yml").read_text()
         cls.pipeline = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
@@ -442,6 +443,23 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("permission-pull-requests: write", publish_job)
         self.assertIn("permission-workflows: write", publish_job)
 
+        plan_job, plan_publish_job = self.plan.split("\n  publish-plan:", 1)
+        planner_boundary = plan_job.index(
+            "Remove caller checkout credential before unrestricted planner"
+        )
+        self.assertNotIn("create-github-app-token@", plan_job)
+        self.assertNotIn("steps.app-token", plan_job)
+        self.assertNotIn("GH_TOKEN:", plan_job[planner_boundary:])
+        self.assertGreaterEqual(plan_job.count("persist-credentials: false"), 2)
+        self.assertIn("needs: plan", plan_publish_job)
+        self.assertIn("actions/download-artifact@", plan_publish_job)
+        self.assertIn("git init --bare", plan_publish_job)
+        self.assertIn("core.hooksPath=/dev/null", plan_publish_job)
+        self.assertIn("permission-contents: write", plan_publish_job)
+        self.assertIn("permission-issues: write", plan_publish_job)
+        self.assertIn("permission-pull-requests: write", plan_publish_job)
+        self.assertIn("changed files outside its package directory", plan_publish_job)
+
     def test_caller_polls_without_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
         self.assertNotIn("  workflow_run:", self.pipeline)
@@ -657,9 +675,12 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         task = SimpleNamespace(
             contract=contract,
             task_id="VOC-097-T02",
+            issue_number=8,
+            package_path=PACKAGE,
             head_sha=HEAD,
             head_ref="agent/example",
             pr_number=7,
+            waiting_comment_id=42,
             waiting_since=NOW - timedelta(hours=1),
         )
 
@@ -681,7 +702,17 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     return {
                         "state": "open",
                         "merged_at": None,
-                        "head": {"sha": HEAD, "ref": "agent/example"},
+                        "body": (
+                            "Implements task `VOC-097-T02`\n"
+                            f"Package path: `{PACKAGE}`\n"
+                            "Closes #8"
+                        ),
+                        "head": {
+                            "sha": HEAD,
+                            "ref": "agent/example",
+                            "repo": {"full_name": "KARSIFT/example"},
+                        },
+                        "base": {"sha": BASE},
                     }
                 if endpoint.endswith("branches/main"):
                     self.branch_reads += 1
@@ -709,8 +740,14 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     return {"id": 99}
                 return None
 
+        trusted_waiting = ({"id": 42}, task.waiting_since)
         writer = DispatchWriteApi()
-        runner.dispatch_once(DispatchReadApi(), writer, task, NOW)
+        with patch.object(
+            runner, "trusted_waiting_review", return_value=trusted_waiting
+        ), patch.object(
+            runner, "current_utc_time", return_value=NOW
+        ):
+            runner.dispatch_once(DispatchReadApi(), writer, task, NOW)
         self.assertEqual(
             [(method, endpoint) for method, endpoint, _ in writer.calls],
             [
@@ -729,16 +766,23 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
         }
         retry_writer = DispatchWriteApi()
-        runner.dispatch_once(
-            DispatchReadApi([suppressing_comment]),
-            retry_writer,
-            task,
-            NOW,
-        )
+        with patch.object(
+            runner, "trusted_waiting_review", return_value=trusted_waiting
+        ):
+            runner.dispatch_once(
+                DispatchReadApi([suppressing_comment]),
+                retry_writer,
+                task,
+                NOW,
+            )
         self.assertEqual(retry_writer.calls, [])
 
         stale_writer = DispatchWriteApi()
-        with self.assertRaises(policy.ContractError) as stale:
+        with patch.object(
+            runner, "trusted_waiting_review", return_value=trusted_waiting
+        ), patch.object(
+            runner, "current_utc_time", return_value=NOW
+        ), self.assertRaises(policy.ContractError) as stale:
             runner.dispatch_once(
                 DispatchReadApi(change_branch_after=4),
                 stale_writer,
@@ -760,6 +804,42 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 NOW,
             )
         self.assertEqual(expired.exception.code, "dispatch_authorization_expired")
+
+        changed_authority_api = DispatchReadApi()
+        original_get = changed_authority_api.get
+
+        def changed_body(endpoint):
+            response = original_get(endpoint)
+            if endpoint.endswith("pulls/7"):
+                response["body"] = response["body"].replace("Closes #8", "Closes #9")
+            return response
+
+        changed_authority_api.get = changed_body
+        with patch.object(
+            runner, "trusted_waiting_review", return_value=trusted_waiting
+        ), patch.object(
+            runner, "current_utc_time", return_value=NOW
+        ), self.assertRaises(policy.ContractError) as changed:
+            runner.dispatch_once(
+                changed_authority_api,
+                DispatchWriteApi(),
+                task,
+                NOW,
+            )
+        self.assertEqual(changed.exception.code, "dispatch_authority_changed")
+
+        with patch.object(
+            runner, "trusted_waiting_review", return_value=None
+        ), patch.object(
+            runner, "current_utc_time", return_value=NOW
+        ), self.assertRaises(policy.ContractError) as superseded:
+            runner.dispatch_once(
+                DispatchReadApi(),
+                DispatchWriteApi(),
+                task,
+                NOW,
+            )
+        self.assertEqual(superseded.exception.code, "dispatch_authority_changed")
 
 
 if __name__ == "__main__":

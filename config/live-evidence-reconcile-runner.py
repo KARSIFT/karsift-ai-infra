@@ -128,6 +128,7 @@ class WaitingTask:
     result_path: str
     head_sha: str
     head_ref: str
+    waiting_comment_id: int
     waiting_since: datetime
     contract: Contract
 
@@ -300,7 +301,10 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     )
     if trusted_review is None:
         return None
-    _, waiting_since = trusted_review
+    review_comment, waiting_since = trusted_review
+    waiting_comment_id = review_comment.get("id")
+    if not isinstance(waiting_comment_id, int) or waiting_comment_id <= 0:
+        raise ContractError("untrusted_waiting_marker")
 
     contract_path = f"{package_path}/.karsift/live-evidence/{task_id}.yaml"
     contract_text = read_repository_file(api, contract_path, head_sha)
@@ -317,6 +321,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         result_path=result_path,
         head_sha=head_sha.lower(),
         head_ref=head_ref,
+        waiting_comment_id=waiting_comment_id,
         waiting_since=waiting_since,
         contract=contract,
     )
@@ -615,6 +620,11 @@ def branch_snapshot(api: GitHub, branch_name: str, *, require_protected: bool) -
     return sha.lower()
 
 
+def current_utc_time() -> datetime:
+    """Read the deadline clock at the authorization boundary, not job start."""
+    return datetime.now(timezone.utc)
+
+
 def assert_dispatch_authorization_current(
     api: GitHub,
     task: WaitingTask,
@@ -623,15 +633,54 @@ def assert_dispatch_authorization_current(
     default_sha: str,
 ) -> None:
     live_pr = api.get(f"repos/{api.repository}/pulls/{task.pr_number}")
-    live_head = ((live_pr or {}).get("head") or {}).get("sha")
-    live_ref = ((live_pr or {}).get("head") or {}).get("ref")
+    if not isinstance(live_pr, dict):
+        raise ContractError("stale_pr_head")
+    body = live_pr.get("body") or ""
+    live_head_data = live_pr.get("head") or {}
+    live_head = live_head_data.get("sha")
+    live_ref = live_head_data.get("ref")
+    live_repo = (live_head_data.get("repo") or {}).get("full_name")
+    base_sha = (live_pr.get("base") or {}).get("sha")
     if (
         live_pr.get("state") != "open"
         or live_pr.get("merged_at") is not None
         or live_head != task.head_sha
         or live_ref != task.head_ref
+        or live_repo != api.repository
+        or not isinstance(base_sha, str)
+        or not SHA_RE.fullmatch(base_sha)
     ):
         raise ContractError("stale_pr_head")
+    if (
+        PACKAGE_RE.findall(body) != [task.package_path]
+        or TASK_RE.findall(body) != [task.task_id]
+        or ISSUE_RE.findall(body) != [str(task.issue_number)]
+    ):
+        raise ContractError("dispatch_authority_changed")
+
+    comments = api.get_all(
+        f"repos/{api.repository}/issues/{task.pr_number}/comments"
+    )
+    trusted_review = trusted_waiting_review(
+        api,
+        task.pr_number,
+        task.head_sha,
+        task.head_ref,
+        base_sha,
+        task.package_path,
+        task.task_id,
+        task.issue_number,
+        comments,
+    )
+    if trusted_review is None:
+        raise ContractError("dispatch_authority_changed")
+    review_comment, waiting_since = trusted_review
+    if (
+        review_comment.get("id") != task.waiting_comment_id
+        or waiting_since != task.waiting_since
+        or timed_out(waiting_since, current_utc_time())
+    ):
+        raise ContractError("dispatch_authorization_expired")
     if branch_snapshot(
         api,
         task.contract.branch,
