@@ -207,8 +207,10 @@ forward. Result-commit, ref, and trusted-comment mutations use a short-lived
 installation token from the KARSIFT GitHub App. Declared workflow dispatch alone
 uses the dedicated reconcile job's `GITHUB_TOKEN` with `actions: write`; other
 caller jobs retain their existing permission floor, and the implementer receives
-neither token. The App token is repository-scoped and requests only contents and
-issues write permissions through an immutable
+neither token. The App token is repository-scoped and requests only contents,
+issues, and pull-request write permissions: contents publishes the result
+commit, issues handles task/timeout comments, and pull requests publishes the
+exact-head attestation on the waiting PR conversation. It uses an immutable
 post-fix `create-github-app-token` revision whose parser honors the
 `permission-*` inputs. Waiting is accepted only
 when the successful check resolves to the exact PR, head, branch, active caller
