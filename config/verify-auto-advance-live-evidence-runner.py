@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from auto_advance_ownership import derive_evidence_relative_path
+from auto_advance_ownership import derive_evidence_relative_path, parse_package_risk
 from live_evidence_reconcile import parse_contract_yaml, validate_contract
 from verify_auto_advance_live_evidence import (
     verify_carrier_state,
@@ -260,6 +260,9 @@ def main() -> int:
         require(verify_issue_state(issue.get("state", ""), "OPEN", "task_issue_not_open"))
 
         evidence_path = package_root / derive_evidence_relative_path(args.task_id)
+        risk = parse_package_risk(
+            (package_root / "change.yaml").read_text(encoding="utf-8")
+        )
         evidence_text = (
             evidence_path.read_text(encoding="utf-8") if evidence_path.is_file() else None
         )
@@ -276,6 +279,7 @@ def main() -> int:
                 evidence_text=evidence_text,
                 source_run_id=args.source_run_id,
                 current_ref=args.current_ref,
+                risk=risk,
             )
         )
     except (VerificationError, OSError, ValueError, json.JSONDecodeError) as exc:

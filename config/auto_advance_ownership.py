@@ -24,6 +24,10 @@ WAITING_MARKER_PREFIX = (
 FAIL_CLOSED_MARKER_PREFIX = (
     "VOC-102: Auto-advance fail-closed on ownership metadata for"
 )
+PACKAGE_RISK_RE = re.compile(
+    r"^risk:\s*(?:(R[0-4])|['\"](R[0-4])['\"])\s*(?:#.*)?$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 Decision = Literal["none", "implement", "prepare-live-evidence", "fail-closed"]
 
@@ -34,6 +38,14 @@ class Classification:
     reason: str = ""
     ownership: str | None = None
     evidence_relative_path: str | None = None
+
+
+def parse_package_risk(change_yaml: str) -> str:
+    matches = PACKAGE_RISK_RE.findall(change_yaml)
+    if len(matches) != 1:
+        raise ValueError("invalid_package_risk")
+    unquoted, quoted = matches[0]
+    return (unquoted or quoted).upper()
 
 
 def derive_evidence_relative_path(task_id: str) -> str:
@@ -172,6 +184,7 @@ def carrier_pr_body(
     package_path: str,
     issue_number: int,
     evidence_relative_path: str,
+    risk: str,
 ) -> str:
     return "\n".join(
         [
@@ -183,7 +196,7 @@ def carrier_pr_body(
             "executed for this task. Repository-controlled reconciliation observes the",
             "declared contract after operator proof arrives.",
             "",
-            "Risk classification: R4",
+            f"Risk classification: {risk}",
             "",
             f"Package path: `{package_path}`",
             "",
@@ -208,6 +221,7 @@ def is_valid_carrier_pr(
     package_path: str,
     issue_number: int,
     evidence_relative_path: str,
+    risk: str,
 ) -> bool:
     expected_title = f"{change_id}: {task_id}"
     if pr_title.strip() != expected_title:
@@ -218,5 +232,6 @@ def is_valid_carrier_pr(
         package_path=package_path,
         issue_number=issue_number,
         evidence_relative_path=evidence_relative_path,
+        risk=risk,
     )
     return pr_body.strip() == expected_body.strip()
