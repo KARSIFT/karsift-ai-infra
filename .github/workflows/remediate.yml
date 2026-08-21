@@ -265,7 +265,6 @@ jobs:
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             reason="was reviewed and failed"
             [ "$CI_FAILED" = "true" ] && reason="failed CI"
-            [ "$REVIEW_JOB_FAILED" = "true" ] && reason="hit a review-job error (no verdict was produced)"
             gh issue comment "$issue_number" --body \
               "Attempt $attempt of 2 $reason. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
             exit 0
@@ -275,8 +274,6 @@ jobs:
           echo "next_attempt=$next_attempt" >> "$GITHUB_OUTPUT"
           if [ "$CI_FAILED" = "true" ]; then
             echo "CI failed on attempt $attempt - will retry as attempt $next_attempt."
-          elif [ "$REVIEW_JOB_FAILED" = "true" ]; then
-            echo "Review job errored (no verdict) on attempt $attempt - will retry as attempt $next_attempt."
           else
             echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
           fi

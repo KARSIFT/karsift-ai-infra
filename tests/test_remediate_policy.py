@@ -54,6 +54,11 @@ class RemediatePolicyTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("without implementation retry", self.workflow)
+        retry_decision = self.workflow.split(
+            'if [ "$decision" != "RETRY" ]', 1
+        )[1].split("- name: Attach CI failure output", 1)[0]
+        self.assertNotIn("Review job errored (no verdict)", retry_decision)
+        self.assertNotIn("hit a review-job error", retry_decision)
         metadata_step = self.workflow.split(
             "- name: Record sanitized review-job-error metadata", 1
         )[1].split("\n  retry:", 1)[0]
