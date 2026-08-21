@@ -158,7 +158,9 @@ broad `workflow_run` trigger that recursively observes the pipeline itself. It:
   only when the target ref is protected and the workflow file is byte-identical
   to the default-branch copy (the caller pipeline itself is always forbidden).
   A trusted App-authored reservation precedes the single API attempt, so an
-  uncertain outcome cannot be retried into a duplicate dispatch;
+  uncertain outcome cannot be retried into a duplicate dispatch. PR head/ref
+  plus immutable target/default branch snapshots are revalidated both before
+  reservation and immediately before the dispatch API call;
 - serializes per calling repository, records one allowlisted
   `<task_id>.result.json`, and updates the PR ref without force; and
 - emits one timeout escalation after 72 hours without invoking implementation
@@ -179,6 +181,12 @@ timestamp must also fall inside that check's run window. The post-reconcile
 review requires a trusted App-authored attestation bound to its new exact head,
 and that attestation is posted before the branch advances to prevent a fast
 `synchronize` review from racing it.
+
+For `pull_request` and `pull_request_target` evidence, the run's GitHub PR
+association must include the waiting PR number; matching workflow, branch, and
+SHA alone is insufficient. The read-only workflow token explicitly grants
+Actions, Checks, contents, issues, and pull-request metadata access so these
+provenance checks work in private repositories.
 
 Caller pipelines pass the triggering PR head into review, remediation, and
 merge-gate. A newer push makes older runs stale: reviewer model work is skipped,

@@ -419,6 +419,13 @@ def qualify(api: GitHub, task: WaitingTask, run: dict[str, Any], now: datetime) 
         ]
         if len(matches) != 1 or run.get("workflow_id") != matches[0].get("id"):
             raise ContractError("ambiguous_workflow_identity")
+    if run.get("event") in {"pull_request", "pull_request_target"}:
+        pull_requests = run.get("pull_requests")
+        if (
+            not isinstance(pull_requests, list)
+            or not any(item.get("number") == task.pr_number for item in pull_requests)
+        ):
+            raise ContractError("wrong_pull_request")
     contains_pr = contains_run = None
     if task.contract.lineage_mode == "integration_contains_pr_head":
         run_sha = run.get("head_sha")
@@ -572,6 +579,46 @@ def timeout_once(read_api: GitHub, write_api: GitHub, task: WaitingTask, now: da
     print(f"live-evidence: timeout task={task.task_id} pr={task.pr_number}")
 
 
+def branch_snapshot(api: GitHub, branch_name: str, *, require_protected: bool) -> str:
+    branch = api.get(
+        f"repos/{api.repository}/branches/{quote(branch_name, safe='')}"
+    )
+    if not isinstance(branch, dict):
+        raise ContractError("dispatch_branch_unavailable")
+    sha = (branch.get("commit") or {}).get("sha")
+    if not isinstance(sha, str) or not SHA_RE.fullmatch(sha):
+        raise ContractError("dispatch_branch_unavailable")
+    if require_protected and branch.get("protected") is not True:
+        raise ContractError("dispatch_branch_unprotected")
+    return sha.lower()
+
+
+def assert_dispatch_authorization_current(
+    api: GitHub,
+    task: WaitingTask,
+    target_sha: str,
+    default_branch: str,
+    default_sha: str,
+) -> None:
+    live_pr = api.get(f"repos/{api.repository}/pulls/{task.pr_number}")
+    live_head = ((live_pr or {}).get("head") or {}).get("sha")
+    live_ref = ((live_pr or {}).get("head") or {}).get("ref")
+    if live_head != task.head_sha or live_ref != task.head_ref:
+        raise ContractError("stale_pr_head")
+    if branch_snapshot(
+        api,
+        task.contract.branch,
+        require_protected=True,
+    ) != target_sha:
+        raise ContractError("dispatch_branch_changed")
+    if branch_snapshot(
+        api,
+        default_branch,
+        require_protected=False,
+    ) != default_sha:
+        raise ContractError("dispatch_default_branch_changed")
+
+
 def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> None:
     dispatch = task.contract.dispatch
     if dispatch is None:
@@ -586,17 +633,22 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
     default_branch = (repository or {}).get("default_branch")
     if not isinstance(default_branch, str):
         raise ContractError("default_branch_unavailable")
-    target_branch = read_api.get(
-        f"repos/{read_api.repository}/branches/{quote(task.contract.branch, safe='')}"
+    target_sha = branch_snapshot(
+        read_api,
+        task.contract.branch,
+        require_protected=True,
     )
-    if (target_branch or {}).get("protected") is not True:
-        raise ContractError("dispatch_branch_unprotected")
+    default_sha = branch_snapshot(
+        read_api,
+        default_branch,
+        require_protected=False,
+    )
     workflow_path = f".github/workflows/{dispatch.workflow_file}"
     target_workflow = read_api.get_optional(
-        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={quote(task.contract.branch, safe='')}"
+        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={target_sha}"
     )
     default_workflow = read_api.get_optional(
-        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={quote(default_branch, safe='')}"
+        f"repos/{read_api.repository}/contents/{quote(workflow_path, safe='/')}?ref={default_sha}"
     )
     if (
         not isinstance(target_workflow, dict)
@@ -604,6 +656,13 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
         or target_workflow.get("sha") != default_workflow.get("sha")
     ):
         raise ContractError("dispatch_workflow_not_trusted")
+    assert_dispatch_authorization_current(
+        read_api,
+        task,
+        target_sha,
+        default_branch,
+        default_sha,
+    )
     reservation_body = "\n".join(
         [
             "**Live-evidence reconcile — declared dispatch reserved**",
@@ -625,6 +684,16 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
     reservation_id = (reservation or {}).get("id")
     if not isinstance(reservation_id, int):
         raise ApiError("dispatch_reservation_failed")
+    # The reservation is intentionally durable if any authorization changed.
+    # Revalidate after that write and immediately before the non-idempotent API
+    # call; an uncertain or stale state then stops instead of dispatching.
+    assert_dispatch_authorization_current(
+        read_api,
+        task,
+        target_sha,
+        default_branch,
+        default_sha,
+    )
     write_api.mutate(
         "POST",
         f"repos/{write_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",

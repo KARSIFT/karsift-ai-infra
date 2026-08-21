@@ -10,6 +10,9 @@
   pipeline run, and run candidates are paginated with a fail-closed bound. The
   operator token uses a pinned post-fix action revision that enforces the three
   requested repository permissions instead of inheriting the full installation.
+  Pull-request evidence must name the waiting PR, Checks read permission is
+  explicit, and dispatch revalidates the PR and immutable branch snapshots
+  immediately before its single attempt.
   The caller template polls hourly instead of using a recursive catch-all
   `workflow_run` trigger.
 - Added dependency-free strict contract parsing and deterministic rejection,

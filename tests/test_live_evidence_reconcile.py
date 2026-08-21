@@ -186,6 +186,32 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             integration_contains_run=False,
         )
 
+    def test_pull_request_run_must_belong_to_target_pr(self):
+        task = SimpleNamespace(
+            contract=parsed_contract(events="  - pull_request"),
+            pr_number=7,
+            head_sha=HEAD,
+            waiting_since=NOW - timedelta(hours=1),
+        )
+
+        class NoApiCalls:
+            repository = "KARSIFT/example"
+
+            def __getattr__(self, name):
+                raise AssertionError("wrong PR must reject before job API reads")
+
+        with self.assertRaises(policy.ContractError) as rejected:
+            runner.qualify(
+                NoApiCalls(),
+                task,
+                run_fixture(
+                    event="pull_request",
+                    pull_requests=[{"number": 999}],
+                ),
+                NOW,
+            )
+        self.assertEqual(rejected.exception.code, "wrong_pull_request")
+
     def test_name_only_identity_must_resolve_to_one_matching_workflow_id(self):
         name_only_data = policy.parse_contract_yaml(
             contract_text().replace(
@@ -362,6 +388,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         )[0]
         self.assertNotIn("actions: write", operator_job_permissions)
         self.assertIn("actions: read", operator_job_permissions)
+        self.assertIn("checks: read", operator_job_permissions)
         implement_permissions = self.implement.split("permissions:", 1)[1].split(
             "steps:", 1
         )[0]
@@ -567,14 +594,17 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             contract=contract,
             task_id="VOC-097-T02",
             head_sha=HEAD,
+            head_ref="agent/example",
             pr_number=7,
         )
 
         class DispatchReadApi:
             repository = "KARSIFT/example"
 
-            def __init__(self, comments=None):
+            def __init__(self, comments=None, change_branch_after=None):
                 self.comments = comments or []
+                self.change_branch_after = change_branch_after
+                self.branch_reads = 0
 
             def get_all(self, endpoint, key=None):
                 return self.comments
@@ -582,8 +612,19 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             def get(self, endpoint):
                 if endpoint == "repos/KARSIFT/example":
                     return {"default_branch": "main"}
+                if endpoint == "repos/KARSIFT/example/pulls/7":
+                    return {
+                        "head": {"sha": HEAD, "ref": "agent/example"},
+                    }
                 if endpoint.endswith("branches/main"):
-                    return {"protected": True}
+                    self.branch_reads += 1
+                    sha = (
+                        RUN_SHA
+                        if self.change_branch_after is not None
+                        and self.branch_reads > self.change_branch_after
+                        else HEAD
+                    )
+                    return {"protected": True, "commit": {"sha": sha}}
                 raise AssertionError(endpoint)
 
             def get_optional(self, endpoint):
@@ -627,6 +668,19 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             task,
         )
         self.assertEqual(retry_writer.calls, [])
+
+        stale_writer = DispatchWriteApi()
+        with self.assertRaises(policy.ContractError) as stale:
+            runner.dispatch_once(
+                DispatchReadApi(change_branch_after=4),
+                stale_writer,
+                task,
+            )
+        self.assertEqual(stale.exception.code, "dispatch_branch_changed")
+        self.assertEqual(
+            [(method, endpoint) for method, endpoint, _ in stale_writer.calls],
+            [("POST", "repos/KARSIFT/example/issues/7/comments")],
+        )
 
 
 if __name__ == "__main__":
