@@ -75,6 +75,10 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         cls.verify_workflow = (
             REPOSITORY_ROOT / ".github/workflows/verify-auto-advance-live-evidence.yml"
         ).read_text()
+        cls.project_pipeline_template = (
+            REPOSITORY_ROOT
+            / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text()
 
     def test_voc102_test_00_contract_path_is_authoritative(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -419,6 +423,37 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             )
             post.assert_called_once()
 
+    def test_voc102_test_11_closed_carrier_fails_closed_for_operator_cleanup(self):
+        body = ownership.carrier_pr_body(
+            change_id="VOC-102",
+            task_id="VOC-102-T01",
+            package_path=PACKAGE,
+            issue_number=866,
+            evidence_relative_path="t01-evidence.md",
+        )
+        with self.assertRaisesRegex(
+            publisher.PublisherError, "conflicting_existing_pr"
+        ):
+            publisher.validate_existing_pr(
+                pr={
+                    "number": 900,
+                    "title": "VOC-102: VOC-102-T01",
+                    "body": body,
+                    "state": "CLOSED",
+                    "isDraft": True,
+                    "author": {"login": "app/karsift-ai-infra-bot"},
+                    "headRefName": "agent/voc-102-voc-102-t01",
+                    "baseRefName": "develop",
+                },
+                branch="agent/voc-102-voc-102-t01",
+                integration_branch="develop",
+                change_id="VOC-102",
+                task_id="VOC-102-T01",
+                package_path=PACKAGE,
+                issue_number=866,
+                evidence_relative_path="t01-evidence.md",
+            )
+
     def test_voc102_test_11_existing_carrier_repairs_missing_evidence_file(self):
         task_id = "VOC-102-T01"
         evidence_relative = "t01-evidence.md"
@@ -592,6 +627,37 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertIn(".karsift/tasks.json", verifier_runner)
         self.assertNotRegex(verifier_runner, r"[\"']logs[\"']")
         self.assertNotRegex(verifier_runner, r"[\"']artifacts[\"']")
+
+        template = self.project_pipeline_template
+        self.assertIn("verify-auto-advance-live-evidence]", template)
+        template_auto_advance = template.split("  auto-advance:", 1)[1].split(
+            "  verify-auto-advance-live-evidence:", 1
+        )[0]
+        self.assertNotIn("secrets: inherit", template_auto_advance)
+        self.assertEqual(
+            set(
+                re.findall(
+                    r"^      ([A-Z][A-Z0-9_]+):",
+                    template_auto_advance.split("    secrets:", 1)[1],
+                    re.MULTILINE,
+                )
+            ),
+            {"CURSOR_API_KEY", "KARSIFT_BOT_APP_ID", "KARSIFT_BOT_PRIVATE_KEY"},
+        )
+        template_verify = template.split(
+            "  verify-auto-advance-live-evidence:", 1
+        )[1].split("  live-evidence-reconcile:", 1)[0]
+        self.assertIn("actions: read", template_verify)
+        self.assertNotIn("actions: write", template_verify)
+        self.assertNotIn("secrets:", template_verify)
+        for field in (
+            "verify_source_run_id",
+            "verify_waiting_pr_number",
+            "verify_change_id",
+            "verify_task_id",
+            "verify_package_path",
+        ):
+            self.assertIn(field, template_verify)
 
     def test_voc102_test_12_fail_closed_marker_is_sanitized_and_deduplicated(self):
         marker = f"{fail_closed.FAIL_CLOSED_MARKER_PREFIX} `VOC-102-T01`"
