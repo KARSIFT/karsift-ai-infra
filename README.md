@@ -170,7 +170,9 @@ bound to the post-reconcile SHA; a PASS from the older waiting head cannot carry
 forward. Mutations use a short-lived installation token from the KARSIFT GitHub
 App. The reusable job's own `GITHUB_TOKEN` remains read-only, and the implementer
 never receives the App token. The App token is repository-scoped and requests
-only Actions, contents, and issues write permissions. Waiting is accepted only
+only Actions, contents, and issues write permissions through an immutable
+post-fix `create-github-app-token` revision whose parser honors the
+`permission-*` inputs. Waiting is accepted only
 when the successful check resolves to the exact PR, head, branch, active caller
 pipeline workflow ID, and an unchanged head/base pipeline file; the comment
 timestamp must also fall inside that check's run window. The post-reconcile

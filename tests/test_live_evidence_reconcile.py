@@ -367,6 +367,14 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         )[0]
         self.assertNotIn("actions:", implement_permissions)
         self.assertIn("Mint separate operator token", self.workflow)
+        self.assertIn(
+            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+            self.workflow,
+        )
+        self.assertNotIn(
+            "actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547",
+            self.workflow,
+        )
         self.assertIn("permission-actions: write", self.workflow)
         self.assertIn("permission-contents: write", self.workflow)
         self.assertIn("permission-issues: write", self.workflow)
