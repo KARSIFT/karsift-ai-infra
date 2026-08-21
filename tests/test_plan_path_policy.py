@@ -30,8 +30,8 @@ class PlanPathPolicyTests(unittest.TestCase):
         self.assertNotIn("gh pr comment", reviewer)
         self.assertNotIn("create-github-app-token@", reviewer)
         self.assertIn("actions/download-artifact@", publisher)
-        self.assertIn("permission-issues: write", publisher)
         self.assertIn("permission-pull-requests: write", publisher)
+        self.assertNotIn("permission-issues: write", publisher)
         self.assertIn("App-signed plan verification", publisher)
         self.assertGreaterEqual(
             publisher.count("GH_REPO: ${{ github.repository }}"),
