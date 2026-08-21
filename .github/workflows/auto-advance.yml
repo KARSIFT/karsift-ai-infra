@@ -9,8 +9,10 @@ name: auto-advance (reusable)
 # the plan/ PR) and release promotion (release.yml's "Release: <id>" issue,
 # unaffected by this file) - this workflow only fills the gap in between:
 # when a task's tracking issue closes (normally via its PR merging), find
-# the next task_id in `<package_path>/.karsift/tasks.json` and dispatch
-# implement.yml for it automatically, attempt 1.
+# the next task_id in `<package_path>/.karsift/tasks.json` and either dispatch
+# implement.yml for an ordinary next task or prepare a deterministic
+# operator-owned live-evidence carrier without starting the implementer
+# (VOC-102).
 #
 # Deliberately conservative about when it fires - a wrongly-triggered
 # duplicate dispatch is a worse failure mode than staying silent:
@@ -19,10 +21,11 @@ name: auto-advance (reusable)
 #   - No-ops if there's no next task (release.yml's check-completion job
 #     handles that case - opening the release-approval issue instead).
 #   - No-ops if the next task's issue is already closed (already done or
-#     already in flight) or if a PR already exists on its deterministic
-#     agent/<change>-<slug> branch (avoids a double-dispatch race if this
-#     fires more than once for the same close event, or a human already
-#     dispatched it by hand in the meantime).
+#     already in flight).
+#   - For ordinary next tasks only: no-ops if a PR already exists on the
+#     deterministic agent/<change>-<slug> branch (avoids double-dispatch).
+#   - Operator-owned / live-actions next tasks re-enter the clean carrier
+#     publisher instead of treating an existing PR as a global early return.
 
 on:
   workflow_call:
@@ -54,15 +57,26 @@ jobs:
       pull-requests: read
       contents: read
     outputs:
+      decision: ${{ steps.next.outputs.decision }}
+      reason: ${{ steps.next.outputs.reason }}
       should_dispatch: ${{ steps.next.outputs.should_dispatch }}
       change_id: ${{ steps.next.outputs.change_id }}
       package_path: ${{ steps.next.outputs.package_path }}
       task_id: ${{ steps.next.outputs.task_id }}
       issue_number: ${{ steps.next.outputs.issue_number }}
+      evidence_relative_path: ${{ steps.next.outputs.evidence_relative_path }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ inputs.integration_branch }}
+
+      - name: Checkout shared auto-advance policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
 
       # Same identify pattern as release.yml's check-completion job (title
       # prefix -> package directory glob -> roster file), reused verbatim
@@ -74,18 +88,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
+          PYTHONPATH: karsift-ai-infra/config
         run: |
           set -euo pipefail
+          echo "decision=none" >> "$GITHUB_OUTPUT"
+          echo "reason=" >> "$GITHUB_OUTPUT"
           echo "should_dispatch=false" >> "$GITHUB_OUTPUT"
+          echo "evidence_relative_path=" >> "$GITHUB_OUTPUT"
 
           change_id=$(echo "$ISSUE_TITLE" | grep -oP '^[A-Za-z][A-Za-z0-9]*-\d+(?=:)' || true)
-          # `T\d+[a-z]?` (not just `T\d+`) so a task split into lettered
-          # sub-tasks (e.g. VOC-031-T07 -> T07a/T07b, 2026-07-28 - see
-          # tasks.md's own note on why) still round-trips through this
-          # regex. Without the `[a-z]?`, "VOC-031-T07a" truncated to
-          # "VOC-031-T07" here, which matched nothing in tasks.json (which
-          # has "T07a"/"T07b", not "T07") - auto-advance silently no-opped
-          # instead of dispatching T07b after T07a's issue closed.
           closed_task_id=$(echo "$ISSUE_TITLE" | grep -oP '(?<=: )[A-Za-z0-9]+-\d+-T\d+[a-z]?' || true)
           if [ -z "$change_id" ] || [ -z "$closed_task_id" ]; then
             echo "Closed issue title doesn't match '<CHANGE-ID>: <TASK-ID> - ...' - not a tracked task issue, nothing to do."
@@ -136,20 +147,106 @@ jobs:
             exit 0
           fi
 
-          slug=$(echo "$next_task_id" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
-          change_lower=$(echo "$change_id" | tr '[:upper:]' '[:lower:]')
-          branch="agent/${change_lower}-${slug}"
-          existing_pr=$(gh pr list --head "$branch" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
-          if [ -n "$existing_pr" ]; then
-            echo "Branch $branch already has PR #$existing_pr - not redispatching."
-            exit 0
+          python3 karsift-ai-infra/config/auto-advance-classifier.py \
+            --package-path "$package_path" \
+            --next-task-id "$next_task_id" \
+            --change-id "$change_id" \
+            --issue-number "$next_issue"
+
+          decision=$(grep '^decision=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          if [ "$decision" = "implement" ]; then
+            slug=$(echo "$next_task_id" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')
+            change_lower=$(echo "$change_id" | tr '[:upper:]' '[:lower:]')
+            branch="agent/${change_lower}-${slug}"
+            existing_pr=$(gh pr list --head "$branch" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
+            if [ -n "$existing_pr" ]; then
+              echo "Branch $branch already has PR #$existing_pr - not redispatching."
+              {
+                echo "decision=none"
+                echo "should_dispatch=false"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
-          echo "should_dispatch=true" >> "$GITHUB_OUTPUT"
-          echo "change_id=$change_id" >> "$GITHUB_OUTPUT"
-          echo "package_path=$package_path" >> "$GITHUB_OUTPUT"
-          echo "task_id=$next_task_id" >> "$GITHUB_OUTPUT"
-          echo "issue_number=$next_issue" >> "$GITHUB_OUTPUT"
+  prepare-live-evidence:
+    needs: advance
+    if: needs.advance.outputs.decision == 'prepare-live-evidence'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout shared auto-advance policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Mint separate operator token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Publish deterministic live-evidence carrier
+        env:
+          KARSIFT_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/auto-advance-carrier-publisher.py \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --change-id "${{ needs.advance.outputs.change_id }}" \
+            --package-path "${{ needs.advance.outputs.package_path }}" \
+            --task-id "${{ needs.advance.outputs.task_id }}" \
+            --issue-number "${{ needs.advance.outputs.issue_number }}" \
+            --evidence-relative-path "${{ needs.advance.outputs.evidence_relative_path }}"
+
+  fail-closed:
+    needs: advance
+    if: needs.advance.outputs.decision == 'fail-closed'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    steps:
+      - name: Checkout shared auto-advance policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Mint separate operator token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Post sanitized fail-closed marker
+        env:
+          KARSIFT_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/auto-advance-fail-closed.py \
+            --task-id "${{ needs.advance.outputs.task_id }}" \
+            --issue-number "${{ needs.advance.outputs.issue_number }}" \
+            --reason "${{ needs.advance.outputs.reason }}"
 
   implement:
     needs: advance

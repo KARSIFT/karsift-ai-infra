@@ -271,7 +271,22 @@ Only a genuine App-signed FAIL verdict or failed CI can start implementation.
 Adoption starts the first task automatically. The adopted roster records an explicit
 `depends_on` edge from every later task to its predecessor, and `auto-advance.yml` releases the
 next task only after the preceding task's implementation PR merges and its tracking issue closes.
-Implementer jobs are serialized per change package.
+For an ordinary next task, it preserves the existing deterministic-branch guard and dispatches
+`implement.yml` attempt 1. For a task with a valid operator/live-actions contract at
+`<package>/.karsift/live-evidence/<task_id>.yaml`, it does not execute the general implementer:
+a separate clean App-scoped job creates or repairs one deterministic draft evidence-carrier PR
+and one sanitized waiting marker. The task's own `tasks.md` stanza may declare the exact secondary
+expectation marker `- Automation ownership: operator` or
+`- Automation ownership: live-actions`; a missing required contract, malformed contract, invalid
+or duplicate marker, or marker/contract conflict fails closed. Narrative prose is never parsed as
+ownership. Re-entry repairs a partially published carrier without overwriting an existing evidence
+file. Implementer jobs remain serialized per change package.
+
+The ownership classifier is read-only. Only the non-model carrier publisher receives an App token
+for contents/issues/pull-request writes, and the fail-closed notifier receives issue-write only.
+Neither receives Actions-write or model credentials. A separate read-only
+`verify-auto-advance-live-evidence.yml` workflow validates the later controlled source-run/carrier
+proof from Actions, issue, and PR metadata only—never logs or artifacts.
 
 `implement.yml` enforces the same ordering independently, including for direct
 `workflow_dispatch` calls: the dispatched task and issue must match the adopted roster, every
