@@ -450,6 +450,16 @@ jobs:
               echo "make the actual code/content change each one requires."
               echo
               cat /tmp/prior-review.txt
+            elif [ "${{ inputs.attempt }}" != "1" ]; then
+              echo
+              echo "## The previous attempt failed deterministic CI before review"
+              echo
+              echo "No trusted App-signed review record exists for the failed head. Do not"
+              echo "guess from or request raw workflow logs. Reproduce the failure in this"
+              echo "clean checkout using the repository's documented validation commands,"
+              echo "identify the root cause, and implement the smallest in-scope repair."
+              echo "failed_head_sha: ${{ inputs.expected_head_sha }}"
+              echo "failed_base_sha: ${{ inputs.expected_base_sha }}"
             fi
             echo
             echo "## Lessons learned (.karsift/lessons.md, if present)"

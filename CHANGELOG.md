@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Replaced raw CI-log replay in remediation with allowlisted run/base/head/job
+  metadata in the Actions summary. A CI-only retry now reproduces the failure
+  with repository-controlled checks when no trusted signed review exists, so
+  terminal sequences or arbitrary log content cannot break the retry decision
+  or become durable PR/model context.
+
 - Added `live-evidence-reconcile.yml`, a serialized, App-authenticated operator
   path that validates declared Actions metadata, records one sanitized result
   commit, forces fresh exact-SHA review, optionally dispatches only declared

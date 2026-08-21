@@ -117,8 +117,10 @@ When the reviewer returns `FAIL`, **or CI itself fails outright before review ev
 failing means `review` never gets a chance to produce a verdict at all, a real blind spot until this
 was added), `remediate.yml` (wired into the caller template right after `review`) automatically
 re-dispatches the implementer once, with the failure details - the reviewer's exact findings, or the
-CI job's own failure log when there was no review to draw from - included in the prompt as required
-reading, not a blind second guess. It force-updates the same PR rather than opening a new one. On
+exact failed base/head plus an instruction to reproduce repository-controlled checks when there was
+no review to draw from - included in the prompt as required reading, not a blind second guess. Raw
+CI logs, artifacts, step output, and environment values are never copied into PR comments or model
+context. It force-updates the same PR rather than opening a new one. On
 that one retry, `implement.yml` escalates to a stronger model (`implementer_escalation` in
 `config/roles.yml`) rather than reusing the same model that already failed once. If the retry also
 fails, it stops and escalates to the authority issue instead of trying a third time - the same
