@@ -59,7 +59,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -116,6 +116,26 @@ on:
         required: false
         type: boolean
         default: false
+      verify_source_run_id:
+        description: "verify-auto-advance-live-evidence only: predecessor close pipeline run id"
+        required: false
+        type: string
+      verify_waiting_pr_number:
+        description: "verify-auto-advance-live-evidence only: draft evidence-carrier PR number"
+        required: false
+        type: string
+      verify_change_id:
+        description: "verify-auto-advance-live-evidence only: adopted package change id"
+        required: false
+        type: string
+      verify_task_id:
+        description: "verify-auto-advance-live-evidence only: operator-owned task id"
+        required: false
+        type: string
+      verify_package_path:
+        description: "verify-auto-advance-live-evidence only: canonical package directory path"
+        required: false
+        type: string
 
 # A synchronize event supersedes every older pipeline for the same PR. This
 # prevents duplicate reviewer/model runs and stale remediation/merge decisions,
@@ -335,7 +355,30 @@ jobs:
     uses: KARSIFT/karsift-ai-infra/.github/workflows/auto-advance.yml@main
     with:
       integration_branch: "develop"   # match the value used elsewhere in this file
-    secrets: inherit
+    # Narrow contract: ordinary tasks need the active implementer provider;
+    # operator-owned carrier publication uses only the GitHub App identity.
+    secrets:
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      KARSIFT_BOT_APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+      KARSIFT_BOT_PRIVATE_KEY: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+  # Read-only proof that an issues:closed source run took the operator-owned
+  # branch and created exactly one trusted draft evidence carrier.
+  verify-auto-advance-live-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-auto-advance-live-evidence'
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-auto-advance-live-evidence.yml@main
+    with:
+      source_run_id: ${{ inputs.verify_source_run_id }}
+      waiting_pr_number: ${{ inputs.verify_waiting_pr_number }}
+      change_id: ${{ inputs.verify_change_id }}
+      task_id: ${{ inputs.verify_task_id }}
+      package_path: ${{ inputs.verify_package_path }}
+      integration_branch: "develop"
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a

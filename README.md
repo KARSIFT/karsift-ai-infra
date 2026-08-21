@@ -285,6 +285,12 @@ closed instead of guessing that the task is ordinary. Re-entry repairs a partial
 carrier without overwriting an existing evidence file. Implementer jobs remain serialized per
 change package.
 
+If the deterministic carrier branch already belongs to a closed or merged PR, publication fails
+closed with `conflicting_existing_pr`. The publisher never silently reopens or replaces that PR:
+an operator must first confirm why it was closed and then restore the trusted draft or perform a
+new governed cleanup/retry. This keeps an intentional abandonment or completed history from being
+mistaken for permission to continue.
+
 The ownership classifier is read-only. Only the non-model carrier publisher receives an App token
 for contents/issues/pull-request writes, and the fail-closed notifier receives issue-write only.
 Neither receives Actions-write or model credentials. A separate read-only
