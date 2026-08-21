@@ -191,9 +191,11 @@ jobs:
           fi
           prior_jobs_available=false
           current_run_id="${{ github.run_id }}"
+          current_policy_matches=false
           if [ "$reuse_outcome" = "reuse-evidence" ] &&
              [[ "$reuse_prior_run_id" =~ ^[0-9]+$ ]] &&
              [ "$reuse_prior_run_id" -lt "$current_run_id" ] &&
+             gh api "repos/${{ github.repository }}/actions/runs/$current_run_id" > /tmp/current-run.json &&
              gh api "repos/${{ github.repository }}/actions/runs/$reuse_prior_run_id" > /tmp/prior-run.json; then
             prior_run_valid=$(jq -r \
               --argjson run_id "$reuse_prior_run_id" \
@@ -219,9 +221,14 @@ jobs:
                 prior_jobs_available=true
               fi
             fi
+            current_policy_matches=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py policy \
+              --current-run-file /tmp/current-run.json \
+              --prior-run-file /tmp/prior-run.json || echo "false")
           fi
           if [ "$reuse_outcome" = "reuse-evidence" ]; then
-            if [ "$prior_jobs_available" = "true" ] && [ "$current_ci_result" = "success" ]; then
+            if [ "$prior_jobs_available" = "true" ] &&
+               [ "$current_policy_matches" = "true" ] &&
+               [ "$current_ci_result" = "success" ]; then
               checks_ok=$(python3 karsift-ai-infra/config/merge-gate-reuse-checks.py checks \
                 --pr-checks-file /tmp/pr-checks.json \
                 --prior-jobs-file /tmp/prior-jobs.json \
@@ -407,6 +414,74 @@ jobs:
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      - name: Publish immutable reuse transition attestation
+        if: inputs.reuse_outcome == 'reuse-evidence'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ needs.report-status.outputs.base_sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          POLICY_SHA: ${{ job.workflow_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PRIOR_RUN_ID: ${{ inputs.reuse_prior_run_id }}
+          READY_RUN_ID: ${{ github.run_id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$POLICY_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$PRIOR_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+             ! [[ "$READY_RUN_ID" =~ ^[1-9][0-9]*$ ]] ||
+             [ "$PRIOR_RUN_ID" -ge "$READY_RUN_ID" ] ||
+             [ -z "$HEAD_REF" ] || [ -z "$REPOSITORY" ]; then
+            echo "Reuse transition inputs are malformed; refusing to attest or merge." >&2
+            exit 1
+          fi
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefName,headRefOid,baseRefOid,state,isDraft)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             ! jq -e '(.isDraft | type) == "boolean" and .isDraft == false' >/dev/null <<<"$live_pair" ||
+             [ "$(jq -r .headRefName <<<"$live_pair")" != "$HEAD_REF" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR identity changed before reuse attestation; refusing stale evidence." >&2
+            exit 1
+          fi
+          header='**Ready-for-review reuse — pre-merge attestation**'
+          body=$(printf '%s\n' \
+            "$header" \
+            "repository: \`$REPOSITORY\`" \
+            "pr_number: \`$PR_NUMBER\`" \
+            "head_ref: \`$HEAD_REF\`" \
+            "head_sha: \`$EXPECTED_HEAD_SHA\`" \
+            "base_sha: \`$EXPECTED_BASE_SHA\`" \
+            "ready_run_id: \`$READY_RUN_ID\`" \
+            "prior_run_id: \`$PRIOR_RUN_ID\`" \
+            "policy_sha: \`$POLICY_SHA\`" \
+            '' \
+            'This App-authored record binds the optimized transition before merge.')
+          comments=$(gh api --paginate --slurp \
+            "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100")
+          matching_headers=$(jq -r --arg header "$header" \
+            '[.[][] | select(
+              .user.login == "karsift-ai-infra-bot[bot]" and
+              .user.type == "Bot" and
+              (.body | startswith($header))
+            )] | length' <<<"$comments")
+          exact_matches=$(jq -r --arg body "$body" \
+            '[.[][] | select(
+              .user.login == "karsift-ai-infra-bot[bot]" and
+              .user.type == "Bot" and .body == $body
+            )] | length' <<<"$comments")
+          if [ "$matching_headers" = "0" ]; then
+            jq -n --arg body "$body" '{body: $body}' |
+              gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --input - >/dev/null
+          elif [ "$matching_headers" != "1" ] || [ "$exact_matches" != "1" ]; then
+            echo "Reuse transition attestation is conflicting or ambiguous; refusing to merge." >&2
+            exit 1
+          fi
 
       # The App token is essential: a merge made with github.token does not
       # emit the pull_request:closed event that starts adopt.yml.

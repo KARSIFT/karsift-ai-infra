@@ -29,12 +29,29 @@ if RUNNER_SPEC is None or RUNNER_SPEC.loader is None:
 runner = module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(runner)
 
+VERIFY_RUNNER_SPEC = spec_from_file_location(
+    "verify_ready_for_review_reuse_runner",
+    CONFIG / "verify-ready-for-review-reuse-runner.py",
+)
+if VERIFY_RUNNER_SPEC is None or VERIFY_RUNNER_SPEC.loader is None:
+    raise AssertionError("cannot load ready_for_review proof runner")
+verify_runner = module_from_spec(VERIFY_RUNNER_SPEC)
+VERIFY_RUNNER_SPEC.loader.exec_module(verify_runner)
+
 
 HEAD = "a" * 40
 BASE = "b" * 40
+POLICY = "d" * 40
 AGENT_REF = "agent/voc-104-voc-104-t00"
 PLAN_REF = "plan/voc-104-ready-for-review-reruns-unchanged-exact-sha-ci"
 PACKAGE = "specs/changes/VOC-104-ready-for-review-reruns-unchanged-exact-sha-ci"
+
+
+def policy_refs(sha=POLICY):
+    return [
+        {"path": f"{path}@main", "ref": "refs/heads/main", "sha": sha}
+        for path in sorted(policy.POLICY_WORKFLOW_PATHS)
+    ]
 
 
 def pipeline_run(
@@ -50,6 +67,7 @@ def pipeline_run(
     status="completed",
     conclusion="success",
     duplicate_ci=False,
+    policy_sha=POLICY,
 ):
     publisher_name = (
         policy.PLAN_PUBLISHER_JOB
@@ -72,6 +90,7 @@ def pipeline_run(
         status=status,
         conclusion=conclusion,
         jobs=tuple(jobs),
+        policy_sha=policy_sha,
     )
 
 
@@ -96,6 +115,7 @@ def review_comment(
     login=None,
     comment_id=1,
     created_at="2026-08-21T00:00:00Z",
+    pipeline_run_id=100,
 ):
     identity = [f"package_path: `{PACKAGE}`"] if plan else [
         "task_id: `VOC-104-T00`",
@@ -114,9 +134,46 @@ def review_comment(
                 f"**Independent verification - bound to commit `{HEAD}`**",
                 *identity,
                 f"base_sha: `{BASE}`",
-                f"pipeline_run_id: `100`",
+                f"pipeline_run_id: `{pipeline_run_id}`",
                 "",
                 f"VERDICT: {verdict}",
+            ]
+        ),
+    }
+
+
+def transition_attestation(
+    *,
+    repository="KARSIFT/example",
+    pr_number=9,
+    head_ref=AGENT_REF,
+    head_sha=HEAD,
+    base_sha=BASE,
+    ready_run_id=300,
+    prior_run_id=100,
+    policy_sha=POLICY,
+    login=None,
+):
+    return {
+        "id": 20,
+        "created_at": "2026-08-21T09:59:00Z",
+        "user": {
+            "login": login or policy.TRUSTED_BOT_LOGIN,
+            "type": "Bot" if login is None else "User",
+        },
+        "body": "\n".join(
+            [
+                verifier.REUSE_ATTESTATION_HEADER,
+                f"repository: `{repository}`",
+                f"pr_number: `{pr_number}`",
+                f"head_ref: `{head_ref}`",
+                f"head_sha: `{head_sha}`",
+                f"base_sha: `{base_sha}`",
+                f"ready_run_id: `{ready_run_id}`",
+                f"prior_run_id: `{prior_run_id}`",
+                f"policy_sha: `{policy_sha}`",
+                "",
+                "This App-authored record binds the optimized transition before merge.",
             ]
         ),
     }
@@ -139,6 +196,7 @@ def decide(**overrides):
             {"name": "ready-for-review-reuse / decide", "state": "PENDING"},
         ],
         "current_run_id": 200,
+        "current_policy_sha": POLICY,
         "result_path_exists": False,
     }
     values.update(overrides)
@@ -195,10 +253,37 @@ class ReuseDecisionTests(unittest.TestCase):
             pipeline_run(duplicate_ci=True),
             pipeline_run(ci="failure"),
             pipeline_run(publisher="skipped"),
+            pipeline_run(policy_sha="e" * 40),
         )
         for run in bad_runs:
             with self.subTest(run=run):
                 self.assertEqual(decide(pipeline_runs=[run]).outcome, "full-path")
+
+    def test_missing_or_changed_current_policy_revision_never_reuses(self):
+        self.assertEqual(
+            decide(current_policy_sha="").outcome,
+            "fail-closed-to-full-path",
+        )
+        self.assertEqual(
+            decide(current_policy_sha="e" * 40).outcome,
+            "full-path",
+        )
+
+    def test_shared_policy_revision_requires_one_complete_immutable_set(self):
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": policy_refs()}),
+            POLICY,
+        )
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": policy_refs()[:-1]}),
+            "",
+        )
+        mixed = policy_refs()
+        mixed[0] = {**mixed[0], "sha": "e" * 40}
+        self.assertEqual(
+            policy.shared_policy_sha({"referenced_workflows": mixed}),
+            "",
+        )
 
     def test_only_trusted_exact_identity_comment_qualifies(self):
         self.assertEqual(decide(comments=[]).outcome, "full-path")
@@ -569,6 +654,7 @@ class ProofVerifierTests(unittest.TestCase):
         prs=None,
         event="pull_request",
         base_sha=BASE,
+        policy_sha=POLICY,
     ):
         return {
             "id": run_id,
@@ -581,9 +667,21 @@ class ProofVerifierTests(unittest.TestCase):
             "status": "completed",
             "conclusion": "success",
             "pull_requests": [] if prs is None else prs,
+            "referenced_workflows": policy_refs(policy_sha),
         }
 
-    def test_empty_pull_request_array_is_bound_by_exact_head_and_branch(self):
+    def test_empty_pull_request_array_requires_authenticated_attestations(self):
+        unattested = verifier.verify_ready_run(
+            run=self.run_metadata(),
+            repository="KARSIFT/example",
+            pr_number=9,
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            expected_head_ref=AGENT_REF,
+            source_pr=self.source_pr(),
+        )
+        self.assertFalse(unattested.ok)
+        self.assertEqual(unattested.reason, "ready_run_pr_binding_missing")
         ready = verifier.verify_ready_run(
             run=self.run_metadata(),
             repository="KARSIFT/example",
@@ -592,6 +690,7 @@ class ProofVerifierTests(unittest.TestCase):
             expected_base_sha=BASE,
             expected_head_ref=AGENT_REF,
             source_pr=self.source_pr(),
+            association_attested=True,
         )
         self.assertTrue(ready.ok)
         prior = verifier.verify_prior_run(
@@ -604,6 +703,7 @@ class ProofVerifierTests(unittest.TestCase):
             prior_run_id=100,
             ready_run_id=300,
             source_pr=self.source_pr(),
+            association_attested=True,
         )
         self.assertTrue(prior.ok)
         proof_head = "c" * 40
@@ -614,6 +714,52 @@ class ProofVerifierTests(unittest.TestCase):
             ).ok
         )
         self.assertNotEqual(proof_head, HEAD)
+
+    def test_transition_attestation_binds_every_identity_field_and_is_unique(self):
+        kwargs = {
+            "comments": [transition_attestation()],
+            "repository": "KARSIFT/example",
+            "pr_number": 9,
+            "expected_head_ref": AGENT_REF,
+            "expected_head_sha": HEAD,
+            "expected_base_sha": BASE,
+            "ready_run_id": 300,
+            "prior_run_id": 100,
+            "policy_sha": POLICY,
+        }
+        self.assertTrue(verifier.verify_transition_attestation(**kwargs).ok)
+        for field, value in (
+            ("repository", "KARSIFT/other"),
+            ("pr_number", 10),
+            ("expected_head_ref", "agent/other"),
+            ("expected_head_sha", "c" * 40),
+            ("expected_base_sha", "c" * 40),
+            ("ready_run_id", 301),
+            ("prior_run_id", 99),
+            ("policy_sha", "e" * 40),
+        ):
+            with self.subTest(field=field):
+                changed = {**kwargs, field: value}
+                self.assertFalse(
+                    verifier.verify_transition_attestation(**changed).ok
+                )
+        self.assertFalse(
+            verifier.verify_transition_attestation(
+                **{**kwargs, "comments": [transition_attestation(), transition_attestation()]}
+            ).ok
+        )
+        conflicting = transition_attestation()
+        conflicting["body"] += "\npr_number: `10`"
+        self.assertFalse(
+            verifier.verify_transition_attestation(
+                **{**kwargs, "comments": [transition_attestation(), conflicting]}
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_transition_attestation(
+                **{**kwargs, "comments": [transition_attestation(login="attacker")]}
+            ).ok
+        )
 
     def test_wrong_branch_path_pr_or_same_run_is_rejected(self):
         self.assertFalse(
@@ -817,6 +963,121 @@ class ProofVerifierTests(unittest.TestCase):
             ).ok
         )
 
+    def test_ready_and_prior_policy_revisions_must_match(self):
+        self.assertTrue(
+            verifier.verify_policy_lineage(
+                ready_run=self.run_metadata(),
+                prior_run=self.run_metadata(run_id=100),
+            ).ok
+        )
+        mismatch = verifier.verify_policy_lineage(
+            ready_run=self.run_metadata(),
+            prior_run=self.run_metadata(run_id=100, policy_sha="e" * 40),
+        )
+        self.assertFalse(mismatch.ok)
+        self.assertEqual(mismatch.reason, "policy_revision_mismatch")
+
+    def test_proof_recomputes_the_latest_eligible_prior_run(self):
+        runs = [
+            self.run_metadata(run_id=100),
+            self.run_metadata(run_id=150),
+            self.run_metadata(run_id=175, policy_sha="e" * 40),
+            self.run_metadata(run_id=300),
+        ]
+
+        class FakeApi:
+            repository = "KARSIFT/example"
+
+            def gh(self, args):
+                endpoint = args[-1]
+                if "actions/runs?event=pull_request" in endpoint:
+                    return json.dumps(
+                        {"total_count": len(runs), "workflow_runs": runs}
+                    )
+                match = re.search(r"actions/runs/([0-9]+)/jobs", endpoint)
+                if match:
+                    run_id = int(match.group(1))
+                    publisher = (
+                        "skipped" if run_id == 300 else "success"
+                    )
+                    return json.dumps(
+                        {
+                            "total_count": 2,
+                            "jobs": [
+                                {"name": policy.REQUIRED_CI_JOB, "conclusion": "success"},
+                                {
+                                    "name": policy.AGENT_PUBLISHER_JOB,
+                                    "conclusion": publisher,
+                                },
+                            ],
+                        }
+                    )
+                raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+        chosen = verify_runner.selected_prior_run(
+            FakeApi(),
+            pr_number=9,
+            head_sha=HEAD,
+            base_sha=BASE,
+            head_ref=AGENT_REF,
+            ready_run_id=300,
+            ready_policy_sha=POLICY,
+            comments=[
+                review_comment(comment_id=1),
+                review_comment(
+                    comment_id=2,
+                    created_at="2026-08-21T00:01:00Z",
+                    pipeline_run_id=150,
+                ),
+            ],
+            task_id="VOC-104-T00",
+            package_path=PACKAGE,
+            authority_issue="875",
+        )
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen.run_id, 150)
+
+    def test_latest_prior_recomputation_rejects_cross_pr_empty_association(self):
+        runs = [self.run_metadata(run_id=100), self.run_metadata(run_id=150)]
+
+        class FakeApi:
+            repository = "KARSIFT/example"
+
+            def gh(self, args):
+                endpoint = args[-1]
+                if "actions/runs?event=pull_request" in endpoint:
+                    return json.dumps({"total_count": 2, "workflow_runs": runs})
+                match = re.search(r"actions/runs/([0-9]+)/jobs", endpoint)
+                if match:
+                    return json.dumps(
+                        {
+                            "total_count": 2,
+                            "jobs": [
+                                {"name": policy.REQUIRED_CI_JOB, "conclusion": "success"},
+                                {"name": policy.AGENT_PUBLISHER_JOB, "conclusion": "success"},
+                            ],
+                        }
+                    )
+                raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+        # Only run 100 has an App-authored review comment on this PR. Run 150
+        # may share the branch/head with a later PR but has no immutable link.
+        chosen = verify_runner.selected_prior_run(
+            FakeApi(),
+            pr_number=9,
+            head_sha=HEAD,
+            base_sha=BASE,
+            head_ref=AGENT_REF,
+            ready_run_id=300,
+            ready_policy_sha=POLICY,
+            comments=[review_comment()],
+            task_id="VOC-104-T00",
+            package_path=PACKAGE,
+            authority_issue="875",
+        )
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen.run_id, 100)
+
     def test_ready_job_requires_workflow_controlled_action_marker(self):
         jobs = [
             {
@@ -907,6 +1168,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("prior_jobs_available=true", merge)
         self.assertIn('current_ci_result="${{ inputs.current_ci_result }}"', merge)
         self.assertIn('[ "$current_ci_result" = "success" ]', merge)
+        self.assertIn("merge-gate-reuse-checks.py policy", merge)
+        self.assertIn('[ "$current_policy_matches" = "true" ]', merge)
         self.assertGreaterEqual(
             merge.count("merge-gate-reuse-checks.py checks"),
             2,

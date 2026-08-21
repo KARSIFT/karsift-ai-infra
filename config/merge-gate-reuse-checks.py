@@ -11,18 +11,37 @@ from ready_for_review_reuse import (
     compute_checks_ok,
     compute_checks_ok_with_reuse,
     publisher_check_ok,
+    shared_policy_sha,
 )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["checks", "publisher"])
-    parser.add_argument("--pr-checks-file", required=True)
+    parser.add_argument("mode", choices=["checks", "publisher", "policy"])
+    parser.add_argument("--pr-checks-file", default="")
     parser.add_argument("--prior-jobs-file", default="")
-    parser.add_argument("--head-ref", required=True)
+    parser.add_argument("--current-run-file", default="")
+    parser.add_argument("--prior-run-file", default="")
+    parser.add_argument("--head-ref", default="")
     parser.add_argument("--reuse-outcome", default="")
     args = parser.parse_args()
 
+    if args.mode == "policy":
+        if not args.current_run_file or not args.prior_run_file:
+            raise ValueError("missing policy run payload")
+        current_run = json.loads(
+            open(args.current_run_file, encoding="utf-8").read()
+        )
+        prior_run = json.loads(open(args.prior_run_file, encoding="utf-8").read())
+        if not isinstance(current_run, dict) or not isinstance(prior_run, dict):
+            raise ValueError("invalid policy run payload")
+        current_sha = shared_policy_sha(current_run)
+        prior_sha = shared_policy_sha(prior_run)
+        print("true" if current_sha and current_sha == prior_sha else "false")
+        return 0
+
+    if not args.pr_checks_file or not args.head_ref:
+        raise ValueError("missing check evaluation input")
     pr_checks = json.loads(open(args.pr_checks_file, encoding="utf-8").read())
     prior_jobs: list[dict] = []
     if args.prior_jobs_file:

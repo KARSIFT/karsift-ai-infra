@@ -269,13 +269,23 @@ non-`ready_for_review` activity selects the normal full CI and review path
 Only App-signed publisher comments qualify; human or implementer text never authorizes reuse.
 A qualifying publisher record binds its exact pipeline run ID as well as the base/head and
 package/task identity, preventing evidence from different base revisions from being combined.
+Reuse also requires GitHub's authenticated `referenced_workflows` metadata to show that the
+eligibility helper, CI, task review, plan review, and merge gate all resolved to one identical
+shared-infrastructure commit in both runs. A mutable `@main` policy change therefore forces the
+full path even when the application base/head did not change. Merge-gate repeats this revision
+comparison independently before it can authorize merge.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
 from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
 the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while
 the source PR number/base/head/ref bind both source runs. The ready run must also contain the
 workflow-controlled `decide (ready_for_review)` job marker. If GitHub has cleared a closed run's
-`pull_requests` array, the verifier requires the authenticated REST source-PR object to match the
-same repository, number, base, head, and ref instead of treating the missing association as proof.
+`pull_requests` array, the verifier never infers ownership from a matching branch/head alone. A
+prior run is admitted only when an App-authored review comment on that exact PR binds its run ID,
+base/head, and package/task identity. Before optimized auto-merge, merge-gate also publishes one
+App-authored transition attestation binding repository, PR number, branch, base/head, ready run,
+selected prior run, and shared-policy SHA; the post-merge verifier requires that unique record.
+The verifier also recomputes the latest eligible prior run strictly before the ready run and
+requires it to equal the declared prior run ID, so proof cannot substitute a different valid run.
 
 Callers must pass those exact base/head inputs to plan review, task review,
 remediation, and merge-gate. Every reusable-workflow schema keeps them optional

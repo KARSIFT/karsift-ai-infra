@@ -15,12 +15,17 @@ from verify_ready_for_review_reuse import (
     verify_current_ref,
     verify_prior_jobs,
     verify_prior_run,
+    verify_policy_lineage,
     verify_ready_jobs,
     verify_ready_run,
+    verify_transition_attestation,
 )
 from ready_for_review_reuse import (
+    PipelineRunSummary,
     classify_verdict,
     parse_identity_lines,
+    select_prior_run,
+    shared_policy_sha,
     trusted_review_comment,
 )
 
@@ -93,6 +98,100 @@ def load_comments(api: GitHubApi, pr_number: int) -> list[dict]:
     return [comment for page in payload for comment in page]
 
 
+def selected_prior_run(
+    api: GitHubApi,
+    *,
+    pr_number: int,
+    head_sha: str,
+    base_sha: str,
+    head_ref: str,
+    ready_run_id: int,
+    ready_policy_sha: str,
+    comments: list[dict],
+    task_id: str,
+    package_path: str,
+    authority_issue: str,
+) -> PipelineRunSummary | None:
+    payload = json.loads(
+        api.gh(
+            [
+                "api",
+                f"/repos/{api.repository}/actions/runs?event=pull_request&head_sha={head_sha}&per_page=100",
+            ]
+        )
+    )
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if (
+        not isinstance(runs, list)
+        or int(payload.get("total_count") or 0) > len(runs)
+        or len(runs) > 100
+    ):
+        raise VerificationError("run_set_incomplete")
+    summaries: list[PipelineRunSummary] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            raise VerificationError("run_set_invalid")
+        associations = run.get("pull_requests") or []
+        if not isinstance(associations, list):
+            raise VerificationError("run_associations_invalid")
+        candidate_base_sha = ""
+        if associations:
+            matches = [
+                pr
+                for pr in associations
+                if pr.get("number") == pr_number
+                and str((pr.get("base") or {}).get("sha") or "").lower()
+                == base_sha.lower()
+                and str((pr.get("head") or {}).get("sha") or "").lower()
+                == head_sha.lower()
+            ]
+            if len(matches) != 1:
+                continue
+            candidate_base_sha = str(
+                (matches[0].get("base") or {}).get("sha") or ""
+            ).lower()
+        run_id = int(run.get("id") or 0)
+        if run_id <= 0:
+            continue
+        if not associations:
+            verdict = trusted_review_comment(
+                comments=comments,
+                head_sha=head_sha,
+                base_sha=base_sha,
+                task_id=task_id,
+                package_path=package_path,
+                authority_issue=authority_issue,
+                pipeline_run_id=run_id,
+            )
+            if not verdict:
+                continue
+            # This value is admitted only after the exact base line was found
+            # in the App-authored comment on this specific PR.
+            candidate_base_sha = base_sha.lower()
+        summaries.append(
+            PipelineRunSummary(
+                run_id=run_id,
+                workflow_path=str(run.get("path") or ""),
+                event=str(run.get("event") or ""),
+                head_sha=str(run.get("head_sha") or "").lower(),
+                head_branch=str(run.get("head_branch") or ""),
+                base_sha=candidate_base_sha,
+                status=str(run.get("status") or ""),
+                conclusion=str(run.get("conclusion") or "") or None,
+                jobs=tuple(load_jobs(api, run_id)),
+                policy_sha=shared_policy_sha(run),
+            )
+        )
+    return select_prior_run(
+        runs=summaries,
+        head_ref=head_ref,
+        expected_head_sha=head_sha,
+        expected_base_sha=base_sha,
+        current_run_id=ready_run_id,
+        expected_policy_sha=ready_policy_sha,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
@@ -148,12 +247,35 @@ def main() -> int:
             )
         )
 
+        comments = load_comments(api, args.source_pr_number)
+        identity = parse_identity_lines(
+            body=str(source_pr.get("body") or ""),
+            head_ref=head_ref,
+        )
+        if identity is None:
+            raise VerificationError("identity_metadata_mismatch")
+        task_id, package_path, authority_issue, _ = identity
+
         ready_run = json.loads(
             api.gh(
                 [
                     "api",
                     f"/repos/{args.repository}/actions/runs/{args.ready_run_id}",
                 ]
+            )
+        )
+        ready_policy_sha = shared_policy_sha(ready_run)
+        require(
+            verify_transition_attestation(
+                comments=comments,
+                repository=args.repository,
+                pr_number=args.source_pr_number,
+                expected_head_ref=head_ref,
+                expected_head_sha=source_head,
+                expected_base_sha=source_base,
+                ready_run_id=args.ready_run_id,
+                prior_run_id=args.prior_run_id,
+                policy_sha=ready_policy_sha,
             )
         )
         require(
@@ -165,6 +287,7 @@ def main() -> int:
                 expected_base_sha=source_base,
                 expected_head_ref=head_ref,
                 source_pr=source_pr,
+                association_attested=True,
             )
         )
         require(
@@ -182,6 +305,17 @@ def main() -> int:
                 ]
             )
         )
+        verdict_body = trusted_review_comment(
+            comments=comments,
+            head_sha=source_head,
+            base_sha=source_base,
+            task_id=task_id,
+            package_path=package_path,
+            authority_issue=authority_issue,
+            pipeline_run_id=args.prior_run_id,
+        )
+        if not verdict_body:
+            raise VerificationError("prior_review_binding_missing")
         require(
             verify_prior_run(
                 run=prior_run,
@@ -193,6 +327,7 @@ def main() -> int:
                 prior_run_id=args.prior_run_id,
                 ready_run_id=args.ready_run_id,
                 source_pr=source_pr,
+                association_attested=True,
             )
         )
         require(
@@ -201,24 +336,22 @@ def main() -> int:
                 head_ref=head_ref,
             )
         )
-        identity = parse_identity_lines(
-            body=str(source_pr.get("body") or ""),
-            head_ref=head_ref,
-        )
-        if identity is None:
-            raise VerificationError("identity_metadata_mismatch")
-        task_id, package_path, authority_issue, _ = identity
-        verdict_body = trusted_review_comment(
-            comments=load_comments(api, args.source_pr_number),
+        require(verify_policy_lineage(ready_run=ready_run, prior_run=prior_run))
+        chosen_prior = selected_prior_run(
+            api,
+            pr_number=args.source_pr_number,
             head_sha=source_head,
             base_sha=source_base,
+            head_ref=head_ref,
+            ready_run_id=args.ready_run_id,
+            ready_policy_sha=ready_policy_sha,
+            comments=comments,
             task_id=task_id,
             package_path=package_path,
             authority_issue=authority_issue,
-            pipeline_run_id=args.prior_run_id,
         )
-        if not verdict_body:
-            raise VerificationError("prior_review_binding_missing")
+        if chosen_prior is None or chosen_prior.run_id != args.prior_run_id:
+            raise VerificationError("selected_prior_run_mismatch")
         if classify_verdict(verdict_body) not in {"PASS", "PASS_WITH_FINDINGS"}:
             raise VerificationError("prior_review_not_passing")
     except (

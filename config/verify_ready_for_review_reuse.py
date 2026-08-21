@@ -12,16 +12,100 @@ from ready_for_review_reuse import (
     REQUIRED_CI_JOB,
     _job_conclusion,
     _job_name,
+    shared_policy_sha,
+    TRUSTED_BOT_LOGIN,
 )
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+REUSE_ATTESTATION_HEADER = "**Ready-for-review reuse — pre-merge attestation**"
 
 
 @dataclass(frozen=True)
 class VerificationResult:
     ok: bool
     reason: str = ""
+
+
+def transition_attestation_body(
+    *,
+    repository: str,
+    pr_number: int,
+    expected_head_ref: str,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    ready_run_id: int,
+    prior_run_id: int,
+    policy_sha: str,
+) -> str:
+    return "\n".join(
+        [
+            REUSE_ATTESTATION_HEADER,
+            f"repository: `{repository}`",
+            f"pr_number: `{pr_number}`",
+            f"head_ref: `{expected_head_ref}`",
+            f"head_sha: `{expected_head_sha.lower()}`",
+            f"base_sha: `{expected_base_sha.lower()}`",
+            f"ready_run_id: `{ready_run_id}`",
+            f"prior_run_id: `{prior_run_id}`",
+            f"policy_sha: `{policy_sha.lower()}`",
+            "",
+            "This App-authored record binds the optimized transition before merge.",
+        ]
+    )
+
+
+def verify_transition_attestation(
+    *,
+    comments: list[dict],
+    repository: str,
+    pr_number: int,
+    expected_head_ref: str,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    ready_run_id: int,
+    prior_run_id: int,
+    policy_sha: str,
+) -> VerificationResult:
+    """Require one App-authored, PR-local binding created before auto-merge."""
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+        or "\n" in expected_head_ref
+        or not expected_head_ref
+        or not SHA_RE.fullmatch(expected_head_sha.lower())
+        or not SHA_RE.fullmatch(expected_base_sha.lower())
+        or not SHA_RE.fullmatch(policy_sha.lower())
+        or pr_number <= 0
+        or prior_run_id <= 0
+        or ready_run_id <= prior_run_id
+    ):
+        return VerificationResult(False, "transition_attestation_inputs_invalid")
+    expected_body = transition_attestation_body(
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_ref=expected_head_ref,
+        expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha,
+        ready_run_id=ready_run_id,
+        prior_run_id=prior_run_id,
+        policy_sha=policy_sha,
+    )
+    matching_headers = []
+    for comment in comments:
+        if not isinstance(comment, dict):
+            return VerificationResult(False, "transition_attestation_malformed")
+        user = comment.get("user") or {}
+        body = str(comment.get("body") or "")
+        if (
+            user.get("login") != TRUSTED_BOT_LOGIN
+            or user.get("type") != "Bot"
+            or not body.startswith(REUSE_ATTESTATION_HEADER)
+        ):
+            continue
+        matching_headers.append(body)
+    if len(matching_headers) != 1 or matching_headers[0] != expected_body:
+        return VerificationResult(False, "transition_attestation_missing_or_ambiguous")
+    return VerificationResult(True)
 
 
 def verify_source_pr(
@@ -68,6 +152,7 @@ def verify_ready_run(
     expected_base_sha: str,
     expected_head_ref: str,
     source_pr: dict,
+    association_attested: bool = False,
 ) -> VerificationResult:
     source_binding = verify_source_pr(
         pr=source_pr,
@@ -104,9 +189,8 @@ def verify_ready_run(
         ]
         if len(matches) != 1:
             return VerificationResult(False, "wrong_pull_request")
-    # GitHub clears workflow-run PR associations after some PRs close. The
-    # exact REST PR object above is the authenticated fallback binding in that
-    # state; it must still match repository, number, base, head, and head ref.
+    elif not association_attested:
+        return VerificationResult(False, "ready_run_pr_binding_missing")
     return VerificationResult(True)
 
 
@@ -189,6 +273,16 @@ def verify_ready_jobs(
     return VerificationResult(True)
 
 
+def verify_policy_lineage(*, ready_run: dict, prior_run: dict) -> VerificationResult:
+    ready_policy = shared_policy_sha(ready_run)
+    prior_policy = shared_policy_sha(prior_run)
+    if not ready_policy or not prior_policy:
+        return VerificationResult(False, "policy_revision_missing")
+    if ready_policy != prior_policy:
+        return VerificationResult(False, "policy_revision_mismatch")
+    return VerificationResult(True)
+
+
 def verify_prior_run(
     *,
     run: dict,
@@ -200,6 +294,7 @@ def verify_prior_run(
     prior_run_id: int,
     ready_run_id: int,
     source_pr: dict,
+    association_attested: bool = False,
 ) -> VerificationResult:
     source_binding = verify_source_pr(
         pr=source_pr,
@@ -240,6 +335,8 @@ def verify_prior_run(
         ]
         if len(matches) != 1:
             return VerificationResult(False, "prior_wrong_pull_request")
+    elif not association_attested:
+        return VerificationResult(False, "prior_run_pr_binding_missing")
     return VerificationResult(True)
 
 

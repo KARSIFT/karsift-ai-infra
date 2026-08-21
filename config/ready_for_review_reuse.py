@@ -36,6 +36,15 @@ PACKAGE_RE = re.compile(
     r"^specs/changes/[A-Z][A-Z0-9]*-[0-9]+-[a-z0-9][a-z0-9-]*$"
 )
 TASK_RE = re.compile(r"^[A-Z][A-Z0-9]*-[0-9]+-T[0-9]+[a-z]?$")
+POLICY_WORKFLOW_PATHS = frozenset(
+    {
+        "KARSIFT/karsift-ai-infra/.github/workflows/ci.yml",
+        "KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml",
+        "KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml",
+        "KARSIFT/karsift-ai-infra/.github/workflows/ready-for-review-reuse.yml",
+        "KARSIFT/karsift-ai-infra/.github/workflows/review.yml",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +65,7 @@ class PipelineRunSummary:
     status: str
     conclusion: str | None
     jobs: tuple[dict, ...]
+    policy_sha: str
 
 
 def _normalize_sha(value: object) -> str:
@@ -63,6 +73,24 @@ def _normalize_sha(value: object) -> str:
         return ""
     lowered = value.lower()
     return lowered if SHA_RE.fullmatch(lowered) else ""
+
+
+def shared_policy_sha(run: dict) -> str:
+    """Return one immutable SHA for the complete reuse-policy workflow set."""
+    referenced = run.get("referenced_workflows")
+    if not isinstance(referenced, list):
+        return ""
+    matches: dict[str, list[str]] = {path: [] for path in POLICY_WORKFLOW_PATHS}
+    for workflow in referenced:
+        if not isinstance(workflow, dict):
+            return ""
+        path = str(workflow.get("path") or "").split("@", 1)[0]
+        if path in matches:
+            matches[path].append(_normalize_sha(workflow.get("sha")))
+    if any(len(shas) != 1 or not shas[0] for shas in matches.values()):
+        return ""
+    policy_shas = {shas[0] for shas in matches.values()}
+    return next(iter(policy_shas)) if len(policy_shas) == 1 else ""
 
 
 def _publisher_job(head_ref: str) -> str:
@@ -121,6 +149,7 @@ def prior_run_has_required_success(
     expected_head_sha: str,
     expected_base_sha: str,
     current_run_id: int,
+    expected_policy_sha: str,
 ) -> bool:
     if run.run_id <= 0 or run.run_id >= current_run_id:
         return False
@@ -133,6 +162,11 @@ def prior_run_has_required_success(
     if run.head_branch != head_ref:
         return False
     if _normalize_sha(run.base_sha) != _normalize_sha(expected_base_sha):
+        return False
+    if (
+        not _normalize_sha(expected_policy_sha)
+        or _normalize_sha(run.policy_sha) != _normalize_sha(expected_policy_sha)
+    ):
         return False
     if run.status != "completed" or run.conclusion != "success":
         return False
@@ -152,6 +186,7 @@ def select_prior_run(
     expected_head_sha: str,
     expected_base_sha: str,
     current_run_id: int,
+    expected_policy_sha: str,
 ) -> PipelineRunSummary | None:
     eligible = [
         run
@@ -162,6 +197,7 @@ def select_prior_run(
             expected_head_sha=expected_head_sha,
             expected_base_sha=expected_base_sha,
             current_run_id=current_run_id,
+            expected_policy_sha=expected_policy_sha,
         )
     ]
     if not eligible:
@@ -285,6 +321,7 @@ def evaluate_reuse_eligibility(
     pipeline_runs: list[PipelineRunSummary],
     pr_checks: list[dict],
     current_run_id: int,
+    current_policy_sha: str,
     result_path_exists: bool,
     evaluation_error: str = "",
 ) -> ReuseDecision:
@@ -304,6 +341,8 @@ def evaluate_reuse_eligibility(
         return ReuseDecision("fail-closed-to-full-path", "invalid_is_draft")
     if is_draft:
         return ReuseDecision("full-path", "still_draft")
+    if not _normalize_sha(current_policy_sha):
+        return ReuseDecision("fail-closed-to-full-path", "invalid_current_policy_sha")
     identity = parse_identity_lines(body=pr_body, head_ref=head_ref)
     if identity is None:
         return ReuseDecision("full-path", "identity_metadata_mismatch")
@@ -314,6 +353,7 @@ def evaluate_reuse_eligibility(
         expected_head_sha=live_head,
         expected_base_sha=live_base,
         current_run_id=current_run_id,
+        expected_policy_sha=current_policy_sha,
     )
     if prior_run is None:
         return ReuseDecision("full-path", "missing_prior_success")
