@@ -108,6 +108,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
         cls.plan = (ROOT / ".github/workflows/plan.yml").read_text()
         cls.review = (ROOT / ".github/workflows/review.yml").read_text()
+        cls.remediate = (ROOT / ".github/workflows/remediate.yml").read_text()
         cls.pipeline = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
@@ -711,6 +712,25 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@", publisher_job)
         self.assertIn("permission-issues: write", publisher_job)
         self.assertIn("PR base/head pair changed before verdict publication", publisher_job)
+        self.assertGreaterEqual(
+            publisher_job.count("GH_REPO: ${{ github.repository }}"),
+            2,
+            "clean validation and App publication must not depend on a checkout",
+        )
+
+    def test_review_error_retry_context_is_metadata_only(self):
+        review_error = self.remediate.split(
+            "- name: Attach review-job-error output as retry context",
+            1,
+        )[1].split("\n  retry:", 1)[0]
+        self.assertNotIn("/actions/jobs/", review_error)
+        self.assertNotIn("log_tail", review_error)
+        self.assertNotIn("--allow-escape-sequences", review_error)
+        self.assertIn('run_id: \\`$sanitized_run_id\\`', review_error)
+        self.assertIn('job_id: \\`$review_job_id\\`', review_error)
+        self.assertIn('job_name: \\`$review_job_name\\`', review_error)
+        self.assertIn('conclusion: \\`$review_job_conclusion\\`', review_error)
+        self.assertIn("No raw logs, model output, prompts", review_error)
 
     def test_non_agent_pr_cannot_enter_wake_path(self):
         class NoApiCalls:

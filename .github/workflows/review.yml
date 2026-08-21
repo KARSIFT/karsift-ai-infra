@@ -494,6 +494,7 @@ jobs:
       - name: Validate exact head, authority metadata, and verdict shape
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
           EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
           EXPECTED_PACKAGE_PATH: ${{ inputs.package_path }}
@@ -579,6 +580,7 @@ jobs:
       - name: Publish App-signed verification comment
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
           EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
           EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
