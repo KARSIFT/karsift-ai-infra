@@ -30,6 +30,7 @@ def verify_ready_run(
     repository: str,
     pr_number: int,
     expected_head_sha: str,
+    expected_base_sha: str,
     expected_head_ref: str,
 ) -> VerificationResult:
     if run.get("repository", {}).get("full_name") != repository:
@@ -45,8 +46,18 @@ def verify_ready_run(
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         return VerificationResult(False, "ready_run_not_successful")
     pull_requests = run.get("pull_requests") or []
-    if pull_requests and not any(pr.get("number") == pr_number for pr in pull_requests):
-        return VerificationResult(False, "wrong_pull_request")
+    if pull_requests:
+        matches = [
+            pr
+            for pr in pull_requests
+            if pr.get("number") == pr_number
+            and str((pr.get("base") or {}).get("sha") or "").lower()
+            == expected_base_sha.lower()
+            and str((pr.get("head") or {}).get("sha") or "").lower()
+            == expected_head_sha.lower()
+        ]
+        if len(matches) != 1:
+            return VerificationResult(False, "wrong_pull_request")
     return VerificationResult(True)
 
 
@@ -55,20 +66,28 @@ def verify_ready_jobs(
     jobs: list[dict],
     head_ref: str,
 ) -> VerificationResult:
-    ci_matches = [job for job in jobs if _job_name(job) == REQUIRED_CI_JOB]
+    ci_matches = [job for job in jobs if _job_name(job) == "ci"]
     publisher_name = (
-        AGENT_PUBLISHER_JOB if head_ref.startswith("agent/") else PLAN_PUBLISHER_JOB
+        "review" if head_ref.startswith("agent/") else "plan-review"
     )
     publisher_matches = [job for job in jobs if _job_name(job) == publisher_name]
     ci = ci_matches[0] if len(ci_matches) == 1 else None
     publisher = publisher_matches[0] if len(publisher_matches) == 1 else None
-    merge_gate = [job for job in jobs if _job_name(job).startswith("merge-gate")]
+    merge_report = [
+        job for job in jobs if _job_name(job) == "merge-gate / report-status"
+    ]
+    merge_auto = [job for job in jobs if _job_name(job) == "merge-gate / auto-merge"]
     if ci is None or _job_conclusion(ci) != "skipped":
         return VerificationResult(False, "ci_not_skipped")
     if publisher is None or _job_conclusion(publisher) != "skipped":
         return VerificationResult(False, "review_not_skipped")
-    if not merge_gate or any(_job_conclusion(job) != "success" for job in merge_gate):
+    if len(merge_report) != 1 or _job_conclusion(merge_report[0]) != "success":
         return VerificationResult(False, "merge_gate_not_successful")
+    if len(merge_auto) != 1 or _job_conclusion(merge_auto[0]) not in {
+        "success",
+        "skipped",
+    }:
+        return VerificationResult(False, "merge_gate_auto_invalid")
     reuse_jobs = [
         job
         for job in jobs
@@ -85,6 +104,7 @@ def verify_prior_run(
     repository: str,
     pr_number: int,
     expected_head_sha: str,
+    expected_base_sha: str,
     expected_head_ref: str,
     prior_run_id: int,
     ready_run_id: int,
@@ -106,8 +126,18 @@ def verify_prior_run(
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         return VerificationResult(False, "prior_run_not_successful")
     pull_requests = run.get("pull_requests") or []
-    if pull_requests and not any(pr.get("number") == pr_number for pr in pull_requests):
-        return VerificationResult(False, "prior_wrong_pull_request")
+    if pull_requests:
+        matches = [
+            pr
+            for pr in pull_requests
+            if pr.get("number") == pr_number
+            and str((pr.get("base") or {}).get("sha") or "").lower()
+            == expected_base_sha.lower()
+            and str((pr.get("head") or {}).get("sha") or "").lower()
+            == expected_head_sha.lower()
+        ]
+        if len(matches) != 1:
+            return VerificationResult(False, "prior_wrong_pull_request")
     return VerificationResult(True)
 
 

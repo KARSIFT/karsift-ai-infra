@@ -191,6 +191,7 @@ jobs:
             prior_run_valid=$(jq -r \
               --argjson run_id "$reuse_prior_run_id" \
               --arg head_sha "$head_sha" \
+              --arg base_sha "$base_sha" \
               --arg head_ref "$head_ref" \
               --argjson pr_number "$pr_number" \
               '.id == $run_id and .name == "pipeline" and
@@ -198,8 +199,10 @@ jobs:
                .event == "pull_request" and .head_sha == $head_sha and
                .head_branch == $head_ref and .status == "completed" and
                .conclusion == "success" and
-               (((.pull_requests // []) | length) == 0 or
-                any((.pull_requests // [])[]; .number == $pr_number))' \
+               ([.pull_requests[]? | select(
+                 .number == $pr_number and .base.sha == $base_sha and
+                 .head.sha == $head_sha
+               )] | length) == 1' \
               /tmp/prior-run.json || echo "false")
             if [ "$prior_run_valid" = "true" ] &&
                gh api "repos/${{ github.repository }}/actions/runs/$reuse_prior_run_id/jobs?per_page=100" > /tmp/prior-jobs.json; then
@@ -296,6 +299,10 @@ jobs:
 
           review_header="**Independent verification - bound to commit \`$head_sha\`**"
           base_line="base_sha: \`$base_sha\`"
+          run_line=""
+          if [ "$reuse_outcome" = "reuse-evidence" ]; then
+            run_line="pipeline_run_id: \`$reuse_prior_run_id\`"
+          fi
           verdict=$(gh api --paginate --slurp \
             "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
             | jq -r \
@@ -304,6 +311,7 @@ jobs:
               --arg package "$package_line" \
               --arg issue "$issue_line" \
               --arg base "$base_line" \
+              --arg run "$run_line" \
               '[.[][] | select(
                 .user.login == "karsift-ai-infra-bot[bot]" and
                 .user.type == "Bot" and
@@ -311,6 +319,7 @@ jobs:
                 ((.body | split("\n") | index($header)) != null) and
                 ((.body | split("\n") | index($package)) != null) and
                 ((.body | split("\n") | index($base)) != null) and
+                ($run == "" or ((.body | split("\n") | index($run)) != null)) and
                 ($task == "" or ((.body | split("\n") | index($task)) != null)) and
                 ($issue == "" or ((.body | split("\n") | index($issue)) != null))
               )] | sort_by(.created_at, .id) | last | .body // ""')

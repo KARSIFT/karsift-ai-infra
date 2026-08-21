@@ -28,6 +28,10 @@ on:
         description: Exact reviewed base SHA.
         required: true
         type: string
+      expected_proof_head_sha:
+        description: Exact evidence-carrier head SHA running this verifier.
+        required: true
+        type: string
 
 jobs:
   verify:
@@ -60,4 +64,5 @@ jobs:
             --pr-number "${{ inputs.pr_number }}" \
             --expected-head-sha "${{ inputs.expected_head_sha }}" \
             --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --expected-proof-head-sha "${{ inputs.expected_proof_head_sha }}" \
             --current-ref "${{ github.sha }}"

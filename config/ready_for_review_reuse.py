@@ -50,6 +50,7 @@ class PipelineRunSummary:
     event: str
     head_sha: str
     head_branch: str
+    base_sha: str
     status: str
     conclusion: str | None
     jobs: tuple[dict, ...]
@@ -85,11 +86,20 @@ def required_success_jobs(head_ref: str) -> tuple[str, ...]:
     return (REQUIRED_CI_JOB, publisher)
 
 
+def current_reusable_caller_jobs(head_ref: str) -> tuple[str, ...]:
+    if head_ref.startswith("agent/"):
+        return ("ci", "review")
+    if head_ref.startswith("plan/"):
+        return ("ci", "plan-review")
+    return ()
+
+
 def prior_run_has_required_success(
     *,
     run: PipelineRunSummary,
     head_ref: str,
     expected_head_sha: str,
+    expected_base_sha: str,
     current_run_id: int,
 ) -> bool:
     if run.run_id <= 0 or run.run_id >= current_run_id:
@@ -101,6 +111,8 @@ def prior_run_has_required_success(
     if _normalize_sha(run.head_sha) != _normalize_sha(expected_head_sha):
         return False
     if run.head_branch != head_ref:
+        return False
+    if _normalize_sha(run.base_sha) != _normalize_sha(expected_base_sha):
         return False
     if run.status != "completed" or run.conclusion != "success":
         return False
@@ -118,6 +130,7 @@ def select_prior_run(
     runs: list[PipelineRunSummary],
     head_ref: str,
     expected_head_sha: str,
+    expected_base_sha: str,
     current_run_id: int,
 ) -> PipelineRunSummary | None:
     eligible = [
@@ -127,6 +140,7 @@ def select_prior_run(
             run=run,
             head_ref=head_ref,
             expected_head_sha=expected_head_sha,
+            expected_base_sha=expected_base_sha,
             current_run_id=current_run_id,
         )
     ]
@@ -168,12 +182,14 @@ def trusted_review_comment(
     task_id: str,
     package_path: str,
     authority_issue: str,
+    pipeline_run_id: int,
 ) -> str:
     review_header = f"**Independent verification - bound to commit `{head_sha}`**"
     base_line = f"base_sha: `{base_sha}`"
     task_line = f"task_id: `{task_id}`" if task_id else ""
     package_line = f"package_path: `{package_path}`"
     issue_line = f"authority_issue: `{authority_issue}`" if authority_issue else ""
+    run_line = f"pipeline_run_id: `{pipeline_run_id}`"
     matches: list[tuple[str, int]] = []
     for comment in comments:
         user = comment.get("user") or {}
@@ -185,7 +201,7 @@ def trusted_review_comment(
         lines = body.splitlines()
         if review_header not in lines:
             continue
-        if package_line not in lines or base_line not in lines:
+        if package_line not in lines or base_line not in lines or run_line not in lines:
             continue
         if task_line and task_line not in lines:
             continue
@@ -236,6 +252,7 @@ def evaluate_reuse_eligibility(
     pr_body: str,
     comments: list[dict],
     pipeline_runs: list[PipelineRunSummary],
+    pr_checks: list[dict],
     current_run_id: int,
     result_path_exists: bool,
     evaluation_error: str = "",
@@ -264,6 +281,7 @@ def evaluate_reuse_eligibility(
         runs=pipeline_runs,
         head_ref=head_ref,
         expected_head_sha=live_head,
+        expected_base_sha=live_base,
         current_run_id=current_run_id,
     )
     if prior_run is None:
@@ -275,12 +293,15 @@ def evaluate_reuse_eligibility(
         task_id=task_id,
         package_path=package_path,
         authority_issue=authority_issue,
+        pipeline_run_id=prior_run.run_id,
     )
     if not verdict_body:
         return ReuseDecision("full-path", "missing_trusted_verdict")
     verdict_state = classify_verdict(verdict_body)
     if verdict_state not in {"PASS", "PASS_WITH_FINDINGS"}:
         return ReuseDecision("full-path", f"non_reusable_verdict:{verdict_state}")
+    if not pr_checks_allow_reuse(pr_checks=pr_checks, head_ref=head_ref):
+        return ReuseDecision("full-path", "non_green_pr_checks")
     if attestation_required(result_path_exists=result_path_exists):
         if not attestation_present(
             comments=comments,
@@ -295,6 +316,30 @@ def evaluate_reuse_eligibility(
     )
 
 
+def pr_checks_allow_reuse(*, pr_checks: list[dict], head_ref: str) -> bool:
+    """Require green rollup while allowing this decision's waiting caller jobs."""
+    reusable = set(current_reusable_caller_jobs(head_ref))
+    if not reusable or not pr_checks:
+        return False
+    current_names = {str(check.get("name") or "") for check in pr_checks}
+    if not reusable.issubset(current_names):
+        return False
+    for check in pr_checks:
+        name = str(check.get("name") or "")
+        state = str(check.get("state") or "").upper()
+        if (
+            name.startswith(MERGE_GATE_PREFIX)
+            or name.startswith(REMEDIATE_PREFIX)
+            or name.startswith("ready-for-review-reuse")
+        ):
+            continue
+        if name in reusable and state in {"SUCCESS", "SKIPPED", "PENDING"}:
+            continue
+        if state not in {"SUCCESS", "SKIPPED"}:
+            return False
+    return True
+
+
 def compute_checks_ok_with_reuse(
     *,
     pr_checks: list[dict],
@@ -304,22 +349,23 @@ def compute_checks_ok_with_reuse(
 ) -> bool:
     if reuse_outcome != "reuse-evidence":
         return compute_checks_ok(pr_checks)
-    reusable_skips = set(required_success_jobs(head_ref))
-    if not reusable_skips:
+    prior_required = set(required_success_jobs(head_ref))
+    current_reusable = set(current_reusable_caller_jobs(head_ref))
+    if not prior_required or not current_reusable:
         return False
-    for required in reusable_skips:
+    for required in prior_required:
         matches = [job for job in prior_jobs if _job_name(job) == required]
         if len(matches) != 1 or _job_conclusion(matches[0]) != "success":
             return False
     current_names = {str(check.get("name") or "") for check in pr_checks}
-    if not reusable_skips.issubset(current_names):
+    if not current_reusable.issubset(current_names):
         return False
     for check in pr_checks:
         name = str(check.get("name") or "")
         state = str(check.get("state") or "")
         if name.startswith(MERGE_GATE_PREFIX) or name.startswith(REMEDIATE_PREFIX):
             continue
-        if name in reusable_skips and state == "SKIPPED":
+        if name in current_reusable and state == "SKIPPED":
             continue
         if state not in {"SUCCESS", "SKIPPED"}:
             return False
@@ -358,9 +404,15 @@ def publisher_check_ok(
             len(prior_matches) == 1
             and _job_conclusion(prior_matches[0]) == "success"
         )
-        return prior_success and bool(current) and all(
+        current_publisher = current_reusable_caller_jobs(head_ref)[1:]
+        caller_checks = [
+            check
+            for check in pr_checks
+            if str(check.get("name") or "") in current_publisher
+        ]
+        return prior_success and bool(caller_checks) and all(
             str(item.get("state") or "") in {"SUCCESS", "SKIPPED"}
-            for item in current
+            for item in caller_checks
         )
     return bool(current) and all(
         str(item.get("state") or "") == "SUCCESS" for item in current

@@ -28,6 +28,7 @@ def pipeline_run(
     workflow_path=".github/workflows/pipeline.yml",
     head_sha=HEAD,
     head_branch=AGENT_REF,
+    base_sha=BASE,
     ci="success",
     publisher="success",
     event="pull_request",
@@ -52,6 +53,7 @@ def pipeline_run(
         event=event,
         head_sha=head_sha,
         head_branch=head_branch,
+        base_sha=base_sha,
         status=status,
         conclusion=conclusion,
         jobs=tuple(jobs),
@@ -89,6 +91,7 @@ def review_comment(*, plan=False, verdict="PASS", login=None, comment_id=1):
                 f"**Independent verification - bound to commit `{HEAD}`**",
                 *identity,
                 f"base_sha: `{BASE}`",
+                f"pipeline_run_id: `100`",
                 "",
                 f"VERDICT: {verdict}",
             ]
@@ -108,6 +111,12 @@ def decide(**overrides):
         "pr_body": agent_body(),
         "comments": [review_comment()],
         "pipeline_runs": [pipeline_run()],
+        "pr_checks": [
+            {"name": "ci", "state": "PENDING"},
+            {"name": "review", "state": "PENDING"},
+            {"name": "governance-policy", "state": "SUCCESS"},
+            {"name": "ready-for-review-reuse / decide", "state": "PENDING"},
+        ],
         "current_run_id": 200,
         "result_path_exists": False,
     }
@@ -123,6 +132,11 @@ class ReuseDecisionTests(unittest.TestCase):
             pr_body=plan_body(),
             comments=[review_comment(plan=True, verdict="PASS WITH NON-BLOCKING FINDINGS")],
             pipeline_runs=[pipeline_run(head_branch=PLAN_REF)],
+            pr_checks=[
+                {"name": "ci", "state": "PENDING"},
+                {"name": "plan-review", "state": "PENDING"},
+                {"name": "governance-policy", "state": "SUCCESS"},
+            ],
         )
         self.assertEqual(plan.outcome, "reuse-evidence")
 
@@ -157,6 +171,7 @@ class ReuseDecisionTests(unittest.TestCase):
             pipeline_run(run_id=201),
             pipeline_run(workflow_path=".github/workflows/not-pipeline.yml"),
             pipeline_run(head_sha="c" * 40),
+            pipeline_run(base_sha="c" * 40),
             pipeline_run(head_branch="agent/another-task"),
             pipeline_run(duplicate_ci=True),
             pipeline_run(ci="failure"),
@@ -177,6 +192,25 @@ class ReuseDecisionTests(unittest.TestCase):
         )
         self.assertEqual(
             decide(comments=[review_comment(verdict="FAIL")]).outcome,
+            "full-path",
+        )
+        wrong_run = review_comment()
+        wrong_run["body"] = wrong_run["body"].replace(
+            "pipeline_run_id: `100`",
+            "pipeline_run_id: `99`",
+        )
+        self.assertEqual(decide(comments=[wrong_run]).outcome, "full-path")
+
+    def test_non_green_unrelated_pr_check_takes_full_path(self):
+        self.assertEqual(decide().outcome, "reuse-evidence")
+        self.assertEqual(
+            decide(
+                pr_checks=[
+                    {"name": "ci", "state": "PENDING"},
+                    {"name": "review", "state": "PENDING"},
+                    {"name": "governance-policy", "state": "FAILURE"},
+                ]
+            ).outcome,
             "full-path",
         )
 
@@ -213,9 +247,9 @@ class MergeGateReuseTests(unittest.TestCase):
     def setUp(self):
         self.pr_checks = [
             {"name": policy.REQUIRED_CI_JOB, "state": "SUCCESS"},
-            {"name": policy.REQUIRED_CI_JOB, "state": "SKIPPED"},
             {"name": policy.AGENT_PUBLISHER_JOB, "state": "SUCCESS"},
-            {"name": policy.AGENT_PUBLISHER_JOB, "state": "SKIPPED"},
+            {"name": "ci", "state": "SKIPPED"},
+            {"name": "review", "state": "SKIPPED"},
             {"name": "governance-policy", "state": "SUCCESS"},
             {"name": "merge-gate / report-status", "state": "IN_PROGRESS"},
         ]
@@ -261,7 +295,7 @@ class MergeGateReuseTests(unittest.TestCase):
             )
         )
         without_ci = [
-            item for item in self.pr_checks if item["name"] != policy.REQUIRED_CI_JOB
+            item for item in self.pr_checks if item["name"] != "ci"
         ]
         self.assertFalse(
             policy.compute_checks_ok_with_reuse(
@@ -315,6 +349,7 @@ class ProofVerifierTests(unittest.TestCase):
         path=None,
         prs=None,
         event="pull_request",
+        base_sha=BASE,
     ):
         return {
             "id": run_id,
@@ -335,6 +370,7 @@ class ProofVerifierTests(unittest.TestCase):
             repository="KARSIFT/example",
             pr_number=9,
             expected_head_sha=HEAD,
+            expected_base_sha=BASE,
             expected_head_ref=AGENT_REF,
         )
         self.assertTrue(ready.ok)
@@ -343,11 +379,20 @@ class ProofVerifierTests(unittest.TestCase):
             repository="KARSIFT/example",
             pr_number=9,
             expected_head_sha=HEAD,
+            expected_base_sha=BASE,
             expected_head_ref=AGENT_REF,
             prior_run_id=100,
             ready_run_id=300,
         )
         self.assertTrue(prior.ok)
+        proof_head = "c" * 40
+        self.assertTrue(
+            verifier.verify_current_ref(
+                current_ref=proof_head,
+                expected_head_sha=proof_head,
+            ).ok
+        )
+        self.assertNotEqual(proof_head, HEAD)
 
     def test_wrong_branch_path_pr_or_same_run_is_rejected(self):
         self.assertFalse(
@@ -356,6 +401,25 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
+                expected_head_ref=AGENT_REF,
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_ready_run(
+                run=self.run_metadata(
+                    prs=[
+                        {
+                            "number": 9,
+                            "base": {"sha": "c" * 40},
+                            "head": {"sha": HEAD},
+                        }
+                    ]
+                ),
+                repository="KARSIFT/example",
+                pr_number=9,
+                expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
             ).ok
         )
@@ -365,6 +429,7 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
                 prior_run_id=300,
                 ready_run_id=300,
@@ -376,6 +441,7 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
                 prior_run_id=301,
                 ready_run_id=300,
@@ -387,6 +453,7 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
                 prior_run_id=100,
                 ready_run_id=300,
@@ -398,6 +465,7 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
                 prior_run_id=100,
                 ready_run_id=300,
@@ -409,17 +477,18 @@ class ProofVerifierTests(unittest.TestCase):
                 repository="KARSIFT/example",
                 pr_number=9,
                 expected_head_sha=HEAD,
+                expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
             ).ok
         )
 
     def test_ready_and_prior_job_shapes_are_exact(self):
         ready_jobs = [
-            {"name": policy.REQUIRED_CI_JOB, "conclusion": "skipped"},
-            {"name": policy.AGENT_PUBLISHER_JOB, "conclusion": "skipped"},
+            {"name": "ci", "conclusion": "skipped"},
+            {"name": "review", "conclusion": "skipped"},
             {"name": "ready-for-review-reuse / decide", "conclusion": "success"},
             {"name": "merge-gate / report-status", "conclusion": "success"},
-            {"name": "merge-gate / auto-merge", "conclusion": "success"},
+            {"name": "merge-gate / auto-merge", "conclusion": "skipped"},
         ]
         self.assertTrue(
             verifier.verify_ready_jobs(jobs=ready_jobs, head_ref=AGENT_REF).ok
@@ -451,6 +520,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("prior_jobs_available=true", merge)
         self.assertGreaterEqual(merge.count("else\n              checks_ok=false"), 1)
         self.assertGreaterEqual(merge.count("else\n              review_check_ok=false"), 1)
+        self.assertIn("pipeline_run_id:", merge)
+        review = (ROOT / ".github/workflows/review.yml").read_text()
+        plan_review = (ROOT / ".github/workflows/plan-review.yml").read_text()
+        self.assertIn(r"pipeline_run_id: \`${{ github.run_id }}\`", review)
+        self.assertIn(r"pipeline_run_id: \`${{ github.run_id }}\`", plan_review)
 
     def test_template_fails_closed_to_full_path_if_decision_job_fails(self):
         template = (
@@ -466,6 +540,7 @@ class WorkflowContractTests(unittest.TestCase):
         ).read_text()
         self.assertIn("if: inputs.event_action != 'ready_for_review'", reuse_workflow)
         self.assertIn("if: inputs.event_action == 'ready_for_review'", reuse_workflow)
+        self.assertIn("expected_proof_head_sha: ${{ github.sha }}", template)
 
 
 if __name__ == "__main__":

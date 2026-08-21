@@ -18,6 +18,11 @@ from verify_ready_for_review_reuse import (
     verify_ready_jobs,
     verify_ready_run,
 )
+from ready_for_review_reuse import (
+    classify_verdict,
+    parse_identity_lines,
+    trusted_review_comment,
+)
 
 
 class VerificationError(RuntimeError):
@@ -72,6 +77,22 @@ def load_jobs(api: GitHubApi, run_id: int) -> list[dict]:
     return jobs
 
 
+def load_comments(api: GitHubApi, pr_number: int) -> list[dict]:
+    payload = json.loads(
+        api.gh(
+            [
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{api.repository}/issues/{pr_number}/comments?per_page=100",
+            ]
+        )
+    )
+    if not isinstance(payload, list) or any(not isinstance(page, list) for page in payload):
+        raise VerificationError("comment_set_invalid")
+    return [comment for page in payload for comment in page]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
@@ -80,6 +101,7 @@ def main() -> int:
     parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--expected-head-sha", required=True)
     parser.add_argument("--expected-base-sha", required=True)
+    parser.add_argument("--expected-proof-head-sha", required=True)
     parser.add_argument("--current-ref", default=os.environ.get("GITHUB_SHA", ""))
     args = parser.parse_args()
 
@@ -99,6 +121,8 @@ def main() -> int:
             raise VerificationError("invalid_head_sha")
         if not re.fullmatch(r"[0-9a-f]{40}", args.expected_base_sha):
             raise VerificationError("invalid_base_sha")
+        if not re.fullmatch(r"[0-9a-f]{40}", args.expected_proof_head_sha):
+            raise VerificationError("invalid_proof_head_sha")
 
         api = GitHubApi(token, args.repository)
         pr = json.loads(
@@ -108,7 +132,7 @@ def main() -> int:
                     "view",
                     str(args.pr_number),
                     "--json",
-                    "headRefName,headRefOid,baseRefOid",
+                    "body,headRefName,headRefOid,baseRefOid",
                 ]
             )
         )
@@ -123,7 +147,7 @@ def main() -> int:
         require(
             verify_current_ref(
                 current_ref=args.current_ref,
-                expected_head_sha=live_head,
+                expected_head_sha=args.expected_proof_head_sha.lower(),
             )
         )
 
@@ -141,6 +165,7 @@ def main() -> int:
                 repository=args.repository,
                 pr_number=args.pr_number,
                 expected_head_sha=live_head,
+                expected_base_sha=live_base,
                 expected_head_ref=head_ref,
             )
         )
@@ -165,6 +190,7 @@ def main() -> int:
                 repository=args.repository,
                 pr_number=args.pr_number,
                 expected_head_sha=live_head,
+                expected_base_sha=live_base,
                 expected_head_ref=head_ref,
                 prior_run_id=args.prior_run_id,
                 ready_run_id=args.ready_run_id,
@@ -176,6 +202,26 @@ def main() -> int:
                 head_ref=head_ref,
             )
         )
+        identity = parse_identity_lines(
+            body=str(pr.get("body") or ""),
+            head_ref=head_ref,
+        )
+        if identity is None:
+            raise VerificationError("identity_metadata_mismatch")
+        task_id, package_path, authority_issue, _ = identity
+        verdict_body = trusted_review_comment(
+            comments=load_comments(api, args.pr_number),
+            head_sha=live_head,
+            base_sha=live_base,
+            task_id=task_id,
+            package_path=package_path,
+            authority_issue=authority_issue,
+            pipeline_run_id=args.prior_run_id,
+        )
+        if not verdict_body:
+            raise VerificationError("prior_review_binding_missing")
+        if classify_verdict(verdict_body) not in {"PASS", "PASS_WITH_FINDINGS"}:
+            raise VerificationError("prior_review_not_passing")
     except (
         VerificationError,
         OSError,
@@ -196,6 +242,7 @@ def main() -> int:
                 "pr_number": args.pr_number,
                 "head_sha": args.expected_head_sha.lower(),
                 "base_sha": args.expected_base_sha.lower(),
+                "proof_head_sha": args.expected_proof_head_sha.lower(),
                 "verify_result": "pass",
             },
             sort_keys=True,

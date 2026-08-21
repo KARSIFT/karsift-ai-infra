@@ -256,8 +256,11 @@ the validated prior pipeline run. Any failed reuse precondition, helper uncertai
 non-`ready_for_review` activity selects the normal full CI and review path
 (`full-path` or `fail-closed-to-full-path`). Draft PRs remain non-mergeable regardless of reuse.
 Only App-signed publisher comments qualify; human or implementer text never authorizes reuse.
+A qualifying publisher record binds its exact pipeline run ID as well as the base/head and
+package/task identity, preventing evidence from different base revisions from being combined.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
-from allowlisted Actions metadata only.
+from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
+the earlier observed ready-transition head; the verifier validates both lineages explicitly.
 
 Callers must pass those exact base/head inputs to plan review, task review,
 remediation, and merge-gate. Every reusable-workflow schema keeps them optional

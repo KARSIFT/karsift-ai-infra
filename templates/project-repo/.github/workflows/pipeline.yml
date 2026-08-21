@@ -445,6 +445,7 @@ jobs:
       pr_number: ${{ inputs.verify_reuse_pr_number }}
       expected_head_sha: ${{ inputs.verify_reuse_head_sha }}
       expected_base_sha: ${{ inputs.verify_reuse_base_sha }}
+      expected_proof_head_sha: ${{ github.sha }}
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a

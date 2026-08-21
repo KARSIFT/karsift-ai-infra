@@ -452,6 +452,7 @@ jobs:
             echo "package_path: \`$package_path\`"
             echo "authority_issue: \`$authority_issue\`"
             echo "base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
+            echo "pipeline_run_id: \`${{ github.run_id }}\`"
             echo
             cat /tmp/verdict-narrative.md
           } > /tmp/verdict-comment.md
@@ -490,6 +491,7 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
           EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
           EXPECTED_PACKAGE_PATH: ${{ inputs.package_path }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
@@ -501,13 +503,13 @@ jobs:
           fi
           gh pr view "$PR_NUMBER" --json body,headRefOid,baseRefOid,state > /tmp/live-pr.json
           python3 - /tmp/review-publish/verdict-comment.md /tmp/live-pr.json \
-            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_PACKAGE_PATH" <<'PYEOF'
+            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_PACKAGE_PATH" "$EXPECTED_RUN_ID" <<'PYEOF'
           import json
           from pathlib import Path
           import re
           import sys
 
-          verdict_path, pr_path, expected_sha, expected_base, expected_package = sys.argv[1:6]
+          verdict_path, pr_path, expected_sha, expected_base, expected_package, expected_run = sys.argv[1:7]
           raw = Path(verdict_path).read_bytes()
           if not raw or len(raw) > 131_072:
               raise SystemExit("Verification record is empty or too large.")
@@ -542,6 +544,7 @@ jobs:
               f"package_path: `{package[0]}`",
               f"authority_issue: `{issue[0]}`",
               f"base_sha: `{expected_base}`",
+              f"pipeline_run_id: `{expected_run}`",
           )
           if not lines or lines[0] != required[0] or any(lines.count(line) != 1 for line in required):
               raise SystemExit("Verification record binding is invalid or ambiguous.")
