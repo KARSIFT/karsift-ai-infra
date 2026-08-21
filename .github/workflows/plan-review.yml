@@ -255,6 +255,11 @@ jobs:
       - name: Show verdict
         run: cat /tmp/verdict.md
 
+      - name: Remove model-authored binding lookalikes
+        run: |
+          python3 karsift-ai-infra/config/normalize-review-narrative.py \
+            /tmp/verdict.md /tmp/verdict-narrative.md
+
       - name: Build verification record for isolated publisher
         run: |
           {
@@ -263,7 +268,7 @@ jobs:
             echo "package_path: \`${{ steps.pr.outputs.package_path }}\`"
             echo "base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
             echo
-            cat /tmp/verdict.md
+            cat /tmp/verdict-narrative.md
           } > /tmp/verdict-comment.md
 
       - name: Upload verification record
