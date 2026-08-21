@@ -154,7 +154,11 @@ def read_repository_file(api: GitHub, path: str, ref: str) -> str | None:
     if response.get("encoding") != "base64" or not isinstance(content, str):
         raise ContractError("invalid_repository_file")
     try:
-        return base64.b64decode(content, validate=True).decode("utf-8")
+        # GitHub's Contents API inserts CR/LF line wrapping into otherwise
+        # strict Base64. Remove only those documented separators; validation
+        # still rejects spaces, punctuation, and any non-Base64 data.
+        normalized = content.replace("\r", "").replace("\n", "")
+        return base64.b64decode(normalized, validate=True).decode("utf-8")
     except (ValueError, UnicodeDecodeError) as exc:
         raise ContractError("invalid_repository_file") from exc
 

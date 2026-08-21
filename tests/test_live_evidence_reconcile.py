@@ -132,6 +132,32 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     "VOC-097-T02",
                 )
 
+    def test_repository_file_accepts_github_base64_line_wrapping_only(self):
+        import base64
+
+        payload = b"pipeline:" + (b" trusted" * 30)
+
+        class ContentsApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, content):
+                self.content = content
+
+            def get_optional(self, endpoint):
+                return {"encoding": "base64", "content": self.content}
+
+        wrapped = base64.encodebytes(payload).decode()
+        self.assertEqual(
+            runner.read_repository_file(ContentsApi(wrapped), "file", HEAD),
+            payload.decode(),
+        )
+        with self.assertRaises(policy.ContractError):
+            runner.read_repository_file(
+                ContentsApi(wrapped.replace("\n", " ")),
+                "file",
+                HEAD,
+            )
+
     def test_06_wrong_workflow_identity_is_rejected(self):
         contract = parsed_contract()
         self.assert_rejected(contract, run_fixture(path=".github/workflows/other.yml"))
