@@ -279,8 +279,11 @@ from allowlisted Actions metadata only. Its evidence-carrier head is intentional
 the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while
 the source PR number/base/head/ref bind both source runs. The ready run must also contain the
 workflow-controlled `decide (ready_for_review)` job marker. If GitHub has cleared a closed run's
-`pull_requests` array, the verifier requires the authenticated REST source-PR object to match the
-same repository, number, base, head, and ref instead of treating the missing association as proof.
+`pull_requests` array, the verifier never infers ownership from a matching branch/head alone. A
+prior run is admitted only when an App-authored review comment on that exact PR binds its run ID,
+base/head, and package/task identity. Before optimized auto-merge, merge-gate also publishes one
+App-authored transition attestation binding repository, PR number, branch, base/head, ready run,
+selected prior run, and shared-policy SHA; the post-merge verifier requires that unique record.
 The verifier also recomputes the latest eligible prior run strictly before the ready run and
 requires it to equal the declared prior run ID, so proof cannot substitute a different valid run.
 
