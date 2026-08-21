@@ -152,10 +152,13 @@ broad `workflow_run` trigger that recursively observes the pipeline itself. It:
 - reads Actions run and job metadata only — never logs, artifacts, steps, or
   arbitrary output;
 - validates workflow identity, required successful jobs, event, branch, exact
-  SHA lineage, conclusion, and age before qualifying evidence;
+  SHA lineage, conclusion, and age before qualifying evidence, paginating a
+  bounded maximum of 1,000 candidates and failing closed beyond that bound;
 - can dispatch only the workflow/ref/inputs declared by that contract, and
   only when the target ref is protected and the workflow file is byte-identical
-  to the default-branch copy (the caller pipeline itself is always forbidden);
+  to the default-branch copy (the caller pipeline itself is always forbidden).
+  A trusted App-authored reservation precedes the single API attempt, so an
+  uncertain outcome cannot be retried into a duplicate dispatch;
 - serializes per calling repository, records one allowlisted
   `<task_id>.result.json`, and updates the PR ref without force; and
 - emits one timeout escalation after 72 hours without invoking implementation
@@ -168,8 +171,12 @@ forward. Mutations use a short-lived installation token from the KARSIFT GitHub
 App. The reusable job's own `GITHUB_TOKEN` remains read-only, and the implementer
 never receives the App token. The App token is repository-scoped and requests
 only Actions, contents, and issues write permissions. Waiting is accepted only
-from the successful GitHub Actions reviewer check, and the post-reconcile review
-requires a trusted App-authored attestation bound to its new exact head.
+when the successful check resolves to the exact PR, head, branch, active caller
+pipeline workflow ID, and an unchanged head/base pipeline file; the comment
+timestamp must also fall inside that check's run window. The post-reconcile
+review requires a trusted App-authored attestation bound to its new exact head,
+and that attestation is posted before the branch advances to prevent a fast
+`synchronize` review from racing it.
 
 Caller pipelines pass the triggering PR head into review, remediation, and
 merge-gate. A newer push makes older runs stale: reviewer model work is skipped,

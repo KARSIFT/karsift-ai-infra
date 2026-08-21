@@ -42,6 +42,10 @@ TRUSTED_REVIEW_AUTHOR = "github-actions[bot]"
 TRUSTED_REVIEW_CHECK = "review / review"
 TRUSTED_REVIEW_APP = "github-actions"
 TRUSTED_RECONCILE_AUTHOR = "karsift-ai-infra-bot[bot]"
+TRUSTED_PIPELINE_PATH = ".github/workflows/pipeline.yml"
+CHECK_DETAILS_RE = re.compile(
+    r"^https://github\.com/([^/]+/[^/]+)/actions/runs/([0-9]+)/job/[0-9]+(?:\?.*)?$"
+)
 
 
 class ApiError(RuntimeError):
@@ -157,7 +161,10 @@ def read_repository_file(api: GitHub, path: str, ref: str) -> str | None:
 
 def trusted_waiting_review(
     api: GitHub,
+    pr_number: int,
     head_sha: str,
+    head_ref: str,
+    base_sha: str,
     comments: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], datetime] | None:
     binding = f"bound to commit `{head_sha}`"
@@ -180,13 +187,51 @@ def trusted_waiting_review(
         f"repos/{api.repository}/commits/{head_sha}/check-runs",
         key="check_runs",
     )
-    trusted_checks = [
-        check
-        for check in check_runs
-        if check.get("name") == TRUSTED_REVIEW_CHECK
-        and check.get("conclusion") == "success"
-        and (check.get("app") or {}).get("slug") == TRUSTED_REVIEW_APP
-    ]
+    head_pipeline = read_repository_file(api, TRUSTED_PIPELINE_PATH, head_sha)
+    base_pipeline = read_repository_file(api, TRUSTED_PIPELINE_PATH, base_sha)
+    if head_pipeline is None or head_pipeline != base_pipeline:
+        raise ContractError("untrusted_review_workflow")
+    workflow = api.get(
+        f"repos/{api.repository}/actions/workflows/{PurePosixPath(TRUSTED_PIPELINE_PATH).name}"
+    )
+    if not isinstance(workflow, dict):
+        raise ContractError("untrusted_review_workflow")
+    workflow_id = workflow.get("id")
+    if (
+        not isinstance(workflow_id, int)
+        or workflow.get("path") != TRUSTED_PIPELINE_PATH
+        or workflow.get("state") != "active"
+    ):
+        raise ContractError("untrusted_review_workflow")
+    trusted_checks = []
+    for check in check_runs:
+        details_match = CHECK_DETAILS_RE.fullmatch(check.get("details_url") or "")
+        if (
+            check.get("name") != TRUSTED_REVIEW_CHECK
+            or check.get("conclusion") != "success"
+            or check.get("head_sha") != head_sha
+            or (check.get("app") or {}).get("slug") != TRUSTED_REVIEW_APP
+            or details_match is None
+            or details_match.group(1) != api.repository
+        ):
+            continue
+        run = api.get(
+            f"repos/{api.repository}/actions/runs/{int(details_match.group(2))}"
+        )
+        if not isinstance(run, dict):
+            continue
+        pull_requests = run.get("pull_requests")
+        if (
+            run.get("workflow_id") == workflow_id
+            and run.get("path") == TRUSTED_PIPELINE_PATH
+            and run.get("event") == "pull_request"
+            and run.get("head_sha") == head_sha
+            and run.get("head_branch") == head_ref
+            and run.get("conclusion") == "success"
+            and isinstance(pull_requests, list)
+            and any(item.get("number") == pr_number for item in pull_requests)
+        ):
+            trusted_checks.append(check)
     if not any(
         parse_time(check.get("started_at")) <= waiting_since <= parse_time(check.get("completed_at"))
         for check in trusted_checks
@@ -202,6 +247,7 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     head_repo = head.get("repo") or {}
     head_sha = head.get("sha")
     head_ref = head.get("ref")
+    base_sha = (pr.get("base") or {}).get("sha")
     if (
         not isinstance(number, int)
         or head_repo.get("full_name") != api.repository
@@ -209,6 +255,8 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
         or not SHA_RE.fullmatch(head_sha)
         or not isinstance(head_ref, str)
         or not head_ref.startswith("agent/")
+        or not isinstance(base_sha, str)
+        or not SHA_RE.fullmatch(base_sha)
     ):
         return None
     package_match = PACKAGE_RE.search(body)
@@ -222,7 +270,14 @@ def current_waiting_task(api: GitHub, pr: dict[str, Any]) -> WaitingTask | None:
     comments_response = api.get_all(
         f"repos/{api.repository}/issues/{number}/comments"
     )
-    trusted_review = trusted_waiting_review(api, head_sha, comments_response)
+    trusted_review = trusted_waiting_review(
+        api,
+        number,
+        head_sha,
+        head_ref,
+        base_sha,
+        comments_response,
+    )
     if trusted_review is None:
         return None
     _, waiting_since = trusted_review
@@ -338,12 +393,10 @@ def candidate_runs(api: GitHub, task: WaitingTask) -> list[dict[str, Any]]:
         if len(matches) != 1 or not isinstance(matches[0].get("id"), int):
             raise ContractError("ambiguous_workflow_identity")
         endpoint = f"repos/{api.repository}/actions/workflows/{matches[0]['id']}/runs"
-    response = api.get(
-        f"{endpoint}?branch={quote(contract.branch, safe='')}&per_page=30"
+    runs = api.get_all(
+        f"{endpoint}?branch={quote(contract.branch, safe='')}",
+        key="workflow_runs",
     )
-    runs = response.get("workflow_runs") if isinstance(response, dict) else None
-    if not isinstance(runs, list):
-        raise ApiError("invalid_runs_response")
     return sorted(runs, key=lambda run: run.get("updated_at") or "", reverse=True)
 
 
@@ -486,7 +539,12 @@ def comment_exists(api: GitHub, issue_number: int, marker: str) -> bool:
     comments = api.get_all(
         f"repos/{api.repository}/issues/{issue_number}/comments"
     )
-    return any(marker in (comment.get("body") or "") for comment in comments)
+    return any(
+        marker in (comment.get("body") or "")
+        and (comment.get("user") or {}).get("login") == TRUSTED_RECONCILE_AUTHOR
+        and (comment.get("user") or {}).get("type") == "Bot"
+        for comment in comments
+    )
 
 
 def timeout_once(read_api: GitHub, write_api: GitHub, task: WaitingTask, now: datetime) -> None:
@@ -542,14 +600,35 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
         or target_workflow.get("sha") != default_workflow.get("sha")
     ):
         raise ContractError("dispatch_workflow_not_trusted")
+    reservation_body = "\n".join(
+        [
+            "**Live-evidence reconcile — declared dispatch reserved**",
+            "",
+            marker,
+            f"task_id: `{task.task_id}`",
+            f"workflow: `{dispatch.workflow_file}`",
+            f"branch: `{task.contract.branch}`",
+            "A single dispatch attempt is reserved. This trusted marker blocks "
+            "automatic retry if the API outcome becomes uncertain.",
+            "Declared input values are never copied into comments.",
+        ]
+    )
+    reservation = write_api.mutate(
+        "POST",
+        f"repos/{write_api.repository}/issues/{task.pr_number}/comments",
+        {"body": reservation_body},
+    )
+    reservation_id = (reservation or {}).get("id")
+    if not isinstance(reservation_id, int):
+        raise ApiError("dispatch_reservation_failed")
     write_api.mutate(
         "POST",
         f"repos/{write_api.repository}/actions/workflows/{quote(dispatch.workflow_file, safe='')}/dispatches",
         {"ref": task.contract.branch, "inputs": dispatch.inputs},
     )
     write_api.mutate(
-        "POST",
-        f"repos/{write_api.repository}/issues/{task.pr_number}/comments",
+        "PATCH",
+        f"repos/{write_api.repository}/issues/comments/{reservation_id}",
         {
             "body": "\n".join([
                 "**Live-evidence reconcile — declared dispatch requested**",
@@ -558,6 +637,7 @@ def dispatch_once(read_api: GitHub, write_api: GitHub, task: WaitingTask) -> Non
                 f"task_id: `{task.task_id}`",
                 f"workflow: `{dispatch.workflow_file}`",
                 f"branch: `{task.contract.branch}`",
+                "The trusted reservation was created before the single dispatch attempt.",
                 "Declared inputs were passed without copying their values into this comment.",
             ])
         },

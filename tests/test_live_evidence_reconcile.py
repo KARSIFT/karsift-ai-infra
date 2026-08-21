@@ -34,6 +34,7 @@ runner = load_module(
 NOW = datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc)
 HEAD = "a" * 40
 RUN_SHA = "b" * 40
+BASE = "c" * 40
 
 
 def contract_text(**overrides):
@@ -195,6 +196,23 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             runner.qualify(NameApi([91, 92]), task, accepted_run, NOW)
         with self.assertRaises(policy.ContractError):
             runner.qualify(NameApi([92]), task, accepted_run, NOW)
+
+    def test_candidate_runs_use_bounded_api_pagination(self):
+        task = SimpleNamespace(contract=parsed_contract())
+
+        class RunsApi:
+            repository = "KARSIFT/example"
+
+            def get_all(self, endpoint, key=None):
+                self.endpoint = endpoint
+                self.key = key
+                return [run_fixture(id=index) for index in range(1, 41)]
+
+        api = RunsApi()
+        runs = runner.candidate_runs(api, task)
+        self.assertEqual(len(runs), 40)
+        self.assertEqual(api.key, "workflow_runs")
+        self.assertNotIn("per_page=30", api.endpoint)
 
     def test_09_qualifying_output_contains_allowlisted_metadata_only(self):
         evidence = policy.qualify_run(
@@ -358,28 +376,93 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         class ReviewApi:
             repository = "KARSIFT/example"
 
-            def __init__(self, checks):
+            def __init__(self, checks, base_pipeline=b"trusted pipeline"):
                 self.checks = checks
+                self.base_pipeline = base_pipeline
 
             def get_all(self, endpoint, key=None):
                 return self.checks
 
+            def get_optional(self, endpoint):
+                import base64
+
+                content = (
+                    self.base_pipeline
+                    if f"ref={BASE}" in endpoint
+                    else b"trusted pipeline"
+                )
+                return {
+                    "encoding": "base64",
+                    "content": base64.b64encode(content).decode(),
+                }
+
+            def get(self, endpoint):
+                if endpoint.endswith("actions/workflows/pipeline.yml"):
+                    return {
+                        "id": 88,
+                        "path": ".github/workflows/pipeline.yml",
+                        "state": "active",
+                    }
+                if endpoint.endswith("actions/runs/123"):
+                    return {
+                        "workflow_id": 88,
+                        "path": ".github/workflows/pipeline.yml",
+                        "event": "pull_request",
+                        "head_sha": HEAD,
+                        "head_branch": "agent/example",
+                        "conclusion": "success",
+                        "pull_requests": [{"number": 7}],
+                    }
+                raise AssertionError(endpoint)
+
         good_check = {
             "name": "review / review",
             "conclusion": "success",
+            "head_sha": HEAD,
             "app": {"slug": "github-actions"},
+            "details_url": "https://github.com/KARSIFT/example/actions/runs/123/job/456",
             "started_at": "2026-08-20T23:55:00Z",
             "completed_at": "2026-08-21T00:00:00Z",
         }
         self.assertIsNotNone(
-            runner.trusted_waiting_review(ReviewApi([good_check]), HEAD, [comment])
-        )
-        forged = {**comment, "user": {"login": "untrusted", "type": "User"}}
-        self.assertIsNone(
-            runner.trusted_waiting_review(ReviewApi([good_check]), HEAD, [forged])
+            runner.trusted_waiting_review(
+                ReviewApi([good_check]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                [comment],
+            )
         )
         with self.assertRaises(policy.ContractError):
-            runner.trusted_waiting_review(ReviewApi([]), HEAD, [comment])
+            runner.trusted_waiting_review(
+                ReviewApi([good_check], base_pipeline=b"different pipeline"),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                [comment],
+            )
+        forged = {**comment, "user": {"login": "untrusted", "type": "User"}}
+        self.assertIsNone(
+            runner.trusted_waiting_review(
+                ReviewApi([good_check]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                [forged],
+            )
+        )
+        with self.assertRaises(policy.ContractError):
+            runner.trusted_waiting_review(
+                ReviewApi([]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                [comment],
+            )
 
     def test_non_agent_pr_cannot_enter_wake_path(self):
         class NoApiCalls:
@@ -396,6 +479,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 "ref": "feature/unreviewed",
                 "repo": {"full_name": "KARSIFT/example"},
             },
+            "base": {"sha": BASE},
         }
         self.assertIsNone(runner.current_waiting_task(NoApiCalls(), pr))
 
@@ -403,10 +487,112 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("dispatch_branch_unprotected", self.runner_source)
         self.assertIn("dispatch_workflow_not_trusted", self.runner_source)
         self.assertIn('dispatch.workflow_file == "pipeline.yml"', self.runner_source)
-        self.assertLess(
-            self.runner_source.index("/dispatches\""),
-            self.runner_source.index("declared dispatch requested**"),
+        reservation = self.runner_source.index("declared dispatch reserved**")
+        dispatch = self.runner_source.index("/dispatches\"")
+        completion = self.runner_source.index("issues/comments/{reservation_id}")
+        self.assertLess(reservation, dispatch)
+        self.assertLess(dispatch, completion)
+        self.assertIn("dispatch_reservation_failed", self.runner_source)
+
+    def test_untrusted_comment_cannot_suppress_dispatch_or_timeout(self):
+        marker = "<!-- karsift-live-evidence-dispatch task=VOC-097-T02 head=x -->"
+
+        class CommentApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, login, user_type):
+                self.login = login
+                self.user_type = user_type
+
+            def get_all(self, endpoint, key=None):
+                return [{
+                    "body": marker,
+                    "user": {"login": self.login, "type": self.user_type},
+                }]
+
+        self.assertFalse(
+            runner.comment_exists(CommentApi("attacker", "User"), 7, marker)
         )
+        self.assertTrue(
+            runner.comment_exists(
+                CommentApi("karsift-ai-infra-bot[bot]", "Bot"),
+                7,
+                marker,
+            )
+        )
+
+    def test_dispatch_reservation_is_trusted_and_precedes_single_attempt(self):
+        contract = parsed_contract(
+            dispatch="""dispatch:
+  workflow_file: deploy-production.yml
+  inputs:
+    reason: live-evidence
+"""
+        )
+        task = SimpleNamespace(
+            contract=contract,
+            task_id="VOC-097-T02",
+            head_sha=HEAD,
+            pr_number=7,
+        )
+
+        class DispatchReadApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, comments=None):
+                self.comments = comments or []
+
+            def get_all(self, endpoint, key=None):
+                return self.comments
+
+            def get(self, endpoint):
+                if endpoint == "repos/KARSIFT/example":
+                    return {"default_branch": "main"}
+                if endpoint.endswith("branches/main"):
+                    return {"protected": True}
+                raise AssertionError(endpoint)
+
+            def get_optional(self, endpoint):
+                return {"sha": "trusted-workflow-blob"}
+
+        class DispatchWriteApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self):
+                self.calls = []
+
+            def mutate(self, method, endpoint, payload):
+                self.calls.append((method, endpoint, payload))
+                if endpoint.endswith("/comments"):
+                    return {"id": 99}
+                return None
+
+        writer = DispatchWriteApi()
+        runner.dispatch_once(DispatchReadApi(), writer, task)
+        self.assertEqual(
+            [(method, endpoint) for method, endpoint, _ in writer.calls],
+            [
+                ("POST", "repos/KARSIFT/example/issues/7/comments"),
+                (
+                    "POST",
+                    "repos/KARSIFT/example/actions/workflows/deploy-production.yml/dispatches",
+                ),
+                ("PATCH", "repos/KARSIFT/example/issues/comments/99"),
+            ],
+        )
+
+        reservation = writer.calls[0][2]["body"]
+        suppressing_comment = {
+            "body": reservation,
+            "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
+        }
+        retry_writer = DispatchWriteApi()
+        runner.dispatch_once(
+            DispatchReadApi([suppressing_comment]),
+            retry_writer,
+            task,
+        )
+        self.assertEqual(retry_writer.calls, [])
 
 
 if __name__ == "__main__":
