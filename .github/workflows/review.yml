@@ -99,6 +99,11 @@ on:
         required: false
         type: string
         default: ""
+      expected_base_sha:
+        description: "PR base SHA from the same caller event. Review evidence is constructed and signed for this exact base/head pair."
+        required: false
+        type: string
+        default: ""
     secrets:
       CURSOR_API_KEY:
         required: true
@@ -114,6 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
       stale: ${{ steps.pr.outputs.stale }}
     permissions:
       contents: read
@@ -130,27 +136,25 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid > /tmp/pr.json
+          gh pr view ${{ inputs.pr_number }} --json body,title,headRefOid,baseRefOid > /tmp/pr.json
           live_sha=$(jq -r .headRefOid /tmp/pr.json)
+          live_base_sha=$(jq -r .baseRefOid /tmp/pr.json)
           expected_sha="${{ inputs.expected_head_sha }}"
+          expected_base_sha="${{ inputs.expected_base_sha }}"
           echo "sha=$expected_sha" >> "$GITHUB_OUTPUT"
-          if ! [[ "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          echo "base_sha=$expected_base_sha" >> "$GITHUB_OUTPUT"
+          if ! [[ "$expected_sha" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$expected_base_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "Caller omitted or supplied an invalid expected PR head SHA. Skipping reviewer model invocation."
+            echo "Caller omitted or supplied an invalid expected PR base/head SHA. Skipping reviewer model invocation."
             exit 0
           fi
-          if [ "$live_sha" != "$expected_sha" ]; then
+          if [ "$live_sha" != "$expected_sha" ] || [ "$live_base_sha" != "$expected_base_sha" ]; then
             echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "Caller pipeline SHA $expected_sha is stale; live PR head is $live_sha. Skipping reviewer model invocation."
+            echo "Caller pipeline base/head pair is stale. Skipping reviewer model invocation."
             exit 0
           fi
           echo "stale=false" >> "$GITHUB_OUTPUT"
-          gh pr diff ${{ inputs.pr_number }} > /tmp/pr.diff
-          after_diff_sha=$(gh pr view ${{ inputs.pr_number }} --json headRefOid -q .headRefOid)
-          if [ "$after_diff_sha" != "$expected_sha" ]; then
-            echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "PR head changed while collecting the diff; skipping this superseded review."
-          fi
 
       # Checks out the PR's own reviewed commit, not integration_branch -
       # found live (VOC-022-T00) that checking out integration_branch here
@@ -169,7 +173,29 @@ jobs:
         if: steps.pr.outputs.stale != 'true'
         with:
           ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Build diff from immutable base and head commits
+        if: steps.pr.outputs.stale != 'true'
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          actual_head=$(git rev-parse HEAD)
+          if [ "$actual_head" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "::error::Checkout did not resolve to the exact expected review head." >&2
+            exit 1
+          fi
+          git cat-file -e "$EXPECTED_BASE_SHA^{commit}"
+          merge_base=$(git merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")
+          if ! [[ "$merge_base" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::Could not resolve an immutable merge base for review." >&2
+            exit 1
+          fi
+          git --no-pager diff --no-ext-diff --no-textconv --find-renames \
+            "$merge_base" "$EXPECTED_HEAD_SHA" -- > /tmp/pr.diff
 
       - name: Checkout karsift-ai-infra
         if: steps.pr.outputs.stale != 'true'
@@ -432,6 +458,7 @@ jobs:
             echo "task_id: \`$task_id\`"
             echo "package_path: \`$package_path\`"
             echo "authority_issue: \`$authority_issue\`"
+            echo "base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
             echo
             cat /tmp/verdict.md
           } > /tmp/verdict-comment.md
@@ -467,24 +494,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
           EXPECTED_PACKAGE_PATH: ${{ inputs.package_path }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
           if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] ||
-             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+             ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$EXPECTED_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "Review publication identity is malformed." >&2
             exit 1
           fi
-          gh pr view "$PR_NUMBER" --json body,headRefOid,state > /tmp/live-pr.json
+          gh pr view "$PR_NUMBER" --json body,headRefOid,baseRefOid,state > /tmp/live-pr.json
           python3 - /tmp/review-publish/verdict-comment.md /tmp/live-pr.json \
-            "$EXPECTED_HEAD_SHA" "$EXPECTED_PACKAGE_PATH" <<'PYEOF'
+            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "$EXPECTED_PACKAGE_PATH" <<'PYEOF'
           import json
           from pathlib import Path
           import re
           import sys
 
-          verdict_path, pr_path, expected_sha, expected_package = sys.argv[1:5]
+          verdict_path, pr_path, expected_sha, expected_base, expected_package = sys.argv[1:6]
           raw = Path(verdict_path).read_bytes()
           if not raw or len(raw) > 131_072:
               raise SystemExit("Verification record is empty or too large.")
@@ -493,8 +522,12 @@ jobs:
           except UnicodeDecodeError:
               raise SystemExit("Verification record is not UTF-8.")
           pr = json.loads(Path(pr_path).read_text())
-          if pr.get("state") != "OPEN" or pr.get("headRefOid") != expected_sha:
-              raise SystemExit("PR head changed before verdict publication.")
+          if (
+              pr.get("state") != "OPEN"
+              or pr.get("headRefOid") != expected_sha
+              or pr.get("baseRefOid") != expected_base
+          ):
+              raise SystemExit("PR base/head pair changed before verdict publication.")
 
           body = pr.get("body") or ""
           task = re.findall(r"Implements task `([^`]+)`", body)
@@ -514,6 +547,7 @@ jobs:
               f"task_id: `{task[0]}`",
               f"package_path: `{package[0]}`",
               f"authority_issue: `{issue[0]}`",
+              f"base_sha: `{expected_base}`",
           )
           if not lines or lines[0] != required[0] or any(lines.count(line) != 1 for line in required):
               raise SystemExit("Verification record binding is invalid or ambiguous.")
@@ -539,10 +573,22 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
+          permission-pull-requests: read
 
       - name: Publish App-signed verification comment
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          gh pr comment "${{ inputs.pr_number }}" \
+          set -euo pipefail
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR base/head pair changed immediately before App publication." >&2
+            exit 1
+          fi
+          gh pr comment "$PR_NUMBER" \
             --body-file /tmp/review-publish/verdict-comment.md

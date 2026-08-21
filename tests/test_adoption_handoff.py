@@ -35,6 +35,10 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
 
     def test_adoption_is_exact_revision_verified_and_idempotent(self):
         self.assertIn("--json state,mergedAt,headRefOid", self.adopt)
+        self.assertIn("mergeCommit", self.adopt)
+        self.assertIn('.parents[0].sha', self.adopt)
+        self.assertIn('base_line="base_sha:', self.adopt)
+        self.assertIn('index($base)', self.adopt)
         self.assertIn("bound to commit", self.adopt)
         self.assertIn('data["status"] = "adopted"', self.adopt)
         self.assertIn('impl["authorized"] = True', self.adopt)

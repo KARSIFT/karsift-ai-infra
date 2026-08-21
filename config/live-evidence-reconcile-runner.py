@@ -181,6 +181,7 @@ def trusted_waiting_review(
         f"task_id: `{task_id}`",
         f"package_path: `{package_path}`",
         f"authority_issue: `{issue_number}`",
+        f"base_sha: `{base_sha}`",
     )
     reviews = [
         comment

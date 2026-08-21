@@ -491,6 +491,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             "task_id: `VOC-097-T02`\n"
             f"package_path: `{PACKAGE}`\n"
             "authority_issue: `8`\n\n"
+            f"base_sha: `{BASE}`\n\n"
             "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
         )
         comment = {
@@ -633,6 +634,20 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 [retargeted],
             )
         )
+        stale_base = {**comment, "body": comment["body"].replace(BASE, "f" * 40)}
+        self.assertIsNone(
+            runner.trusted_waiting_review(
+                ReviewApi([good_check]),
+                7,
+                HEAD,
+                "agent/example",
+                BASE,
+                PACKAGE,
+                "VOC-097-T02",
+                8,
+                [stale_base],
+            )
+        )
         self.assertIn("authority_issue: \\`$authority_issue\\`", self.review)
         self.assertIn("package_path: \\`$package_path\\`", self.review)
         review_job, publisher_job = self.review.split("\n  publish-review:", 1)
@@ -640,7 +655,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertNotIn("gh pr comment", review_job)
         self.assertIn("actions/download-artifact@", publisher_job)
         self.assertIn("permission-issues: write", publisher_job)
-        self.assertIn("PR head changed before verdict publication", publisher_job)
+        self.assertIn("PR base/head pair changed before verdict publication", publisher_job)
 
     def test_non_agent_pr_cannot_enter_wake_path(self):
         class NoApiCalls:

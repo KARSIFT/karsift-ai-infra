@@ -56,6 +56,7 @@ class PlanPathPolicyTests(unittest.TestCase):
         self.assertIn('plan-review / publish-plan-review', self.adopt)
         self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', self.adopt)
         self.assertIn("Independent verification for $head_sha is not passing", self.adopt)
+        self.assertIn('base_line="base_sha:', self.adopt)
 
 
 if __name__ == "__main__":

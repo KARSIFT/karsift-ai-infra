@@ -367,10 +367,22 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
+          permission-pull-requests: read
 
       - name: Publish App-signed plan verification comment
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ needs.plan-review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.plan-review.outputs.base_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          gh pr comment "${{ inputs.pr_number }}" \
+          set -euo pipefail
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "Plan PR base/head pair changed immediately before App publication." >&2
+            exit 1
+          fi
+          gh pr comment "$PR_NUMBER" \
             --body-file /tmp/plan-review-publish/verdict-comment.md

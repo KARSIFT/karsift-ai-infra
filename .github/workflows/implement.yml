@@ -63,6 +63,11 @@ on:
         required: false
         type: string
         default: ""
+      expected_base_sha:
+        description: "Required on remediation attempts: exact PR base bound into the authenticated prior-review evidence."
+        required: false
+        type: string
+        default: ""
     secrets:
       OPENAI_API_KEY:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
@@ -360,19 +365,24 @@ jobs:
         if: inputs.attempt != '1'
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
           pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
           if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
-            live_sha=$(gh pr view "$pr_number" --json headRefOid -q .headRefOid)
+            live_pr=$(gh pr view "$pr_number" --json headRefOid,baseRefOid)
+            live_sha=$(jq -r .headRefOid <<<"$live_pr")
+            live_base_sha=$(jq -r .baseRefOid <<<"$live_pr")
             check_ok=$(gh pr checks "$pr_number" --json name,state -q \
               '[.[] | select(.name == "review / publish-review")] | length > 0 and all(.state == "SUCCESS")' \
               2>/dev/null || echo "false")
-            if [ "$live_sha" = "${{ inputs.expected_head_sha }}" ] && [ "$check_ok" = "true" ]; then
+            if [ "$live_sha" = "${{ inputs.expected_head_sha }}" ] &&
+               [ "$live_base_sha" = "$EXPECTED_BASE_SHA" ] && [ "$check_ok" = "true" ]; then
               header="**Independent verification - bound to commit \`$live_sha\`**"
               task_line="task_id: \`${{ inputs.task_id }}\`"
               package_line="package_path: \`${{ inputs.package_path }}\`"
               issue_line="authority_issue: \`${{ inputs.issue_number }}\`"
+              base_line="base_sha: \`$live_base_sha\`"
               gh api --paginate --slurp \
                 "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
                 | jq -r \
@@ -380,6 +390,7 @@ jobs:
                   --arg task "$task_line" \
                   --arg package "$package_line" \
                   --arg issue "$issue_line" \
+                  --arg base "$base_line" \
                   '[.[][] | select(
                     .user.login == "karsift-ai-infra-bot[bot]" and
                     .user.type == "Bot" and
@@ -388,6 +399,7 @@ jobs:
                     ((.body | split("\n") | index($task)) != null) and
                     ((.body | split("\n") | index($package)) != null) and
                     ((.body | split("\n") | index($issue)) != null)
+                    and ((.body | split("\n") | index($base)) != null)
                   )] | sort_by(.created_at, .id) | last | .body // ""' \
                   > /tmp/prior-review.txt
             fi

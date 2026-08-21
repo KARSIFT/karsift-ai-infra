@@ -35,8 +35,10 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertLess(waiting_guard, retry_output)
 
     def test_waiting_is_bound_to_current_exact_pr_head(self):
-        self.assertIn("--json body,headRefOid", self.workflow)
+        self.assertIn("--json body,headRefOid,baseRefOid", self.workflow)
         self.assertIn('review_header="**Independent verification - bound to commit', self.workflow)
+        self.assertIn('base_line="base_sha:', self.workflow)
+        self.assertIn('index($base)', self.workflow)
         self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', self.workflow)
         self.assertIn('.user.type == "Bot"', self.workflow)
         self.assertIn('package_line="package_path:', self.workflow)
@@ -48,7 +50,9 @@ class RemediatePolicyTests(unittest.TestCase):
 
     def test_stale_caller_run_cannot_dispatch_newer_head(self):
         self.assertIn("expected_head_sha:", self.workflow)
+        self.assertIn("expected_base_sha:", self.workflow)
         self.assertIn('--expected-sha "$EXPECTED_HEAD_SHA"', self.workflow)
+        self.assertIn('base_sha" != "$EXPECTED_BASE_SHA', self.workflow)
         self.assertIn('initial_decision" = "STALE"', self.workflow)
         self.assertIn('echo "stale_run=true"', self.workflow)
 
@@ -64,6 +68,7 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn("needs.decide.outputs.should_retry == 'true'", retry)
         self.assertIn("uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main", retry)
         self.assertIn("attempt: ${{ needs.decide.outputs.next_attempt }}", retry)
+        self.assertIn("expected_base_sha: ${{ inputs.expected_base_sha }}", retry)
 
     def test_no_founder_override_or_comment_authority(self):
         self.assertNotIn("founder_username:", self.workflow)
