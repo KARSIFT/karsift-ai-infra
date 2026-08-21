@@ -145,10 +145,13 @@ implementer's permissions or secrets.
 The unrestricted implementer also never shares a runner with the GitHub App
 token. It produces and uploads a Git bundle with persisted checkout credentials
 disabled; a separate clean `publish` job downloads that artifact, mints a
-repository-scoped contents/pull-requests/workflows token, imports the exact
+repository-scoped contents/issues/pull-requests token, imports the exact
 declared commit into a new bare repository, and pushes with hooks disabled plus
 an explicit lease. Repository hooks, PATH changes, or tools left by model code
-therefore cannot observe the App credential or forge its bot identity.
+therefore cannot observe the App credential or forge its bot identity. The
+publisher rejects every `.github/workflows/**` change before push; those
+security-sensitive edits use a separately supervised review/publication path
+instead of executing from an unreviewed same-repository PR.
 Its model-facing job also has read-only issue and pull-request permissions;
 no-change reporting is performed by a separate clean runner.
 
@@ -208,6 +211,8 @@ Merge, remediation, and plan adoption apply the same identity rule: only an
 App-signed, exact-head verdict with its successful isolated publisher check is
 accepted. Plan review has its own clean `publish-plan-review` stage, so neither
 review model can impersonate the credential that records its decision.
+The caller template wires that review for every `plan/` PR and makes merge-gate
+wait for it explicitly.
 
 For `pull_request` and `pull_request_target` evidence, the run's GitHub PR
 association must include the waiting PR number; matching workflow, branch, and

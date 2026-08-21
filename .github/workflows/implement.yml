@@ -286,7 +286,9 @@ jobs:
             -c 'credential.https://github.com.helper=!gh auth git-credential' \
             fetch origin "${{ inputs.integration_branch }}"
           if [ "${{ inputs.attempt }}" != "1" ]; then
-            if ! git ls-remote --exit-code --heads origin "$branch" | grep -q .; then
+            if ! git -c credential.helper= \
+              -c 'credential.https://github.com.helper=!gh auth git-credential' \
+              ls-remote --exit-code --heads origin "$branch" | grep -q .; then
               echo "Remediation attempt has no existing remote branch $branch; refusing to spend model work on an unbound retry." >&2
               exit 1
             fi
@@ -360,11 +362,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state all --json number -q '.[0].number' 2>/dev/null || echo "")
+          pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
           if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
-            gh api "repos/${{ github.repository }}/issues/$pr_number/comments" \
-              --jq '[.[] | select(.body | startswith("**Independent verification"))] | last | .body // ""' \
-              > /tmp/prior-review.txt 2>/dev/null || true
+            live_sha=$(gh pr view "$pr_number" --json headRefOid -q .headRefOid)
+            check_ok=$(gh pr checks "$pr_number" --json name,state -q \
+              '[.[] | select(.name == "review / publish-review")] | length > 0 and all(.state == "SUCCESS")' \
+              2>/dev/null || echo "false")
+            if [ "$live_sha" = "${{ inputs.expected_head_sha }}" ] && [ "$check_ok" = "true" ]; then
+              header="**Independent verification - bound to commit \`$live_sha\`**"
+              task_line="task_id: \`${{ inputs.task_id }}\`"
+              package_line="package_path: \`${{ inputs.package_path }}\`"
+              issue_line="authority_issue: \`${{ inputs.issue_number }}\`"
+              gh api --paginate --slurp \
+                "repos/${{ github.repository }}/issues/$pr_number/comments?per_page=100" \
+                | jq -r \
+                  --arg header "$header" \
+                  --arg task "$task_line" \
+                  --arg package "$package_line" \
+                  --arg issue "$issue_line" \
+                  '[.[][] | select(
+                    .user.login == "karsift-ai-infra-bot[bot]" and
+                    .user.type == "Bot" and
+                    (.body | startswith($header)) and
+                    ((.body | split("\n") | index($header)) != null) and
+                    ((.body | split("\n") | index($task)) != null) and
+                    ((.body | split("\n") | index($package)) != null) and
+                    ((.body | split("\n") | index($issue)) != null)
+                  )] | sort_by(.created_at, .id) | last | .body // ""' \
+                  > /tmp/prior-review.txt
+            fi
           fi
           touch /tmp/prior-review.txt
 
@@ -979,7 +1005,6 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
-          permission-workflows: write
 
       - name: Publish exact bundled commit from an isolated bare repository
         env:
@@ -1020,6 +1045,13 @@ jobs:
              ! git --git-dir="$git_dir" merge-base --is-ancestor \
                "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA"; then
             echo "Bundle does not contain the authorized commit lineage." >&2
+            exit 1
+          fi
+
+          if git --git-dir="$git_dir" diff-tree --no-commit-id --name-only -r \
+            "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA" \
+            | grep -E '^\.github/workflows/' >/dev/null; then
+            echo "Automated implementation cannot publish workflow-file changes; supervised review and publication are required." >&2
             exit 1
           fi
 

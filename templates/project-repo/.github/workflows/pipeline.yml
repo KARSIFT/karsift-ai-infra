@@ -188,6 +188,14 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.action != 'closed'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
 
+  plan-review:
+    needs: ci
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && startsWith(github.head_ref, 'plan/')
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml@main
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
   # Planning PRs (head branch prefixed "plan/" by plan.yml) create a package
   # rather than implementing one, so they never carry the "Package path:"
   # line this job requires - the startsWith guard below skips this (and
@@ -276,12 +284,13 @@ jobs:
   # requiring review's specific 'success' result which a planning PR's
   # deliberately-skipped review can never produce.
   merge-gate:
-    needs: review
+    needs: [review, plan-review]
     if: |
       always() &&
       (
         github.event_name == 'pull_request' && github.event.action != 'closed' &&
-        (needs.review.result == 'success' || needs.review.result == 'skipped')
+        (needs.review.result == 'success' || needs.review.result == 'skipped') &&
+        (needs.plan-review.result == 'success' || needs.plan-review.result == 'skipped')
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:

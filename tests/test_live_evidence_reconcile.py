@@ -444,8 +444,11 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("core.hooksPath=/dev/null", publish_job)
         self.assertIn("permission-contents: write", publish_job)
         self.assertIn("permission-pull-requests: write", publish_job)
-        self.assertIn("permission-workflows: write", publish_job)
+        self.assertNotIn("permission-workflows: write", publish_job)
         self.assertIn("permission-issues: write", publish_job)
+        self.assertIn("cannot publish workflow-file changes", publish_job)
+        self.assertIn('.user.login == "karsift-ai-infra-bot[bot]"', implement_job)
+        self.assertIn('review / publish-review', implement_job)
         self.assertIn("report-no-change:", self.implement)
 
         plan_job, plan_publish_job = self.plan.split("\n  publish-plan:", 1)
@@ -470,6 +473,9 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertNotIn("  workflow_run:", self.pipeline)
         self.assertIn("reconcile-live-evidence", self.pipeline)
         self.assertIn("live_evidence_run_id", self.pipeline)
+        self.assertIn("  plan-review:", self.pipeline)
+        self.assertIn("uses: KARSIFT/karsift-ai-infra/.github/workflows/plan-review.yml@main", self.pipeline)
+        self.assertIn("needs: [review, plan-review]", self.pipeline)
 
     def test_waiting_marker_requires_trusted_comment_and_successful_review_check(self):
         body = (

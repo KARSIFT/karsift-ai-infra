@@ -29,6 +29,10 @@
   job emits a credential-free Git bundle, while a fresh runner mints the scoped
   App token, verifies/imports the exact commit in a bare repository, disables
   hooks, applies an explicit branch lease, and opens or updates the PR.
+  Model-authored workflow-file changes are rejected before push and the token
+  has no workflows permission, preventing an unreviewed same-repository PR from
+  becoming a secret-bearing execution path. Retry context accepts only the
+  exact-head App-signed reviewer record and matching publisher check.
 - Isolated privileged publication from unrestricted planning as well: the
   planner receives no persistent checkout credential and emits only a Git
   bundle or clarifying-question artifact. A fresh runner validates exact commit
