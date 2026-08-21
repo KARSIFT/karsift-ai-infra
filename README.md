@@ -134,8 +134,9 @@ implementation retry on that state. It is also forbidden to tell the implementer
 to edit unrelated workflows merely to manufacture the evidence.
 
 A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, waiting state, or no verdict yet
-(with CI still green) are remediation no-ops. Only an explicit implementation
-`FAIL`, CI failure, or review-job error can consume the bounded retry.
+(with CI still green) are implementation-remediation no-ops. Only an explicit
+implementation `FAIL` or CI failure can consume the bounded implementation
+retry. A review-job error stays in the isolated reviewer-infrastructure lane.
 
 The implementer job deliberately has no `actions` permission and receives no
 general Actions inspection/dispatch credential. Operator reconciliation is a
@@ -240,6 +241,13 @@ A remediation retry carries the failed head into `implement.yml`, validates it
 before model work, revalidates it immediately before publishing, and uses an
 explicit SHA-valued force-with-lease. A commit arriving in either timing window
 therefore survives instead of being overwritten by the stale retry.
+
+Reviewer responses are shape-validated inside the bounded transient-retry loop.
+A provider process that exits successfully but omits its documented non-empty
+result is retried as reviewer infrastructure, with sanitized diagnostics only.
+If all reviewer attempts fail, remediation records bounded Actions metadata but
+does not dispatch the implementer or consume its one code-remediation attempt.
+Only a genuine App-signed FAIL verdict or failed CI can start implementation.
 
 ## Ordered autonomous task execution
 

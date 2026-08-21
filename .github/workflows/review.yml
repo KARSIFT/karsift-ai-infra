@@ -386,11 +386,21 @@ jobs:
           MODEL="${{ steps.model.outputs.model }}"
           MODEL="${MODEL#cursor/}"
           run_review() {
-            agent -p --trust --mode plan \
+            if agent -p --trust --mode plan \
               --model "$MODEL" \
               --output-format json \
               < /tmp/review-prompt.txt \
-              > /tmp/verdict-response.json 2> /tmp/cursor-stderr.log
+              > /tmp/verdict-response.json 2> /tmp/cursor-stderr.log; then
+              :
+            else
+              agent_rc=$?
+              return "$agent_rc"
+            fi
+            # Validate the documented non-empty result inside the bounded
+            # retry loop. A live 0-exit, content-free response previously
+            # escaped retry and failed only in the following step.
+            python3 karsift-ai-infra/config/extract-cursor-result.py \
+              /tmp/verdict-response.json /tmp/verdict.md --allow-waiting
           }
           # Transient-failure retry (same account/model, immediate) - see
           # retry-helpers.sh's header comment for the live OpenCode incident
@@ -406,32 +416,8 @@ jobs:
       - name: Extract verdict text
         if: steps.pr.outputs.stale != 'true'
         run: |
-          python3 - <<'PYEOF'
-          import json
-
-          with open("/tmp/verdict-response.json") as f:
-              raw = f.read().strip()
-
-          if not raw:
-              raise SystemExit(
-                  "cursor-agent produced no output - see /tmp/cursor-stderr.log "
-                  "in this job's logs."
-              )
-
-          event = json.loads(raw)
-          if event.get("is_error"):
-              raise SystemExit(
-                  "cursor-agent reported an application-level error "
-                  f"(subtype={event.get('subtype')!r}): {event.get('result')!r}"
-              )
-
-          result = event.get("result", "")
-          if not result:
-              raise SystemExit("cursor-agent response had no 'result' text.")
-
-          with open("/tmp/verdict.md", "w") as f:
-              f.write(result)
-          PYEOF
+          python3 karsift-ai-infra/config/extract-cursor-result.py \
+            /tmp/verdict-response.json /tmp/verdict.md --allow-waiting
 
       - name: Show verdict
         if: steps.pr.outputs.stale != 'true'

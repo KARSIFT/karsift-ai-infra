@@ -7,7 +7,9 @@ name: remediate (reusable)
 # details included as required reading, then - if that retry also fails -
 # stops and escalates to the authority issue instead of trying a third time.
 # Two attempts total, same cap implement.yml already enforced for its own
-# internal failures.
+# internal failures. A reviewer-infrastructure error is deliberately different:
+# it records bounded metadata and does not spend an implementation attempt,
+# because no code finding exists for an implementer to repair.
 #
 # The CI-failure path was added 2026-07-24 after finding it live: a plain CI
 # failure (a formatting slip, a cross-package module-resolution gap) left a
@@ -79,6 +81,7 @@ jobs:
       issue_number: ${{ steps.parse.outputs.issue_number }}
       next_attempt: ${{ steps.parse.outputs.next_attempt }}
       waiting_for_operator_live_evidence: ${{ steps.parse.outputs.waiting_for_operator_live_evidence }}
+      review_infrastructure_failure: ${{ steps.parse.outputs.review_infrastructure_failure }}
       stale_run: ${{ steps.parse.outputs.stale_run }}
     steps:
       - name: Checkout karsift-ai-infra policy helpers
@@ -125,6 +128,7 @@ jobs:
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+            echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
             echo "stale_run=true" >> "$GITHUB_OUTPUT"
             echo "Exact-head precondition is $head_state; refusing remediation."
             exit 0
@@ -134,6 +138,7 @@ jobs:
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+            echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
             echo "stale_run=true" >> "$GITHUB_OUTPUT"
             echo "Exact-base precondition is stale or invalid; refusing remediation."
             exit 0
@@ -149,6 +154,7 @@ jobs:
           echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
           echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
+          echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
           echo "stale_run=false" >> "$GITHUB_OUTPUT"
 
           # CI/review-job failure inputs belong to the caller run's head, not
@@ -167,7 +173,6 @@ jobs:
             echo "Caller pipeline SHA $EXPECTED_HEAD_SHA is stale; live PR head is $head_sha. Refusing remediation."
             exit 0
           fi
-
           # Only a review explicitly bound to this run's current PR head can
           # drive a lifecycle decision. Earlier-head comments are ignored.
           verdict=""
@@ -207,11 +212,20 @@ jobs:
             --ci-failed "$CI_FAILED" \
             --review-job-failed "$REVIEW_JOB_FAILED")
 
+          if [ "$decision" = "REVIEW_INFRA_FAILURE" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "review_infrastructure_failure=true" >> "$GITHUB_OUTPUT"
+            echo "The reviewer infrastructure failed before producing a code verdict; recording metadata without dispatching the implementer."
+            exit 0
+          fi
+
           # The shared classifier tolerates historical markdown decoration,
           # makes any machine-readable FAIL dominant over WAITING, and keeps
           # both merge/remediation parsing identical. The decision helper then
-          # gives current-SHA CI/reviewer infrastructure failures precedence
-          # over waiting while stale runs remain absolute no-ops.
+          # gives current-SHA CI failures precedence over waiting while stale
+          # runs remain absolute no-ops. Reviewer-infrastructure failures were
+          # handled above without consuming an implementation attempt.
           if [ "$decision" = "WAITING" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
@@ -221,8 +235,8 @@ jobs:
           fi
 
           # PASS/PASS_WITH_FINDINGS/PENDING are no-ops when CI and the review
-          # job itself are healthy. Review-job errors still reach RETRY via
-          # the decision helper even though no verdict comment was produced.
+          # job itself are healthy. Reviewer-infrastructure errors were
+          # separated above because they are not actionable code findings.
           if [ "$decision" = "NOOP" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
@@ -251,7 +265,6 @@ jobs:
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             reason="was reviewed and failed"
             [ "$CI_FAILED" = "true" ] && reason="failed CI"
-            [ "$REVIEW_JOB_FAILED" = "true" ] && reason="hit a review-job error (no verdict was produced)"
             gh issue comment "$issue_number" --body \
               "Attempt $attempt of 2 $reason. Stopping - not retrying automatically. A human needs to look at task \`$task_id\` in \`$change_id\` (PR #$PR_NUMBER)."
             exit 0
@@ -261,8 +274,6 @@ jobs:
           echo "next_attempt=$next_attempt" >> "$GITHUB_OUTPUT"
           if [ "$CI_FAILED" = "true" ]; then
             echo "CI failed on attempt $attempt - will retry as attempt $next_attempt."
-          elif [ "$REVIEW_JOB_FAILED" = "true" ]; then
-            echo "Review job errored (no verdict) on attempt $attempt - will retry as attempt $next_attempt."
           else
             echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
           fi
@@ -322,12 +333,14 @@ jobs:
       # bounded Actions metadata so the retry has a machine-readable reason
       # without copying model output, prompts, terminal sequences, arbitrary
       # logs, environment values, or credentials into a PR comment.
-      - name: Attach review-job-error output as retry context, if the review job itself failed
-        if: inputs.review_job_failed == 'true' && steps.parse.outputs.next_attempt != ''
+      - name: Record sanitized review-job-error metadata without implementation retry
+        if: inputs.review_job_failed == 'true' && steps.parse.outputs.review_infrastructure_failure == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
 
@@ -352,12 +365,12 @@ jobs:
           {
             echo "**Independent verification - review job error, not a reviewer verdict**"
             echo
-            echo "VERDICT: FAIL"
-            echo
             echo "The review job itself errored before producing any verdict (e.g. a"
             echo "transient failure in the reviewer's own tooling, not a finding about"
             echo "this PR's code). The diagnostic is intentionally metadata-only:"
             echo
+            echo "head_sha: \`$EXPECTED_HEAD_SHA\`"
+            echo "base_sha: \`$EXPECTED_BASE_SHA\`"
             echo "run_id: \`$sanitized_run_id\`"
             echo "job_id: \`$review_job_id\`"
             echo "job_name: \`$review_job_name\`"
@@ -367,6 +380,17 @@ jobs:
             echo "were copied into this comment. Inspect the Actions run through the"
             echo "repository-controlled operator path if deeper diagnosis is required."
           } > /tmp/review-failure-comment.md
+
+          # Recheck immediately before the mutation, after all diagnostic
+          # discovery and body construction, so an older run cannot annotate
+          # a replacement revision during a synchronize/cancellation race.
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR base/head pair changed before reviewer-infrastructure metadata publication; suppressing stale comment."
+            exit 0
+          fi
           gh pr comment "$PR_NUMBER" --body-file /tmp/review-failure-comment.md
 
   retry:

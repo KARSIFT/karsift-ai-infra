@@ -720,13 +720,15 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
 
     def test_review_error_retry_context_is_metadata_only(self):
         review_error = self.remediate.split(
-            "- name: Attach review-job-error output as retry context",
+            "- name: Record sanitized review-job-error metadata without implementation retry",
             1,
         )[1].split("\n  retry:", 1)[0]
         self.assertNotIn("/actions/jobs/", review_error)
         self.assertNotIn("log_tail", review_error)
         self.assertNotIn("--allow-escape-sequences", review_error)
         self.assertIn('run_id: \\`$sanitized_run_id\\`', review_error)
+        self.assertIn('head_sha: \\`$EXPECTED_HEAD_SHA\\`', review_error)
+        self.assertIn('base_sha: \\`$EXPECTED_BASE_SHA\\`', review_error)
         self.assertIn('job_id: \\`$review_job_id\\`', review_error)
         self.assertIn('job_name: \\`$review_job_name\\`', review_error)
         self.assertIn('conclusion: \\`$review_job_conclusion\\`', review_error)

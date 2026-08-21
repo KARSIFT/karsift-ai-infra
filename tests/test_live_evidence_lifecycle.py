@@ -120,7 +120,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             "WAITING",
         )
 
-    def test_genuine_and_infrastructure_failures_retry(self):
+    def test_code_and_ci_failures_retry_but_review_infrastructure_does_not(self):
         common = {"expected_sha": "a" * 40, "current_sha": "a" * 40}
         self.assertEqual(
             decider.decide(
@@ -147,7 +147,27 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
                 ci_failed=False,
                 review_job_failed=True,
             ),
+            "REVIEW_INFRA_FAILURE",
+        )
+        self.assertEqual(
+            decider.decide(
+                **common,
+                review_state="FAIL",
+                ci_failed=False,
+                review_job_failed=True,
+            ),
             "RETRY",
+            "an existing exact-SHA signed FAIL remains actionable",
+        )
+        self.assertEqual(
+            decider.decide(
+                **common,
+                review_state="PENDING",
+                ci_failed=True,
+                review_job_failed=True,
+            ),
+            "RETRY",
+            "a real CI failure remains actionable even if review infrastructure also failed",
         )
 
     def test_stale_run_never_retries_even_when_failed(self):
