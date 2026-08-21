@@ -260,7 +260,11 @@ A qualifying publisher record binds its exact pipeline run ID as well as the bas
 package/task identity, preventing evidence from different base revisions from being combined.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
 from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
-the earlier observed ready-transition head; the verifier validates both lineages explicitly.
+the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while
+the source PR number/base/head/ref bind both source runs. The ready run must also contain the
+workflow-controlled `decide (ready_for_review)` job marker. If GitHub has cleared a closed run's
+`pull_requests` array, the verifier requires the authenticated REST source-PR object to match the
+same repository, number, base, head, and ref instead of treating the missing association as proof.
 
 Callers must pass those exact base/head inputs to plan review, task review,
 remediation, and merge-gate. Every reusable-workflow schema keeps them optional

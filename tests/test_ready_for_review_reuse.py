@@ -361,6 +361,19 @@ class MergeGateReuseTests(unittest.TestCase):
 
 
 class ProofVerifierTests(unittest.TestCase):
+    def source_pr(self, *, number=9, head_sha=HEAD, base_sha=BASE, branch=AGENT_REF):
+        repository = {"full_name": "KARSIFT/example"}
+        return {
+            "number": number,
+            "body": agent_body(),
+            "head": {
+                "sha": head_sha,
+                "ref": branch,
+                "repo": repository,
+            },
+            "base": {"sha": base_sha, "repo": repository},
+        }
+
     def run_metadata(
         self,
         *,
@@ -392,6 +405,7 @@ class ProofVerifierTests(unittest.TestCase):
             expected_head_sha=HEAD,
             expected_base_sha=BASE,
             expected_head_ref=AGENT_REF,
+            source_pr=self.source_pr(),
         )
         self.assertTrue(ready.ok)
         prior = verifier.verify_prior_run(
@@ -403,6 +417,7 @@ class ProofVerifierTests(unittest.TestCase):
             expected_head_ref=AGENT_REF,
             prior_run_id=100,
             ready_run_id=300,
+            source_pr=self.source_pr(),
         )
         self.assertTrue(prior.ok)
         proof_head = "c" * 40
@@ -423,6 +438,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_sha=HEAD,
                 expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -441,6 +457,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_sha=HEAD,
                 expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -453,6 +470,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_ref=AGENT_REF,
                 prior_run_id=300,
                 ready_run_id=300,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -465,6 +483,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_ref=AGENT_REF,
                 prior_run_id=301,
                 ready_run_id=300,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -477,6 +496,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_ref=AGENT_REF,
                 prior_run_id=100,
                 ready_run_id=300,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -489,6 +509,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_ref=AGENT_REF,
                 prior_run_id=100,
                 ready_run_id=300,
+                source_pr=self.source_pr(),
             ).ok
         )
         self.assertFalse(
@@ -499,6 +520,7 @@ class ProofVerifierTests(unittest.TestCase):
                 expected_head_sha=HEAD,
                 expected_base_sha=BASE,
                 expected_head_ref=AGENT_REF,
+                source_pr=self.source_pr(),
             ).ok
         )
 
@@ -506,7 +528,10 @@ class ProofVerifierTests(unittest.TestCase):
         ready_jobs = [
             {"name": "ci", "conclusion": "skipped"},
             {"name": "review", "conclusion": "skipped"},
-            {"name": "ready-for-review-reuse / decide", "conclusion": "success"},
+            {
+                "name": "ready-for-review-reuse / decide (ready_for_review)",
+                "conclusion": "success",
+            },
             {"name": "merge-gate / report-status", "conclusion": "success"},
             {"name": "merge-gate / auto-merge", "conclusion": "skipped"},
         ]
@@ -527,6 +552,34 @@ class ProofVerifierTests(unittest.TestCase):
             verifier.verify_prior_jobs(
                 jobs=list(pipeline_run().jobs),
                 head_ref="unsupported/review-branch",
+            ).ok
+        )
+
+    def test_ready_job_requires_workflow_controlled_action_marker(self):
+        jobs = [
+            {"name": "ci", "conclusion": "skipped"},
+            {"name": "review", "conclusion": "skipped"},
+            {
+                "name": "ready-for-review-reuse / decide (synchronize)",
+                "conclusion": "success",
+            },
+            {"name": "merge-gate / report-status", "conclusion": "success"},
+            {"name": "merge-gate / auto-merge", "conclusion": "skipped"},
+        ]
+        self.assertFalse(
+            verifier.verify_ready_jobs(jobs=jobs, head_ref=AGENT_REF).ok
+        )
+
+    def test_empty_run_association_requires_exact_authenticated_source_pr(self):
+        self.assertFalse(
+            verifier.verify_ready_run(
+                run=self.run_metadata(),
+                repository="KARSIFT/example",
+                pr_number=9,
+                expected_head_sha=HEAD,
+                expected_base_sha=BASE,
+                expected_head_ref=AGENT_REF,
+                source_pr=self.source_pr(base_sha="c" * 40),
             ).ok
         )
 
@@ -571,7 +624,14 @@ class WorkflowContractTests(unittest.TestCase):
         ).read_text()
         self.assertIn("if: inputs.event_action != 'ready_for_review'", reuse_workflow)
         self.assertIn("if: inputs.event_action == 'ready_for_review'", reuse_workflow)
-        self.assertIn("expected_proof_head_sha: ${{ github.sha }}", template)
+        self.assertIn(
+            "expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}",
+            template,
+        )
+        self.assertIn("source_pr_number:", template)
+        self.assertIn("expected_source_head_sha:", template)
+        self.assertIn("expected_source_base_sha:", template)
+        self.assertIn("name: decide (${{ inputs.event_action }})", reuse_workflow)
 
 
 if __name__ == "__main__":

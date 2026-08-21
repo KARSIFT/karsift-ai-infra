@@ -144,16 +144,20 @@ on:
         description: "verify-ready-for-review-reuse only: prior successful pipeline run id"
         required: false
         type: string
-      verify_reuse_pr_number:
-        description: "verify-ready-for-review-reuse only: proof pull request number"
+      verify_reuse_source_pr_number:
+        description: "verify-ready-for-review-reuse only: source transition pull request number"
         required: false
         type: string
-      verify_reuse_head_sha:
-        description: "verify-ready-for-review-reuse only: exact reviewed head SHA"
+      verify_reuse_source_head_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed head SHA"
         required: false
         type: string
-      verify_reuse_base_sha:
-        description: "verify-ready-for-review-reuse only: exact reviewed base SHA"
+      verify_reuse_source_base_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed base SHA"
+        required: false
+        type: string
+      verify_reuse_proof_head_sha:
+        description: "verify-ready-for-review-reuse only: exact evidence-carrier head SHA"
         required: false
         type: string
 
@@ -442,10 +446,10 @@ jobs:
     with:
       ready_run_id: ${{ inputs.verify_ready_run_id }}
       prior_run_id: ${{ inputs.verify_prior_run_id }}
-      pr_number: ${{ inputs.verify_reuse_pr_number }}
-      expected_head_sha: ${{ inputs.verify_reuse_head_sha }}
-      expected_base_sha: ${{ inputs.verify_reuse_base_sha }}
-      expected_proof_head_sha: ${{ github.sha }}
+      source_pr_number: ${{ inputs.verify_reuse_source_pr_number }}
+      expected_source_head_sha: ${{ inputs.verify_reuse_source_head_sha }}
+      expected_source_base_sha: ${{ inputs.verify_reuse_source_base_sha }}
+      expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a

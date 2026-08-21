@@ -40,6 +40,7 @@ on:
 
 jobs:
   decide:
+    name: decide (${{ inputs.event_action }})
     runs-on: ubuntu-latest
     permissions:
       actions: read

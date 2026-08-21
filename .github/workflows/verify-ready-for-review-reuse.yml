@@ -16,16 +16,16 @@ on:
         description: Prior successful pipeline run id with CI/review evidence.
         required: true
         type: string
-      pr_number:
-        description: Proof pull request number.
+      source_pr_number:
+        description: Pull request that produced the ready_for_review run.
         required: true
         type: string
-      expected_head_sha:
-        description: Exact reviewed head SHA.
+      expected_source_head_sha:
+        description: Exact reviewed head SHA on the source pull request.
         required: true
         type: string
-      expected_base_sha:
-        description: Exact reviewed base SHA.
+      expected_source_base_sha:
+        description: Exact reviewed base SHA on the source pull request.
         required: true
         type: string
       expected_proof_head_sha:
@@ -61,8 +61,8 @@ jobs:
           python3 karsift-ai-infra/config/verify-ready-for-review-reuse-runner.py \
             --ready-run-id "${{ inputs.ready_run_id }}" \
             --prior-run-id "${{ inputs.prior_run_id }}" \
-            --pr-number "${{ inputs.pr_number }}" \
-            --expected-head-sha "${{ inputs.expected_head_sha }}" \
-            --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --source-pr-number "${{ inputs.source_pr_number }}" \
+            --expected-source-head-sha "${{ inputs.expected_source_head_sha }}" \
+            --expected-source-base-sha "${{ inputs.expected_source_base_sha }}" \
             --expected-proof-head-sha "${{ inputs.expected_proof_head_sha }}" \
             --current-ref "${{ github.sha }}"

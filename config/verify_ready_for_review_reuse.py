@@ -24,6 +24,32 @@ class VerificationResult:
     reason: str = ""
 
 
+def verify_source_pr(
+    *,
+    pr: dict,
+    repository: str,
+    pr_number: int,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    expected_head_ref: str,
+) -> VerificationResult:
+    if int(pr.get("number") or 0) != pr_number:
+        return VerificationResult(False, "source_pr_number_mismatch")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    if str((head.get("repo") or {}).get("full_name") or "") != repository:
+        return VerificationResult(False, "source_pr_head_repository_mismatch")
+    if str((base.get("repo") or {}).get("full_name") or "") != repository:
+        return VerificationResult(False, "source_pr_base_repository_mismatch")
+    if str(head.get("sha") or "").lower() != expected_head_sha.lower():
+        return VerificationResult(False, "source_pr_head_mismatch")
+    if str(head.get("ref") or "") != expected_head_ref:
+        return VerificationResult(False, "source_pr_head_ref_mismatch")
+    if str(base.get("sha") or "").lower() != expected_base_sha.lower():
+        return VerificationResult(False, "source_pr_base_mismatch")
+    return VerificationResult(True)
+
+
 def verify_ready_run(
     *,
     run: dict,
@@ -32,7 +58,18 @@ def verify_ready_run(
     expected_head_sha: str,
     expected_base_sha: str,
     expected_head_ref: str,
+    source_pr: dict,
 ) -> VerificationResult:
+    source_binding = verify_source_pr(
+        pr=source_pr,
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha,
+        expected_head_ref=expected_head_ref,
+    )
+    if not source_binding.ok:
+        return source_binding
     if run.get("repository", {}).get("full_name") != repository:
         return VerificationResult(False, "wrong_repository")
     if run.get("name") != "pipeline" or run.get("path") != ".github/workflows/pipeline.yml":
@@ -58,6 +95,9 @@ def verify_ready_run(
         ]
         if len(matches) != 1:
             return VerificationResult(False, "wrong_pull_request")
+    # GitHub clears workflow-run PR associations after some PRs close. The
+    # exact REST PR object above is the authenticated fallback binding in that
+    # state; it must still match repository, number, base, head, and head ref.
     return VerificationResult(True)
 
 
@@ -94,7 +134,8 @@ def verify_ready_jobs(
     reuse_jobs = [
         job
         for job in jobs
-        if "ready-for-review-reuse" in _job_name(job) and _job_name(job).endswith("/ decide")
+        if _job_name(job)
+        == "ready-for-review-reuse / decide (ready_for_review)"
     ]
     if len(reuse_jobs) != 1 or _job_conclusion(reuse_jobs[0]) != "success":
         return VerificationResult(False, "reuse_decision_job_missing")
@@ -111,7 +152,18 @@ def verify_prior_run(
     expected_head_ref: str,
     prior_run_id: int,
     ready_run_id: int,
+    source_pr: dict,
 ) -> VerificationResult:
+    source_binding = verify_source_pr(
+        pr=source_pr,
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha,
+        expected_head_ref=expected_head_ref,
+    )
+    if not source_binding.ok:
+        return source_binding
     if int(run.get("id") or 0) != prior_run_id:
         return VerificationResult(False, "prior_run_id_mismatch")
     if prior_run_id >= ready_run_id:
