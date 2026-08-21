@@ -83,6 +83,9 @@ jobs:
       waiting_for_operator_live_evidence: ${{ steps.parse.outputs.waiting_for_operator_live_evidence }}
       review_infrastructure_failure: ${{ steps.parse.outputs.review_infrastructure_failure }}
       stale_run: ${{ steps.parse.outputs.stale_run }}
+      operator_escalation: ${{ steps.parse.outputs.operator_escalation }}
+      ownership_state: ${{ steps.parse.outputs.ownership_state }}
+      ownership_reason: ${{ steps.parse.outputs.ownership_reason }}
     steps:
       - name: Checkout karsift-ai-infra policy helpers
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -90,6 +93,14 @@ jobs:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
           persist-credentials: false
+
+      - name: Checkout caller repository at the remediation head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.expected_head_sha }}
+          path: caller
+          persist-credentials: false
+          fetch-depth: 1
 
       # The PR body's exact wording is implement.yml's own template (see
       # "Open PR" there) - this parses it back out. Both files must stay in
@@ -130,6 +141,9 @@ jobs:
             echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
             echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
             echo "stale_run=true" >> "$GITHUB_OUTPUT"
+            echo "operator_escalation=false" >> "$GITHUB_OUTPUT"
+            echo "ownership_state=" >> "$GITHUB_OUTPUT"
+            echo "ownership_reason=" >> "$GITHUB_OUTPUT"
             echo "Exact-head precondition is $head_state; refusing remediation."
             exit 0
           fi
@@ -140,6 +154,9 @@ jobs:
             echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
             echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
             echo "stale_run=true" >> "$GITHUB_OUTPUT"
+            echo "operator_escalation=false" >> "$GITHUB_OUTPUT"
+            echo "ownership_state=" >> "$GITHUB_OUTPUT"
+            echo "ownership_reason=" >> "$GITHUB_OUTPUT"
             echo "Exact-base precondition is stale or invalid; refusing remediation."
             exit 0
           fi
@@ -156,6 +173,7 @@ jobs:
           echo "waiting_for_operator_live_evidence=false" >> "$GITHUB_OUTPUT"
           echo "review_infrastructure_failure=false" >> "$GITHUB_OUTPUT"
           echo "stale_run=false" >> "$GITHUB_OUTPUT"
+          echo "operator_escalation=false" >> "$GITHUB_OUTPUT"
 
           # CI/review-job failure inputs belong to the caller run's head, not
           # whichever head happens to be live when this reusable job starts.
@@ -165,7 +183,8 @@ jobs:
             --current-sha "$head_sha" \
             --review-state PENDING \
             --ci-failed "$CI_FAILED" \
-            --review-job-failed "$REVIEW_JOB_FAILED")
+            --review-job-failed "$REVIEW_JOB_FAILED" \
+            --ownership-state ORDINARY)
           if [ "$initial_decision" = "STALE" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
@@ -173,6 +192,32 @@ jobs:
             echo "Caller pipeline SHA $EXPECTED_HEAD_SHA is stale; live PR head is $head_sha. Refusing remediation."
             exit 0
           fi
+
+          # Classify task ownership from this run's immutable caller checkout.
+          # The machine-readable live-evidence contract is authoritative; the
+          # exact task-stanza marker is only a structural secondary signal.
+          # Missing, malformed, conflicting, or unreadable metadata fails
+          # closed and can never authorize an implementer retry.
+          ownership_state="FAIL_CLOSED"
+          ownership_reason="invalid_remediation_identity"
+          if [ "${#package_paths[@]}" -eq 1 ] && [ "${package_paths[0]}" = "$PACKAGE_PATH" ] &&
+             [[ "$task_id" =~ ^[A-Z][A-Z0-9]+-[0-9]+-T[0-9]+[a-z]?$ ]] &&
+             [[ "$change_id" =~ ^[A-Z][A-Z0-9]+-[0-9]+$ ]] &&
+             [[ "$issue_number" =~ ^[0-9]+$ ]]; then
+            ownership_json=$(python3 karsift-ai-infra/config/remediation-ownership.py \
+              --repository-root caller \
+              --package-path "$PACKAGE_PATH" \
+              --task-id "$task_id")
+            ownership_state=$(jq -r .state <<<"$ownership_json")
+            ownership_reason=$(jq -r .reason <<<"$ownership_json")
+          fi
+          case "$ownership_state" in
+            ORDINARY|OPERATOR|FAIL_CLOSED) ;;
+            *) ownership_state="FAIL_CLOSED"; ownership_reason="invalid_classifier_output" ;;
+          esac
+          [[ "$ownership_reason" =~ ^[a-z0-9_]+$ ]] || ownership_reason="invalid_classifier_reason"
+          echo "ownership_state=$ownership_state" >> "$GITHUB_OUTPUT"
+          echo "ownership_reason=$ownership_reason" >> "$GITHUB_OUTPUT"
           # Only a review explicitly bound to this run's current PR head can
           # drive a lifecycle decision. Earlier-head comments are ignored.
           verdict=""
@@ -210,7 +255,8 @@ jobs:
             --current-sha "$head_sha" \
             --review-state "$review_state" \
             --ci-failed "$CI_FAILED" \
-            --review-job-failed "$REVIEW_JOB_FAILED")
+            --review-job-failed "$REVIEW_JOB_FAILED" \
+            --ownership-state "$ownership_state")
 
           if [ "$decision" = "REVIEW_INFRA_FAILURE" ]; then
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
@@ -241,6 +287,14 @@ jobs:
             echo "should_retry=false" >> "$GITHUB_OUTPUT"
             echo "next_attempt=" >> "$GITHUB_OUTPUT"
             echo "No FAIL verdict or waiting state, CI did not fail, and the review job itself did not error - nothing to remediate."
+            exit 0
+          fi
+
+          if [ "$decision" = "ESCALATE_OPERATOR" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "next_attempt=" >> "$GITHUB_OUTPUT"
+            echo "operator_escalation=true" >> "$GITHUB_OUTPUT"
+            echo "A retry signal exists, but ownership is $ownership_state; escalating without dispatching the general implementer."
             exit 0
           fi
 
@@ -277,6 +331,64 @@ jobs:
           else
             echo "FAIL verdict on attempt $attempt - will retry as attempt $next_attempt."
           fi
+
+      - name: Publish sanitized operator-ownership escalation
+        if: steps.parse.outputs.operator_escalation == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          TASK_ID: ${{ steps.parse.outputs.task_id }}
+          CHANGE_ID: ${{ steps.parse.outputs.change_id }}
+          ISSUE_NUMBER: ${{ steps.parse.outputs.issue_number }}
+          OWNERSHIP_STATE: ${{ steps.parse.outputs.ownership_state }}
+          OWNERSHIP_REASON: ${{ steps.parse.outputs.ownership_reason }}
+          CI_FAILED: ${{ inputs.ci_failed }}
+        run: |
+          set -euo pipefail
+          live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR base/head pair changed before ownership escalation; suppressing stale publication."
+            exit 0
+          fi
+
+          target="$ISSUE_NUMBER"
+          [[ "$target" =~ ^[1-9][0-9]*$ ]] || target="$PR_NUMBER"
+          [[ "$TASK_ID" =~ ^[A-Za-z][A-Za-z0-9]*-[0-9]+-T[0-9]+[a-z]?$ ]] || TASK_ID="unavailable"
+          [[ "$CHANGE_ID" =~ ^[A-Za-z][A-Za-z0-9]*-[0-9]+$ ]] || CHANGE_ID="unavailable"
+          case "$OWNERSHIP_STATE" in OPERATOR|FAIL_CLOSED) ;; *) OWNERSHIP_STATE="FAIL_CLOSED" ;; esac
+          [[ "$OWNERSHIP_REASON" =~ ^[a-z0-9_]+$ ]] || OWNERSHIP_REASON="invalid_classifier_reason"
+          trigger="review_fail"
+          [ "$CI_FAILED" = "true" ] && trigger="ci_failure"
+          marker="<!-- remediation-ownership-escalation task=$TASK_ID head=$EXPECTED_HEAD_SHA -->"
+          existing=$(gh api --paginate --slurp "repos/$GH_REPO/issues/$target/comments?per_page=100" \
+            | jq -r --arg marker "$marker" '[.[][] | select(.body | contains($marker))] | length')
+          if [ "$existing" -gt 0 ]; then
+            echo "An escalation for this exact task/head already exists; not duplicating it."
+            exit 0
+          fi
+          {
+            echo "$marker"
+            echo "**Operator-owned remediation escalation**"
+            echo
+            echo "A current exact-SHA remediation signal was suppressed because this task is operator-owned or its ownership metadata failed closed. No general implementer was dispatched and no implementation attempt was consumed."
+            echo
+            echo "- change_id: \`$CHANGE_ID\`"
+            echo "- task_id: \`$TASK_ID\`"
+            echo "- pull_request: \`#$PR_NUMBER\`"
+            echo "- head_sha: \`$EXPECTED_HEAD_SHA\`"
+            echo "- base_sha: \`$EXPECTED_BASE_SHA\`"
+            echo "- trigger: \`$trigger\`"
+            echo "- ownership_state: \`$OWNERSHIP_STATE\`"
+            echo "- reason_code: \`$OWNERSHIP_REASON\`"
+            echo
+            echo "This record contains no raw logs, model output, OAuth data, environment values, user identifiers, or credentials. Continue through the repository-controlled operator/reconciliation path."
+          } > /tmp/operator-escalation.md
+          gh issue comment "$target" --body-file /tmp/operator-escalation.md
 
       # CI can fail before review produces a signed verdict. Record only the
       # immutable identifiers needed to audit that retry. Raw job logs are not

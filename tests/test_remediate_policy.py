@@ -19,6 +19,27 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn('--review-job-failed "$REVIEW_JOB_FAILED"', self.workflow)
         self.assertIn('echo "should_retry=false"', self.workflow)
 
+    def test_operator_owned_or_malformed_metadata_never_dispatches_implementer(self):
+        self.assertIn("config/remediation-ownership.py", self.workflow)
+        self.assertIn("--repository-root caller", self.workflow)
+        self.assertIn("--ownership-state \"$ownership_state\"", self.workflow)
+        self.assertIn('decision" = "ESCALATE_OPERATOR"', self.workflow)
+        self.assertIn('echo "operator_escalation=true"', self.workflow)
+        retry = self.workflow.split("  retry:", 1)[1]
+        self.assertIn("needs.decide.outputs.should_retry == 'true'", retry)
+        self.assertNotIn("operator_escalation", retry)
+
+    def test_operator_escalation_is_exact_head_sanitized_and_deduplicated(self):
+        escalation = self.workflow.split(
+            "- name: Publish sanitized operator-ownership escalation", 1
+        )[1].split("- name: Record sanitized CI failure metadata", 1)[0]
+        self.assertIn("--json headRefOid,baseRefOid,state", escalation)
+        self.assertIn("remediation-ownership-escalation", escalation)
+        self.assertIn("contains($marker)", escalation)
+        self.assertIn("No general implementer was dispatched", escalation)
+        self.assertNotIn("/logs", escalation)
+        self.assertNotIn("/artifacts", escalation)
+
     def test_retry_is_bounded_to_two_attempts(self):
         self.assertIn("next_attempt=$((attempt + 1))", self.workflow)
         self.assertIn('if [ "$next_attempt" -gt 2 ]; then', self.workflow)

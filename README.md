@@ -135,6 +135,17 @@ live Actions run. Merge remains fail-closed, but `remediate.yml` does not spend 
 implementation retry on that state. It is also forbidden to tell the implementer
 to edit unrelated workflows merely to manufacture the evidence.
 
+The same ownership boundary applies when a current exact-SHA run has a genuine
+review `FAIL` or CI failure. Before `remediate.yml` can dispatch the bounded
+implementer retry, it reads the task's live-evidence contract and exact task
+stanza from an immutable checkout of the caller head. A valid `operator` or
+`live-actions` contract produces a sanitized, deduplicated operator escalation
+instead of an implementation dispatch. Missing, malformed, unreadable, or
+conflicting ownership metadata fails closed in the same lane. Ordinary tasks
+(no contract and no ownership marker) retain the existing two-attempt behavior;
+stale runs, waiting verdicts, and reviewer-infrastructure failures retain their
+separate no-retry semantics.
+
 Before either task or plan review becomes an App-signed record, a bounded
 normalizer removes full-line commit/task/package/issue/base binding lookalikes
 from the model narrative. The clean workflow then supplies those authoritative
