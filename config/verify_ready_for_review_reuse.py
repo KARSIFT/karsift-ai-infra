@@ -35,6 +35,15 @@ def verify_source_pr(
 ) -> VerificationResult:
     if int(pr.get("number") or 0) != pr_number:
         return VerificationResult(False, "source_pr_number_mismatch")
+    # A successful auto-merge job is necessary, but only the authenticated
+    # pull-request object proves that GitHub actually recorded the merge.
+    if (
+        pr.get("state") != "closed"
+        or pr.get("merged") is not True
+        or not isinstance(pr.get("merged_at"), str)
+        or not pr.get("merged_at")
+    ):
+        return VerificationResult(False, "source_pr_not_merged")
     head = pr.get("head") or {}
     base = pr.get("base") or {}
     if str((head.get("repo") or {}).get("full_name") or "") != repository:

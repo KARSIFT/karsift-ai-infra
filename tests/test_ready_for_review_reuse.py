@@ -510,6 +510,9 @@ class ProofVerifierTests(unittest.TestCase):
         repository = {"full_name": "KARSIFT/example"}
         return {
             "number": number,
+            "state": "closed",
+            "merged": True,
+            "merged_at": "2026-08-21T10:00:00Z",
             "body": agent_body(),
             "head": {
                 "sha": head_sha,
@@ -736,6 +739,26 @@ class ProofVerifierTests(unittest.TestCase):
             ).ok
         )
 
+    def test_source_pr_must_be_recorded_as_merged(self):
+        for override in (
+            {"state": "open", "merged": False, "merged_at": None},
+            {"state": "closed", "merged": False, "merged_at": None},
+            {"state": "closed", "merged": True, "merged_at": None},
+        ):
+            with self.subTest(override=override):
+                source_pr = {**self.source_pr(), **override}
+                result = verifier.verify_ready_run(
+                    run=self.run_metadata(),
+                    repository="KARSIFT/example",
+                    pr_number=9,
+                    expected_head_sha=HEAD,
+                    expected_base_sha=BASE,
+                    expected_head_ref=AGENT_REF,
+                    source_pr=source_pr,
+                )
+                self.assertFalse(result.ok)
+                self.assertEqual(result.reason, "source_pr_not_merged")
+
 
 class WorkflowContractTests(unittest.TestCase):
     def test_reuse_workflows_are_read_only_and_merge_gate_revalidates_prior_run(self):
@@ -765,6 +788,62 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(r"pipeline_run_id: \`${{ github.run_id }}\`", plan_review)
         self.assertIn('task_binding="task_id: \\`$task_id\\`"', review)
         self.assertIn('index($task)', review)
+
+    def test_review_attestation_filter_behaves_for_task_binding_and_uniqueness(self):
+        review = (ROOT / ".github/workflows/review.yml").read_text()
+        filter_lines = [
+            line.strip()
+            for line in review.splitlines()
+            if "[.[][] | select" in line
+        ]
+        self.assertEqual(len(filter_lines), 1)
+        jq_filter = filter_lines[0][1:-2]
+        binding = f"result_head_sha: `{HEAD}`"
+        base_binding = f"base_sha: `{BASE}`"
+        task_binding = "task_id: `VOC-104-T00`"
+
+        def comment(task: str = "VOC-104-T00") -> dict:
+            return {
+                "user": {
+                    "login": "karsift-ai-infra-bot[bot]",
+                    "type": "Bot",
+                },
+                "body": "\n".join(
+                    [
+                        "**Live-evidence reconcile — qualified**",
+                        f"task_id: `{task}`",
+                        binding,
+                        base_binding,
+                    ]
+                ),
+            }
+
+        def classify(comments: list[dict]) -> int:
+            completed = subprocess.run(
+                [
+                    "jq",
+                    "--arg",
+                    "binding",
+                    binding,
+                    "--arg",
+                    "base",
+                    base_binding,
+                    "--arg",
+                    "task",
+                    task_binding,
+                    jq_filter,
+                ],
+                input=json.dumps([comments]),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return int(completed.stdout.strip())
+
+        self.assertEqual(classify([comment()]), 1)
+        self.assertEqual(classify([comment("VOC-104-T01")]), 0)
+        self.assertEqual(classify([comment(), comment()]), 2)
 
     def test_template_fails_closed_to_full_path_if_decision_job_fails(self):
         template = (
