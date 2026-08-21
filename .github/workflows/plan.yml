@@ -864,6 +864,9 @@ jobs:
         if: needs.plan.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          # This publisher intentionally has no checkout. Bind gh explicitly
+          # to the calling repository instead of relying on local git context.
+          GH_REPO: ${{ github.repository }}
           REQUEST: ${{ inputs.request }}
           SOURCE_DOCUMENT_PATH: ${{ inputs.source_document_path }}
           SOURCE_ISSUE: ${{ inputs.source_issue_number }}
@@ -898,6 +901,7 @@ jobs:
             echo "Risk classification: ${{ steps.publish.outputs.risk }}"
           } > /tmp/pr-body.txt
           url=$(gh pr create \
+            --repo "$GH_REPO" \
             --base "${{ inputs.integration_branch }}" \
             --head "${{ needs.plan.outputs.branch }}" \
             --title "Plan: ${{ needs.plan.outputs.package_id }} - ${{ needs.plan.outputs.slug }}" \
