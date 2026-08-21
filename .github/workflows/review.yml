@@ -268,10 +268,11 @@ jobs:
           if [ -n "$task_id" ] && [ -f "$result_path" ]; then
             binding="result_head_sha: \`${{ steps.pr.outputs.sha }}\`"
             base_binding="base_sha: \`${{ steps.pr.outputs.base_sha }}\`"
+            task_binding="task_id: \`$task_id\`"
             attestation_count=$(gh api --paginate --slurp \
               "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments?per_page=100" \
-              | jq --arg binding "$binding" --arg base "$base_binding" \
-                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and .user.type == "Bot" and (.body | startswith("**Live-evidence reconcile — qualified**")) and ((.body | split("\n") | index($binding)) != null) and ((.body | split("\n") | index($base)) != null))] | length')
+              | jq --arg binding "$binding" --arg base "$base_binding" --arg task "$task_binding" \
+                '[.[][] | select(.user.login == "karsift-ai-infra-bot[bot]" and .user.type == "Bot" and (.body | startswith("**Live-evidence reconcile — qualified**")) and ((.body | split("\n") | index($binding)) != null) and ((.body | split("\n") | index($base)) != null) and ((.body | split("\n") | index($task)) != null))] | length')
             if [ "$attestation_count" = "1" ]; then
               live_evidence_attestation="true"
             else

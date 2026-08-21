@@ -412,12 +412,14 @@ def result_already_present(api: GitHub, task: WaitingTask) -> bool:
     )
     binding = f"result_head_sha: `{task.head_sha}`"
     base_binding = f"base_sha: `{task.base_sha}`"
+    task_binding = f"task_id: `{task.task_id}`"
     return any(
         (comment.get("user") or {}).get("login") == TRUSTED_RECONCILE_AUTHOR
         and (comment.get("user") or {}).get("type") == "Bot"
         and (comment.get("body") or "").startswith("**Live-evidence reconcile — qualified**")
         and binding in (comment.get("body") or "").splitlines()
         and base_binding in (comment.get("body") or "").splitlines()
+        and task_binding in (comment.get("body") or "").splitlines()
         for comment in comments
     )
 

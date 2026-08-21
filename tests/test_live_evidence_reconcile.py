@@ -446,7 +446,12 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("comment_exists", self.runner_source)
 
     def test_14_duplicate_result_short_circuits_reconciliation(self):
-        task = SimpleNamespace(result_path="result.json", head_sha=HEAD, base_sha=BASE)
+        task = SimpleNamespace(
+            result_path="result.json",
+            head_sha=HEAD,
+            base_sha=BASE,
+            task_id="VOC-097-T02",
+        )
         task.pr_number = 12
         class AttestedApi:
             repository = "KARSIFT/example"
@@ -456,6 +461,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                     "user": {"login": "karsift-ai-infra-bot[bot]", "type": "Bot"},
                     "body": (
                         "**Live-evidence reconcile — qualified**\n"
+                        "task_id: `VOC-097-T02`\n"
                         f"result_head_sha: `{HEAD}`\n"
                         f"base_sha: `{BASE}`"
                     ),
@@ -467,6 +473,15 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
                 comments[0]["body"] = comments[0]["body"].replace(BASE, "f" * 40)
                 return comments
 
+        class WrongTaskAttestedApi(AttestedApi):
+            def get_all(self, endpoint, key=None):
+                comments = super().get_all(endpoint, key)
+                comments[0]["body"] = comments[0]["body"].replace(
+                    "VOC-097-T02",
+                    "VOC-097-T03",
+                )
+                return comments
+
         with patch.object(
             runner,
             "read_repository_file",
@@ -474,6 +489,7 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         ):
             self.assertTrue(runner.result_already_present(AttestedApi(), task))
             self.assertFalse(runner.result_already_present(StaleBaseAttestedApi(), task))
+            self.assertFalse(runner.result_already_present(WrongTaskAttestedApi(), task))
         self.assertIn('base_binding="base_sha:', self.review)
         self.assertIn('index($base)', self.review)
         self.assertIn(

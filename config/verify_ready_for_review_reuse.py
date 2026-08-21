@@ -126,11 +126,11 @@ def verify_ready_jobs(
         return VerificationResult(False, "review_not_skipped")
     if len(merge_report) != 1 or _job_conclusion(merge_report[0]) != "success":
         return VerificationResult(False, "merge_gate_not_successful")
-    if len(merge_auto) != 1 or _job_conclusion(merge_auto[0]) not in {
-        "success",
-        "skipped",
-    }:
-        return VerificationResult(False, "merge_gate_auto_invalid")
+    # report-status succeeds after posting either a passing or blocked status;
+    # only a successful auto-merge job proves that the optimized transition
+    # actually cleared merge-gate and completed the intended outcome.
+    if len(merge_auto) != 1 or _job_conclusion(merge_auto[0]) != "success":
+        return VerificationResult(False, "merge_gate_auto_not_successful")
     reuse_jobs = [
         job
         for job in jobs

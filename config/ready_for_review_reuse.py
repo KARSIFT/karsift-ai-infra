@@ -90,7 +90,10 @@ def required_success_jobs(head_ref: str) -> tuple[str, ...]:
 
 def current_reusable_caller_jobs(head_ref: str) -> tuple[str, ...]:
     if head_ref.startswith("agent/"):
-        return ("ci", "review")
+        # extract-package-path also waits on this decision job. During the
+        # decision it can legitimately be queued/PENDING alongside ci and
+        # review, then becomes SKIPPED when reuse-evidence is emitted.
+        return ("ci", "extract-package-path", "review")
     if head_ref.startswith("plan/"):
         return ("ci", "plan-review")
     return ()
@@ -234,9 +237,11 @@ def attestation_present(
     comments: list[dict],
     head_sha: str,
     base_sha: str,
+    task_id: str,
 ) -> bool:
     binding = f"result_head_sha: `{head_sha}`"
     base_binding = f"base_sha: `{base_sha}`"
+    task_binding = f"task_id: `{task_id}`"
     count = 0
     for comment in comments:
         user = comment.get("user") or {}
@@ -246,7 +251,7 @@ def attestation_present(
         if not body.startswith("**Live-evidence reconcile — qualified**"):
             continue
         lines = body.splitlines()
-        if binding in lines and base_binding in lines:
+        if binding in lines and base_binding in lines and task_binding in lines:
             count += 1
     return count == 1
 
@@ -318,6 +323,7 @@ def evaluate_reuse_eligibility(
             comments=comments,
             head_sha=live_head,
             base_sha=live_base,
+            task_id=task_id,
         ):
             return ReuseDecision("full-path", "missing_live_evidence_attestation")
     return ReuseDecision(
