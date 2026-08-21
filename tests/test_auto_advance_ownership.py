@@ -310,7 +310,9 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path="t01-evidence.md",
+            risk="R2",
         )
+        self.assertIn("Risk classification: R2", body)
         self.assertIn(f"Package path: `{PACKAGE}`", body)
         self.assertTrue(
             ownership.is_valid_carrier_pr(
@@ -321,6 +323,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 package_path=PACKAGE,
                 issue_number=866,
                 evidence_relative_path="t01-evidence.md",
+                risk="R2",
             )
         )
 
@@ -351,6 +354,31 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 {allowed, ".github/workflows/pipeline.yml"}, allowed
             )
 
+    def test_voc102_test_11_carrier_risk_comes_from_valid_package_metadata(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            package_root = Path(scratch)
+            change = package_root / "change.yaml"
+            for source, expected in (
+                ("risk: R0\n", "R0"),
+                ('risk: "r3"\n', "R3"),
+            ):
+                with self.subTest(source=source):
+                    change.write_text(source, encoding="utf-8")
+                    self.assertEqual(publisher.read_package_risk(package_root), expected)
+
+            for source in (
+                "title: no risk\n",
+                "risk: R5\n",
+                "risk: R1\nrisk: R2\n",
+                "  risk: R2\n",
+            ):
+                with self.subTest(invalid_source=source):
+                    change.write_text(source, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        publisher.PublisherError, "invalid_package_risk"
+                    ):
+                        publisher.read_package_risk(package_root)
+
     def test_voc102_test_11_existing_carrier_repairs_marker_without_overwrite(self):
         task_id = "VOC-102-T01"
         evidence_relative = "t01-evidence.md"
@@ -360,6 +388,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path=evidence_relative,
+            risk="R4",
         )
         existing_pr = {
             "number": 900,
@@ -386,6 +415,9 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 roster.write_text(
                     json.dumps([{"task_id": task_id, "issue": 866}]),
                     encoding="utf-8",
+                )
+                (clone_dir / PACKAGE / "change.yaml").write_text(
+                    "risk: R4\n", encoding="utf-8"
                 )
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -430,6 +462,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path="t01-evidence.md",
+            risk="R4",
         )
         with self.assertRaisesRegex(
             publisher.PublisherError, "conflicting_existing_pr"
@@ -452,6 +485,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 package_path=PACKAGE,
                 issue_number=866,
                 evidence_relative_path="t01-evidence.md",
+                risk="R4",
             )
 
     def test_voc102_test_11_existing_carrier_repairs_missing_evidence_file(self):
@@ -464,6 +498,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path=evidence_relative,
+            risk="R4",
         )
         existing_pr = {
             "number": 900,
@@ -486,6 +521,9 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 roster.write_text(
                     json.dumps([{"task_id": task_id, "issue": 866}]),
                     encoding="utf-8",
+                )
+                (clone_dir / PACKAGE / "change.yaml").write_text(
+                    "risk: R4\n", encoding="utf-8"
                 )
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -535,6 +573,9 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             def fake_clone(command, **_kwargs):
                 clone_dir = Path(command[4])
                 (clone_dir / PACKAGE).mkdir(parents=True, exist_ok=True)
+                (clone_dir / PACKAGE / "change.yaml").write_text(
+                    "risk: R1\n", encoding="utf-8"
+                )
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
             def fake_git(args, **_kwargs):
@@ -580,6 +621,10 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             create_args = github.call_args.args[0]
             self.assertEqual(create_args[:2], ["pr", "create"])
             self.assertIn("--draft", create_args)
+            self.assertIn(
+                "Risk classification: R1",
+                create_args[create_args.index("--body") + 1],
+            )
             post.assert_called_once()
 
     def test_voc102_test_12_permission_boundary(self):
@@ -800,6 +845,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path="t01-evidence.md",
+            risk="R4",
         )
         carrier_ok = verifier.verify_carrier_state(
             pr={
@@ -826,6 +872,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             evidence_text="source_run_id: `123`\n",
             source_run_id=123,
             current_ref="a" * 40,
+            risk="R4",
         )
         self.assertTrue(carrier_ok.ok)
 
@@ -855,6 +902,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             evidence_text="source_run_id: `123`\n",
             source_run_id=123,
             current_ref="b" * 40,
+            risk="R4",
         )
         self.assertEqual(stale.reason, "stale_or_invalid_carrier")
 
@@ -923,6 +971,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             package_path=PACKAGE,
             issue_number=866,
             evidence_relative_path="t01-evidence.md",
+            risk="R4",
         )
         base_pr = {
             "number": 1,
@@ -951,9 +1000,10 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
                 "issue_number": 866,
                 "integration_branch": "develop",
                 "evidence_text": "source_run_id: `123`\n",
-                "source_run_id": 123,
-                "current_ref": "a" * 40,
-            }
+            "source_run_id": 123,
+            "current_ref": "a" * 40,
+            "risk": "R4",
+        }
             values.update(overrides)
             return verifier.verify_carrier_state(**values)
 

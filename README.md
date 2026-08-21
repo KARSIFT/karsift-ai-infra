@@ -285,6 +285,11 @@ closed instead of guessing that the task is ordinary. Re-entry repairs a partial
 carrier without overwriting an existing evidence file. Implementer jobs remain serialized per
 change package.
 
+Carrier PRs inherit their `Risk classification: R#` line from the adopted package's root
+`change.yaml`. The publisher and verifier accept exactly one root `risk: R0` through `risk: R4`
+declaration and fail closed when it is absent, duplicated, or malformed; they do not hardcode R4
+for lower-risk operator-owned packages.
+
 If the deterministic carrier branch already belongs to a closed or merged PR, publication fails
 closed with `conflicting_existing_pr`. The publisher never silently reopens or replaces that PR:
 an operator must first confirm why it was closed and then restore the trusted draft or perform a

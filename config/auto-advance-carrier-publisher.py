@@ -20,6 +20,7 @@ from auto_advance_ownership import (
     carrier_pr_body,
     derive_evidence_relative_path,
     is_valid_carrier_pr,
+    parse_package_risk,
     pending_evidence_body,
 )
 
@@ -126,6 +127,18 @@ def validate_carrier_changed_paths(changed_paths: set[str], evidence_path: str) 
         raise PublisherError("carrier_contains_unexpected_paths")
 
 
+def read_package_risk(package_root: Path) -> str:
+    change_path = package_root / "change.yaml"
+    try:
+        text = change_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PublisherError("invalid_package_risk") from exc
+    try:
+        return parse_package_risk(text)
+    except ValueError as exc:
+        raise PublisherError("invalid_package_risk") from exc
+
+
 def evidence_file_action(
     existing_text: str | None,
     *,
@@ -205,6 +218,7 @@ def validate_existing_pr(
     package_path: str,
     issue_number: int,
     evidence_relative_path: str,
+    risk: str,
 ) -> None:
     if (
         pr.get("state") != "OPEN"
@@ -220,6 +234,7 @@ def validate_existing_pr(
             package_path=package_path,
             issue_number=issue_number,
             evidence_relative_path=evidence_relative_path,
+            risk=risk,
         )
     ):
         raise PublisherError("conflicting_existing_pr")
@@ -245,18 +260,6 @@ def ensure_carrier(
     )
     branch = branch_name(change_id, task_id)
     existing = find_pr_for_branch(repo, branch, token)
-    if existing is not None:
-        validate_existing_pr(
-            pr=existing,
-            branch=branch,
-            integration_branch=integration_branch,
-            change_id=change_id,
-            task_id=task_id,
-            package_path=package_path,
-            issue_number=issue_number,
-            evidence_relative_path=evidence_relative_path,
-        )
-
     runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
     workdir = Path(tempfile.mkdtemp(prefix="auto-advance-carrier-", dir=runner_temp))
     clone_dir = workdir / "repo"
@@ -287,6 +290,19 @@ def ensure_carrier(
     package_root = clone_dir / package_path
     if not package_root.is_dir():
         raise PublisherError("package_not_found")
+    risk = read_package_risk(package_root)
+    if existing is not None:
+        validate_existing_pr(
+            pr=existing,
+            branch=branch,
+            integration_branch=integration_branch,
+            change_id=change_id,
+            task_id=task_id,
+            package_path=package_path,
+            issue_number=issue_number,
+            evidence_relative_path=evidence_relative_path,
+            risk=risk,
+        )
     validate_issue_and_roster(
         repo=repo,
         token=token,
@@ -342,6 +358,7 @@ def ensure_carrier(
         package_path=package_path,
         issue_number=issue_number,
         evidence_relative_path=evidence_relative_path,
+        risk=risk,
     )
     if existing is None:
         run_gh(

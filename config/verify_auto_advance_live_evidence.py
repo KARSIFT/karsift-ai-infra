@@ -113,6 +113,7 @@ def verify_carrier_state(
     evidence_text: str | None,
     source_run_id: int,
     current_ref: str,
+    risk: str,
 ) -> VerificationResult:
     branch = branch_name(change_id, task_id)
     expected_relative = derive_evidence_relative_path(task_id)
@@ -138,6 +139,7 @@ def verify_carrier_state(
         package_path=package_path,
         issue_number=issue_number,
         evidence_relative_path=expected_relative,
+        risk=risk,
     ):
         return VerificationResult(False, "untrusted_carrier")
 
