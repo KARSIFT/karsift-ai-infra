@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from live_evidence_reconcile import (
     ContractError,
@@ -43,6 +43,34 @@ def derive_evidence_relative_path(task_id: str) -> str:
     if match is None:
         raise ValueError("invalid_task_id_for_evidence")
     return f"t{match.group(1).lower()}-evidence.md"
+
+
+def next_roster_task(
+    roster: Any,
+    closed_task_id: str,
+) -> tuple[str, int] | None:
+    if not isinstance(roster, list):
+        raise ValueError("invalid_roster")
+    ids: list[str] = []
+    for item in roster:
+        if not isinstance(item, dict):
+            raise ValueError("invalid_roster")
+        task_id = item.get("task_id")
+        issue = item.get("issue")
+        if not isinstance(task_id, str) or not TASK_ID_RE.fullmatch(task_id):
+            raise ValueError("invalid_roster")
+        if not isinstance(issue, int) or issue <= 0:
+            raise ValueError("invalid_roster")
+        ids.append(task_id)
+    if len(ids) != len(set(ids)):
+        raise ValueError("invalid_roster")
+    if closed_task_id not in ids:
+        return None
+    index = ids.index(closed_task_id)
+    if index + 1 >= len(roster):
+        return None
+    following = roster[index + 1]
+    return following["task_id"], following["issue"]
 
 
 def parse_automation_ownership_markers(tasks_md: str, task_id: str) -> tuple[str, ...]:

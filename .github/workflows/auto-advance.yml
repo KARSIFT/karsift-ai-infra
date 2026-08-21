@@ -118,19 +118,17 @@ jobs:
           next=$(python3 - "$roster" "$closed_task_id" <<'PYEOF'
           import json
           import sys
+          from auto_advance_ownership import next_roster_task
 
           roster_path, closed = sys.argv[1:3]
-          roster = json.load(open(roster_path))
-          ids = [t["task_id"] for t in roster]
-          if closed not in ids:
+          with open(roster_path, encoding="utf-8") as handle:
+              roster = json.load(handle)
+          result = next_roster_task(roster, closed)
+          if result is None:
               print("")
           else:
-              i = ids.index(closed)
-              if i + 1 < len(roster):
-                  nxt = roster[i + 1]
-                  print(f'{nxt["task_id"]}\t{nxt["issue"]}')
-              else:
-                  print("")
+              task_id, issue = result
+              print(f"{task_id}\t{issue}")
           PYEOF
           )
           if [ -z "$next" ]; then
