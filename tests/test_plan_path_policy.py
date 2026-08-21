@@ -32,6 +32,11 @@ class PlanPathPolicyTests(unittest.TestCase):
         self.assertIn("actions/download-artifact@", publisher)
         self.assertIn("permission-issues: write", publisher)
         self.assertIn("App-signed plan verification", publisher)
+        self.assertGreaterEqual(
+            publisher.count("GH_REPO: ${{ github.repository }}"),
+            2,
+            "clean validation and App publication must not depend on a checkout",
+        )
 
     def test_plan_review_is_bound_to_the_callers_immutable_event_base_and_head(self):
         self.assertIn("expected_head_sha:", self.plan_review)
