@@ -146,6 +146,11 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             package = Path(scratch) / "pkg"
             package.mkdir()
+            contract_dir = package / ".karsift/live-evidence"
+            contract_dir.mkdir(parents=True)
+            (contract_dir / "VOC-000-T01.yaml").write_text(
+                contract_yaml("VOC-000-T01"), encoding="utf-8"
+            )
             argv = [
                 "auto-advance-classifier.py",
                 "--package-path",
