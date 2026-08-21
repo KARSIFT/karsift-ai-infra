@@ -735,6 +735,7 @@ jobs:
         if: needs.plan.outputs.needs_info == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           SOURCE_ISSUE: ${{ inputs.source_issue_number }}
         run: |
           set -euo pipefail
@@ -750,10 +751,13 @@ jobs:
             echo
             echo "Reply on this issue with the missing information to continue; no manual re-dispatch is needed."
           } > /tmp/needs-info-comment.md
-          gh issue comment "$SOURCE_ISSUE" --body-file /tmp/needs-info-comment.md
-          gh issue edit "$SOURCE_ISSUE" --add-label "karsift:needs-info" \
+          gh issue comment "$SOURCE_ISSUE" --repo "$GH_REPO" \
+            --body-file /tmp/needs-info-comment.md
+          gh issue edit "$SOURCE_ISSUE" --repo "$GH_REPO" \
+            --add-label "karsift:needs-info" \
             --remove-label "karsift:planned" 2>/dev/null || \
-            gh issue edit "$SOURCE_ISSUE" --add-label "karsift:needs-info"
+            gh issue edit "$SOURCE_ISSUE" --repo "$GH_REPO" \
+              --add-label "karsift:needs-info"
 
       - name: Download planned package bundle
         if: needs.plan.outputs.has_changes == 'true'
@@ -902,6 +906,7 @@ jobs:
           } > /tmp/pr-body.txt
           url=$(gh pr create \
             --repo "$GH_REPO" \
+            --draft \
             --base "${{ inputs.integration_branch }}" \
             --head "${{ needs.plan.outputs.branch }}" \
             --title "Plan: ${{ needs.plan.outputs.package_id }} - ${{ needs.plan.outputs.slug }}" \
@@ -912,6 +917,7 @@ jobs:
         if: needs.plan.outputs.has_changes == 'true' && inputs.source_issue_number != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           n="${{ inputs.source_issue_number }}"
@@ -919,7 +925,10 @@ jobs:
             echo "Source issue is malformed; refusing issue update." >&2
             exit 1
           fi
-          gh issue comment "$n" --body "Draft change package proposed: ${{ steps.pr.outputs.url }}"
-          gh issue edit "$n" --add-label "karsift:planned" \
+          gh issue comment "$n" --repo "$GH_REPO" \
+            --body "Draft change package proposed: ${{ steps.pr.outputs.url }}"
+          gh issue edit "$n" --repo "$GH_REPO" \
+            --add-label "karsift:planned" \
             --remove-label "karsift:needs-info" 2>/dev/null || \
-            gh issue edit "$n" --add-label "karsift:planned"
+            gh issue edit "$n" --repo "$GH_REPO" \
+              --add-label "karsift:planned"
