@@ -65,6 +65,8 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
             self.assertNotIn(stale, combined)
         self.assertIn("closed state alone cannot advance", combined)
         self.assertIn("App-authored completion marker", combined)
+        self.assertNotIn("check-completion", self.advance)
+        self.assertIn("serialized convergence evaluator", self.advance)
 
 
 if __name__ == "__main__":
