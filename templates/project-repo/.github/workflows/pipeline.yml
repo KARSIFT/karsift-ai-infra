@@ -68,7 +68,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse, verify-remediate-operator-ownership]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -471,6 +471,23 @@ jobs:
       expected_source_head_sha: ${{ inputs.verify_reuse_source_head_sha }}
       expected_source_base_sha: ${{ inputs.verify_reuse_source_base_sha }}
       expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}
+
+  # Read-only post-carrier verifier for operator-owned remediation proof.
+  verify-remediate-operator-ownership:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-remediate-operator-ownership'
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-remediate-operator-ownership.yml@main
+    with:
+      source_run_id: ${{ inputs.live_evidence_run_id }}
+      pr_number: ${{ inputs.live_evidence_pr_number }}
+      change_id: ${{ inputs.change_id }}
+      task_id: ${{ inputs.task_id }}
+      package_path: ${{ inputs.package_path }}
+      integration_branch: "develop"
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a
