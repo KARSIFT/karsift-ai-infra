@@ -55,6 +55,23 @@ class RemediationOwnershipTests(unittest.TestCase):
         (package / "tasks.md").write_text(tasks, encoding="utf-8")
         return package
 
+    def test_caller_template_exposes_read_only_remediation_verifier(self):
+        template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "verify-remediate-operator-ownership]",
+            template,
+        )
+        self.assertIn("  verify-remediate-operator-ownership:", template)
+        verifier_block = template.split(
+            "  verify-remediate-operator-ownership:", 1
+        )[1].split("\n  live-evidence-reconcile:", 1)[0]
+        self.assertIn("actions: read", verifier_block)
+        self.assertIn("contents: read", verifier_block)
+        self.assertIn("issues: read", verifier_block)
+        self.assertIn("pull-requests: read", verifier_block)
+
     def test_ordinary_task_keeps_bounded_retry(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

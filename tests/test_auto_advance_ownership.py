@@ -756,7 +756,8 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
 
         template = self.project_pipeline_template
         self.assertIn("verify-auto-advance-live-evidence", template)
-        self.assertIn("verify-ready-for-review-reuse]", template)
+        self.assertIn("verify-ready-for-review-reuse", template)
+        self.assertIn("verify-remediate-operator-ownership]", template)
         template_auto_advance = template.split("  auto-advance:", 1)[1].split(
             "  verify-auto-advance-live-evidence:", 1
         )[0]
