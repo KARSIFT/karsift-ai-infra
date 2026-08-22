@@ -44,6 +44,12 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
             "if: startsWith(github.event.pull_request.head.ref, 'agent/')",
             marker_block,
         )
+        self.assertNotIn("github.event.pull_request.body", marker_block)
+        self.assertNotIn("PR_BODY", marker_block)
+        for stale_argument in ("--package-path", "--task-id", "--issue-number"):
+            self.assertNotIn(stale_argument, marker_block)
+        self.assertIn("--reviewed-base-sha", marker_block)
+        self.assertIn("fetches the live merged PR body", self.merge)
 
     def test_local_closing_binding_and_cross_repo_policy_both_remain(self):
         self.assertIn("Closes #${{ inputs.issue_number }}", self.implement)

@@ -10,6 +10,10 @@ from typing import Any
 
 HEADER = "**KARSIFT task completion v1**"
 BOT_LOGIN = "karsift-ai-infra-bot[bot]"
+PACKAGE_RE = re.compile(
+    r"^specs/changes/([A-Z][A-Z0-9]*-[0-9]+)-[a-z0-9][a-z0-9-]*$"
+)
+TASK_RE = re.compile(r"^([A-Z][A-Z0-9]*-[0-9]+)-T[0-9]+[a-z]?$")
 FIELDS = (
     "repository",
     "authority_issue",
@@ -24,6 +28,106 @@ FIELDS = (
 
 class CompletionError(ValueError):
     """Completion evidence is missing, ambiguous, forged, or stale."""
+
+
+def parse_pr_authority(body: str) -> dict[str, str]:
+    """Extract one canonical task identity from the current caller PR body."""
+    tasks = re.findall(r"Implements task `([^`\r\n]+)`", body)
+    packages = re.findall(r"Package path: `([^`\r\n]+)`", body)
+    issues = re.findall(r"Closes #([0-9]+)\b", body)
+    if len(tasks) != 1 or len(packages) != 1 or len(issues) != 1:
+        raise CompletionError("caller pull request has ambiguous completion identity")
+
+    task_match = TASK_RE.fullmatch(tasks[0])
+    package_match = PACKAGE_RE.fullmatch(packages[0])
+    issue_number = int(issues[0])
+    if task_match is None or package_match is None or issue_number <= 0:
+        raise CompletionError("caller pull request has invalid completion identity")
+    if task_match.group(1) != package_match.group(1):
+        raise CompletionError("caller pull request task and package do not match")
+    return {
+        "authority_issue": str(issue_number),
+        "package_path": packages[0],
+        "task_id": tasks[0],
+    }
+
+
+def validate_review_authority(
+    comments: list[dict[str, Any]],
+    *,
+    reviewed_head_sha: str,
+    reviewed_base_sha: str,
+    identity: dict[str, str],
+) -> None:
+    """Bind live PR identity to the newest App-signed exact-head PASS review."""
+    header = f"**Independent verification - bound to commit `{reviewed_head_sha}`**"
+    required = (
+        f"task_id: `{identity['task_id']}`",
+        f"package_path: `{identity['package_path']}`",
+        f"authority_issue: `{identity['authority_issue']}`",
+        f"base_sha: `{reviewed_base_sha}`",
+    )
+    candidates: list[dict[str, Any]] = []
+    for comment in comments:
+        body = comment.get("body")
+        user = comment.get("user") or {}
+        if (
+            not isinstance(body, str)
+            or not body.startswith(header)
+            or user.get("login") != BOT_LOGIN
+            or user.get("type") != "Bot"
+        ):
+            continue
+        lines = body.splitlines()
+        if all(lines.count(line) == 1 for line in (header, *required)):
+            candidates.append(comment)
+    if not candidates:
+        raise CompletionError("live completion identity lacks an App-signed exact-head review")
+
+    selected = max(
+        candidates,
+        key=lambda comment: (str(comment.get("created_at") or ""), int(comment.get("id") or 0)),
+    )
+    final_line = next(
+        (line.strip() for line in reversed(str(selected["body"]).splitlines()) if line.strip()),
+        "",
+    )
+    if final_line not in {
+        "VERDICT: PASS",
+        "VERDICT: PASS WITH NON-BLOCKING FINDINGS",
+    }:
+        raise CompletionError("newest live-identity review is not a PASS verdict")
+
+
+def validate_roster_authority(roster: Any, identity: dict[str, str]) -> None:
+    """Require the live identity to name one adopted task-roster entry."""
+    if not isinstance(roster, list) or not roster:
+        raise CompletionError("adopted task roster is empty or malformed")
+    entries: list[tuple[str, int]] = []
+    for entry in roster:
+        if not isinstance(entry, dict):
+            raise CompletionError("adopted task roster is malformed")
+        task_id = entry.get("task_id")
+        issue_number = entry.get("issue")
+        if (
+            not isinstance(task_id, str)
+            or TASK_RE.fullmatch(task_id) is None
+            or not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+        ):
+            raise CompletionError("adopted task roster is malformed")
+        entries.append((task_id, issue_number))
+    task_ids = [task_id for task_id, _ in entries]
+    issue_numbers = [issue_number for _, issue_number in entries]
+    if (
+        len(task_ids) != len(set(task_ids))
+        or len(issue_numbers) != len(set(issue_numbers))
+    ):
+        raise CompletionError("adopted task roster contains duplicate entries")
+    expected = (identity["task_id"], int(identity["authority_issue"]))
+    if entries.count(expected) != 1:
+        raise CompletionError("live completion identity does not match the adopted task roster")
 
 
 def marker_body(record: dict[str, Any]) -> str:

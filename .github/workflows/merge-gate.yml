@@ -552,30 +552,19 @@ jobs:
           exit 1
 
       # Publish immutable caller-merge evidence before closing the linked
-      # task issue. Issue state alone is never completion authority.
-      # PR_BODY goes through env:, never ${{ }}-interpolated directly into
-      # the script - same script-injection reasoning as the "Check approval
-      # signal" step above (a PR body is attacker-controlled text, this job
-      # has contents:write).
+      # task issue. Issue state alone is never completion authority. The
+      # adapter fetches the live merged PR body so an authorized body repair
+      # is visible to a failed-job rerun; the original event snapshot is not
+      # completion authority.
       - name: Publish task completion marker and close linked task issue
         if: startsWith(github.event.pull_request.head.ref, 'agent/')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_BODY: ${{ github.event.pull_request.body }}
           PYTHONPATH: karsift-ai-infra/config
         run: |
           set -euo pipefail
-          mapfile -t issues < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Closes #)[0-9]+' || true)
-          mapfile -t tasks < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Implements task `)[^`]+' || true)
-          mapfile -t packages < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Package path: `)[^`]+' || true)
-          if [ "${#issues[@]}" -ne 1 ] || [ "${#tasks[@]}" -ne 1 ] || [ "${#packages[@]}" -ne 1 ]; then
-            echo "Merged task PR has ambiguous completion identity; refusing issue closure." >&2
-            exit 1
-          fi
           python3 karsift-ai-infra/config/task-completion-runner.py publish \
             --repository "${{ github.repository }}" \
-            --package-path "${packages[0]}" \
-            --task-id "${tasks[0]}" \
-            --issue-number "${issues[0]}" \
             --pr-number "${{ github.event.pull_request.number }}" \
-            --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}"
+            --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}" \
+            --reviewed-base-sha "${{ needs.report-status.outputs.base_sha }}"

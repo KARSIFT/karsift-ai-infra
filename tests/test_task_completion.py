@@ -6,7 +6,15 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "config"))
 
-from task_completion import BOT_LOGIN, CompletionError, marker_body, validate_comments  # noqa: E402
+from task_completion import (  # noqa: E402
+    BOT_LOGIN,
+    CompletionError,
+    marker_body,
+    parse_pr_authority,
+    validate_comments,
+    validate_review_authority,
+    validate_roster_authority,
+)
 
 
 EXPECTED = {
@@ -42,6 +50,94 @@ def comment(**overrides):
 
 
 class TaskCompletionTests(unittest.TestCase):
+    def test_live_pr_authority_requires_one_matching_canonical_identity(self):
+        self.assertEqual(
+            parse_pr_authority(
+                "Implements task `VOC-108-T00`\n"
+                "Package path: `specs/changes/VOC-108-example`\n"
+                "Closes #17"
+            ),
+            {
+                "authority_issue": "17",
+                "package_path": "specs/changes/VOC-108-example",
+                "task_id": "VOC-108-T00",
+            },
+        )
+
+    def test_live_pr_authority_rejects_ambiguity_and_cross_change_identity(self):
+        cases = (
+            "Implements task `VOC-108-T00`\n"
+            "Package path: `specs/changes/VOC-108-example`\n"
+            "Closes #17\nCloses #18",
+            "Implements task `VOC-109-T00`\n"
+            "Package path: `specs/changes/VOC-108-example`\n"
+            "Closes #17",
+            "Implements task `VOC-108-T00`\n"
+            "Package path: `../VOC-108-example`\n"
+            "Closes #17",
+        )
+        for body in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(CompletionError):
+                    parse_pr_authority(body)
+
+    def test_live_identity_requires_newest_matching_app_review_to_pass(self):
+        def review(verdict, *, comment_id, user=None):
+            return {
+                "id": comment_id,
+                "created_at": "2026-08-22T00:00:05Z",
+                "user": user or {"login": BOT_LOGIN, "type": "Bot"},
+                "body": (
+                    f"**Independent verification - bound to commit `{RECORD['reviewed_head_sha']}`**\n\n"
+                    "task_id: `VOC-108-T00`\n"
+                    "package_path: `specs/changes/VOC-108-example`\n"
+                    "authority_issue: `17`\n\n"
+                    f"base_sha: `{'c' * 40}`\n\n"
+                    f"VERDICT: {verdict}"
+                ),
+            }
+
+        validate_review_authority(
+            [review("PASS", comment_id=1)],
+            reviewed_head_sha=RECORD["reviewed_head_sha"],
+            reviewed_base_sha="c" * 40,
+            identity=EXPECTED,
+        )
+        for reviews in (
+            [review("PASS", comment_id=1), review("FAIL", comment_id=2)],
+            [review("PASS", comment_id=1, user={"login": "human", "type": "User"})],
+        ):
+            with self.subTest(count=len(reviews)):
+                with self.assertRaises(CompletionError):
+                    validate_review_authority(
+                        reviews,
+                        reviewed_head_sha=RECORD["reviewed_head_sha"],
+                        reviewed_base_sha="c" * 40,
+                        identity=EXPECTED,
+                    )
+
+    def test_live_identity_must_match_one_adopted_roster_entry(self):
+        validate_roster_authority(
+            [{"task_id": "VOC-108-T00", "issue": 17, "depends_on": []}],
+            EXPECTED,
+        )
+        invalid = (
+            [{"task_id": "VOC-108-T00", "issue": 18}],
+            [
+                {"task_id": "VOC-108-T00", "issue": 17},
+                {"task_id": "VOC-108-T00", "issue": 18},
+            ],
+            [
+                {"task_id": "VOC-108-T00", "issue": 17},
+                {"task_id": "VOC-108-T01", "issue": 17},
+            ],
+            [{"task_id": "invalid", "issue": 17}],
+        )
+        for roster in invalid:
+            with self.subTest(roster=roster):
+                with self.assertRaises(CompletionError):
+                    validate_roster_authority(roster, EXPECTED)
+
     def test_valid_app_marker_matches_live_caller_merge(self):
         self.assertEqual(
             validate_comments([comment()], expected=EXPECTED, pull_request=PR, issue_state="CLOSED"),
