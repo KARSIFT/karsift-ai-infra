@@ -421,15 +421,26 @@ per-task issues. `release.yml` never re-parses a project's own `tasks.md` prose 
 completion - that was tried for issue-opening itself and broke against a real house-style mismatch
 (see `adopt.yml`'s task-parser comments, carried over from where this logic used to live in
 `plan.yml`); the roster file is the sole source of truth instead. Each
-task's tracking issue is explicitly closed by `merge-gate.yml` when that task's PR merges (not left
-to GitHub's native "Closes #N" auto-close, which has been observed live not to fire reliably on a
-squash merge). The moment every issue in a package's roster is closed, `release.yml` opens a
-`Release: <change_id>` audit issue and automatically opens (or reuses) and merges a real
+task's tracking issue receives one strict App-authored completion marker only after
+`merge-gate.yml` observes its exact caller PR merged. The gate then emits the
+issue-close event; issue state by itself is never completion authority. Both
+`auto-advance.yml` and `release.yml` validate the same marker against the live
+caller PR, so a foreign closing reference or premature manual close is a safe
+no-op. Cross-repository PRs use `Relates to OWNER/CALLER#N`; only the caller task
+PR uses local `Closes #N`.
+
+When every roster marker validates, `release.yml` opens a `Release: <change_id>`
+audit issue and automatically opens (or reuses) and merges a real
 `develop → main` pull request - never a direct ref update, since a project's own
 branch-protection intent (e.g. vocanova-platform's "release pull requests only, no direct or force
-pushes") depends on promotion staying a real, reviewable PR. If that attempt is interrupted, the
-caller can dispatch `reconcile-release` with the audit issue number; the retry remains idempotent
-and fail-closed on checks.
+pushes") depends on promotion staying a real, reviewable PR. Adoption, merge/reuse,
+and release select the newest authoritative attempt for each logical exact-SHA
+gate, so an obsolete failure cannot poison a later pass and a newer failure cannot
+hide behind an older pass. Automatic, reconcile, and terminal-check wake-ups share
+one per-package concurrency group and final merge path. A terminal check completion
+wakes only that cheap evaluator; it does not rerun unchanged-SHA CI or the reviewer.
+If an attempt is interrupted, the caller can dispatch `reconcile-release` with the
+audit issue number; reconciliation remains idempotent and fail-closed.
 
 **Deploy is explicitly out of scope.** The promotion PR's merge is the entire scope of `release.yml`
 - no hosted deployment is triggered by anything in this repo today.

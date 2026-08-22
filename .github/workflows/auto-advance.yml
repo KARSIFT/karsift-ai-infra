@@ -110,6 +110,14 @@ jobs:
             exit 0
           fi
 
+          # A closed task issue is only an event hint. Require the unique
+          # App-authored marker and live exact caller merge before advancing.
+          python3 karsift-ai-infra/config/task-completion-runner.py validate-task \
+            --repository "${{ github.repository }}" \
+            --package-path "$package_path" \
+            --roster "$roster" \
+            --issue-number "${{ github.event.issue.number }}"
+
           next=$(python3 - "$roster" "$closed_task_id" <<'PYEOF'
           import json
           import sys

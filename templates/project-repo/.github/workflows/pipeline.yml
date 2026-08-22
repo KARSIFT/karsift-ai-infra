@@ -53,6 +53,10 @@ on:
     types: [created]
   issues:
     types: [opened, closed]
+  # Cheap release re-evaluation only. CI/review jobs remain guarded to PR
+  # events and are not rerun merely because an external gate completed.
+  check_run:
+    types: [completed]
   workflow_dispatch:
     inputs:
       action:
@@ -392,7 +396,8 @@ jobs:
   release:
     if: |
       (github.event_name == 'issues' && github.event.action == 'closed') ||
-      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-release' && inputs.release_issue_number != '')
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-release' && inputs.release_issue_number != '') ||
+      (github.event_name == 'check_run' && github.event.action == 'completed')
     uses: KARSIFT/karsift-ai-infra/.github/workflows/release.yml@main
     with:
       release_issue_number: ${{ inputs.release_issue_number }}

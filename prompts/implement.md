@@ -56,3 +56,13 @@ handoff.
 If you cannot complete the task as scoped (missing dependency, contradictory
 acceptance criteria, discovered protected-area conflict), say so plainly instead of
 producing a partial or scope-expanded change.
+
+## Cross-repository issue references
+
+The caller repository owns the task issue. Its own implementation PR keeps the
+local `Closes #N` binding expected by the merge gate. Any PR, evidence, commit, or
+comment produced in a different repository must instead use a fully qualified,
+non-closing reference: `Relates to OWNER/CALLER#N`. Never put a GitHub closing
+keyword (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
+`resolves`, or `resolved`) before that caller issue reference from another
+repository. Cross-repository work is not allowed to manufacture caller completion.

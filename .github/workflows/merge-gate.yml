@@ -184,11 +184,26 @@ jobs:
           # count. The single-job "approved"-comment path mostly avoided
           # this by luck (fewer concurrent jobs, less chance of catching one
           # mid-flight), not by design - it has the identical bug below.
-          if ! gh pr checks "$pr_number" --json name,state > /tmp/pr-checks.json; then
+          if ! gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+               "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100" \
+               > /tmp/merge-check-runs.json ||
+             ! gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+               "repos/${{ github.repository }}/commits/$head_sha/status?per_page=100" \
+               > /tmp/merge-statuses.json ||
+             ! python3 karsift-ai-infra/config/authoritative-checks-runner.py \
+               --check-runs-file /tmp/merge-check-runs.json \
+               --statuses-file /tmp/merge-statuses.json \
+               --repository "${{ github.repository }}" \
+               --pr-number "$pr_number" \
+               --base-sha "$base_sha" \
+               --head-sha "$head_sha" \
+               --workflow-event "pull_request" \
+               --output /tmp/merge-authoritative.json; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          jq '.checks' /tmp/merge-authoritative.json > /tmp/pr-checks.json
           prior_jobs_available=false
           current_run_id="${{ github.run_id }}"
           current_policy_matches=false
@@ -397,6 +412,14 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Checkout shared lifecycle policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
       - name: Require GitHub App credentials
         env:
           APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
@@ -514,19 +537,30 @@ jobs:
           echo "Merge still failing after 3 attempts - not a transient lag, failing for real." >&2
           exit 1
 
-      # Explicitly close a linked task issue with the same App identity so
-      # release/auto-advance receive their issues:closed event.
+      # Publish immutable caller-merge evidence before closing the linked
+      # task issue. Issue state alone is never completion authority.
       # PR_BODY goes through env:, never ${{ }}-interpolated directly into
       # the script - same script-injection reasoning as the "Check approval
       # signal" step above (a PR body is attacker-controlled text, this job
       # has contents:write).
-      - name: Close linked task issue
+      - name: Publish task completion marker and close linked task issue
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PYTHONPATH: karsift-ai-infra/config
         run: |
           set -euo pipefail
-          issue_number=$(echo "$PR_BODY" | grep -oP '(?<=Closes #)[0-9]+' | head -1 || true)
-          if [ -n "$issue_number" ]; then
-            gh issue close "$issue_number" --comment "Closed by merge-gate after PR #${{ github.event.pull_request.number }} merged." || true
+          mapfile -t issues < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Closes #)[0-9]+' || true)
+          mapfile -t tasks < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Implements task `)[^`]+' || true)
+          mapfile -t packages < <(printf '%s\n' "$PR_BODY" | grep -oP '(?<=Package path: `)[^`]+' || true)
+          if [ "${#issues[@]}" -ne 1 ] || [ "${#tasks[@]}" -ne 1 ] || [ "${#packages[@]}" -ne 1 ]; then
+            echo "Merged task PR has ambiguous completion identity; refusing issue closure." >&2
+            exit 1
           fi
+          python3 karsift-ai-infra/config/task-completion-runner.py publish \
+            --repository "${{ github.repository }}" \
+            --package-path "${packages[0]}" \
+            --task-id "${tasks[0]}" \
+            --issue-number "${issues[0]}" \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}"
