@@ -31,4 +31,3 @@ def reject_cross_repository_closing_text(
         return
     if CLOSING_REFERENCE_RE.search(text):
         raise ValueError("cross-repository text contains a GitHub closing reference")
-
