@@ -37,6 +37,11 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("github.event_name == 'check_run'", self.template)
         self.assertIn("release_reevaluation", self.release)
         self.assertNotIn("workflow run pipeline", self.release)
+        check_wake = self.template.split(
+            "(github.event_name == 'check_run'", 1
+        )[1].split(") ||", 1)[0]
+        self.assertIn("github.event.check_run.pull_requests[0].base.ref == 'main'", check_wake)
+        self.assertIn("github.event.check_run.pull_requests[0].head.ref == 'develop'", check_wake)
 
     def test_promotion_checks_are_paginated_authoritative_and_sha_bound(self):
         self.assertIn("authoritative-checks-runner.py", self.release)
