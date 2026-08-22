@@ -662,9 +662,13 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
         self.assertIn("GH_REPO: ${{ github.repository }}", source_link_step)
         self.assertEqual(source_link_step.count('--repo "$GH_REPO"'), 3)
 
-    def test_caller_polls_without_workflow_run_recursion(self):
+    def test_caller_polling_avoids_pipeline_workflow_run_recursion(self):
         self.assertIn('cron: "17 * * * *"', self.pipeline)
-        self.assertNotIn("  workflow_run:", self.pipeline)
+        workflow_run = self.pipeline.split("  workflow_run:", 1)[1].split(
+            "  workflow_dispatch:", 1
+        )[0]
+        self.assertNotIn("pipeline", workflow_run)
+        self.assertIn("deploy-staging", workflow_run)
         self.assertIn("reconcile-live-evidence", self.pipeline)
         self.assertIn("live_evidence_run_id", self.pipeline)
         self.assertIn("  plan-review:", self.pipeline)

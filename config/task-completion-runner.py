@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""GitHub adapter for publishing and validating task completion markers."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+from typing import Any
+
+from task_completion import BOT_LOGIN, CompletionError, HEADER, marker_body, validate_comments
+
+
+def gh(*args: str, input_data: str | None = None) -> Any:
+    env = os.environ.copy()
+    result = subprocess.run(
+        ["gh", *args],
+        input=input_data,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    if result.returncode:
+        raise CompletionError("GitHub metadata request failed")
+    return json.loads(result.stdout) if result.stdout.strip() else None
+
+
+def comments(repository: str, issue: int) -> list[dict[str, Any]]:
+    pages = gh(
+        "api",
+        "--paginate",
+        "--slurp",
+        f"repos/{repository}/issues/{issue}/comments?per_page=100",
+    )
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise CompletionError("invalid comment pagination")
+    return [comment for page in pages for comment in page]
+
+
+def issue(repository: str, number: int) -> dict[str, Any]:
+    value = gh("api", f"repos/{repository}/issues/{number}")
+    if not isinstance(value, dict):
+        raise CompletionError("invalid issue metadata")
+    return value
+
+
+def pull(repository: str, number: int) -> dict[str, Any]:
+    value = gh("api", f"repos/{repository}/pulls/{number}")
+    if not isinstance(value, dict):
+        raise CompletionError("invalid pull request metadata")
+    return value
+
+
+def expected_for(entry: dict[str, Any], package_path: str, repository: str) -> dict[str, str]:
+    return {
+        "repository": repository,
+        "authority_issue": str(entry["issue"]),
+        "package_path": package_path,
+        "task_id": str(entry["task_id"]),
+    }
+
+
+def validate_entry(repository: str, package_path: str, entry: dict[str, Any]) -> dict[str, str]:
+    issue_number = int(entry["issue"])
+    task_issue = issue(repository, issue_number)
+    task_comments = comments(repository, issue_number)
+    candidate = [comment for comment in task_comments if str(comment.get("body", "")).startswith(HEADER)]
+    if len(candidate) != 1:
+        raise CompletionError("completion marker count is not exactly one")
+    from task_completion import parse_marker
+
+    parsed = parse_marker(str(candidate[0]["body"]))
+    if parsed is None or not parsed.get("pr_number", "").isdigit():
+        raise CompletionError("completion marker pull request is invalid")
+    return validate_comments(
+        task_comments,
+        expected=expected_for(entry, package_path, repository),
+        pull_request=pull(repository, int(parsed["pr_number"])),
+        issue_state=str(task_issue.get("state", "")).upper(),
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    publish = sub.add_parser("publish")
+    validate_task = sub.add_parser("validate-task")
+    validate_roster = sub.add_parser("validate-roster")
+    for command in (publish, validate_task, validate_roster):
+        command.add_argument("--repository", required=True)
+        command.add_argument("--package-path", required=True)
+    publish.add_argument("--issue-number", required=True, type=int)
+    publish.add_argument("--task-id", required=True)
+    publish.add_argument("--pr-number", required=True, type=int)
+    publish.add_argument("--reviewed-head-sha", required=True)
+    validate_task.add_argument("--roster", required=True)
+    validate_task.add_argument("--issue-number", required=True, type=int)
+    validate_roster.add_argument("--roster", required=True)
+    args = parser.parse_args()
+
+    if args.command == "publish":
+        pr = pull(args.repository, args.pr_number)
+        if pr.get("state") != "closed" or not pr.get("merged_at"):
+            raise CompletionError("caller pull request is not merged")
+        if (pr.get("head") or {}).get("sha") != args.reviewed_head_sha:
+            raise CompletionError("caller pull request head changed before completion")
+        if not isinstance(pr.get("merge_commit_sha"), str):
+            raise CompletionError("caller pull request lacks merge identity")
+        body = marker_body(
+            {
+                "repository": args.repository,
+                "authority_issue": args.issue_number,
+                "package_path": args.package_path,
+                "task_id": args.task_id,
+                "pr_number": args.pr_number,
+                "reviewed_head_sha": args.reviewed_head_sha,
+                "merge_commit_sha": pr["merge_commit_sha"],
+                "merged_at": pr["merged_at"],
+            }
+        )
+        prior = comments(args.repository, args.issue_number)
+        markers = [
+            comment for comment in prior if str(comment.get("body", "")).startswith(HEADER)
+        ]
+        if not markers:
+            gh(
+                "api",
+                "--method",
+                "POST",
+                f"repos/{args.repository}/issues/{args.issue_number}/comments",
+                "--input",
+                "-",
+                input_data=json.dumps({"body": body}),
+            )
+        elif len(markers) != 1 or markers[0].get("body") != body or (
+            (markers[0].get("user") or {}).get("login") != BOT_LOGIN
+            or (markers[0].get("user") or {}).get("type") != "Bot"
+        ):
+            raise CompletionError("completion marker is conflicting or ambiguous")
+        # GitHub may have applied the local `Closes #N` reference as part of
+        # the merge before this post-merge step ran. Reopen then close only
+        # after the marker exists so the resulting issues:closed wake-up can
+        # never race ahead of its authority evidence. Retrying is idempotent.
+        current_issue = issue(args.repository, args.issue_number)
+        if current_issue.get("state") == "closed":
+            gh(
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{args.repository}/issues/{args.issue_number}",
+                "--input",
+                "-",
+                input_data=json.dumps({"state": "open"}),
+            )
+        gh(
+            "api",
+            "--method",
+            "PATCH",
+            f"repos/{args.repository}/issues/{args.issue_number}",
+            "--input",
+            "-",
+            input_data=json.dumps({"state": "closed"}),
+        )
+        return 0
+
+    roster = json.loads(open(args.roster, encoding="utf-8").read())
+    if not isinstance(roster, list) or not roster:
+        raise CompletionError("roster is empty or malformed")
+    issues = [entry.get("issue") for entry in roster]
+    if len(set(issues)) != len(issues):
+        raise CompletionError("roster contains duplicate issues")
+    if args.command == "validate-task":
+        matches = [entry for entry in roster if entry.get("issue") == args.issue_number]
+        if len(matches) != 1:
+            raise CompletionError("closed issue is not a unique roster task")
+        validate_entry(args.repository, args.package_path, matches[0])
+        return 0
+    for entry in roster:
+        validate_entry(args.repository, args.package_path, entry)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

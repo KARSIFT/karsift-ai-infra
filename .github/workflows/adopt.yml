@@ -63,6 +63,7 @@ jobs:
   adopt:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       checks: read
       contents: write
       issues: write
@@ -94,6 +95,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.target.outputs.branch }}
+
+      - name: Checkout shared lifecycle policy
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
 
       - name: Check for GitHub App credentials
         id: has-app
@@ -166,36 +175,39 @@ jobs:
           # `--fail-fast` without `--watch`, that command expands a GraphQL
           # statusCheckRollup field which GitHub App tokens cannot always read.
           # The REST endpoints expose the same gate inputs with checks:read.
-          check_runs=$(gh api -H "Accept: application/vnd.github+json" \
-            "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100")
-          combined_status=$(gh api -H "Accept: application/vnd.github+json" \
-            "repos/${{ github.repository }}/commits/$head_sha/status")
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100" \
+            > /tmp/adopt-check-runs.json
+          gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/commits/$head_sha/status?per_page=100" \
+            > /tmp/adopt-statuses.json
           # The pull_request closed event attaches this adoption workflow to
           # the plan head itself. Counting `adopt / adopt` would make the gate
           # reject its own in-progress run; after that first failure, reconcile
           # would remain poisoned by the completed failure forever. Adoption
           # is the consumer of the plan gates, not one of those prerequisite
           # gates, so exclude only this reusable workflow's own jobs.
-          prerequisite_checks=$(echo "$check_runs" | jq \
-            '[.check_runs[] | select((.name | startswith("adopt /")) | not)]')
-          check_count=$(echo "$prerequisite_checks" | jq 'length')
-          status_count=$(echo "$combined_status" | jq '.statuses | length')
-          pending_checks=$(echo "$prerequisite_checks" | jq \
-            '[.[] | select(.status != "completed")] | length')
-          failed_checks=$(echo "$prerequisite_checks" | jq \
-            '[.[] | select(.status == "completed" and (.conclusion | IN("success", "neutral", "skipped") | not))] | length')
-          status_state=$(echo "$combined_status" | jq -r '.state')
-          if [ $((check_count + status_count)) -eq 0 ] || [ "$pending_checks" -ne 0 ] || [ "$failed_checks" -ne 0 ]; then
+          python3 karsift-ai-infra/config/authoritative-checks-runner.py \
+            --check-runs-file /tmp/adopt-check-runs.json \
+            --statuses-file /tmp/adopt-statuses.json \
+            --repository "${{ github.repository }}" \
+            --pr-number "${{ inputs.pr_number }}" \
+            --base-sha "$reviewed_base_sha" \
+            --head-sha "$head_sha" \
+            --workflow-event "pull_request" \
+            --exclude-prefix "adopt /" \
+            --output /tmp/adopt-authoritative.json
+          check_count=$(jq -r .total_count /tmp/adopt-authoritative.json)
+          pending_checks=$(jq -r .pending /tmp/adopt-authoritative.json)
+          failed_checks=$(jq -r .failed /tmp/adopt-authoritative.json)
+          if [ "$check_count" -eq 0 ] || [ "$pending_checks" -ne 0 ] || [ "$failed_checks" -ne 0 ]; then
             echo "Merged plan head $head_sha does not have a complete, passing check set; refusing adoption." >&2
             exit 1
           fi
-          if [ "$status_count" -gt 0 ] && [ "$status_state" != "success" ]; then
-            echo "Merged plan head $head_sha has non-passing commit statuses ($status_state); refusing adoption." >&2
-            exit 1
-          fi
-          plan_review_checks=$(echo "$prerequisite_checks" | jq \
-            '[.[] | select(.name == "plan-review / publish-plan-review" and .status == "completed" and .conclusion == "success")] | length')
-          if [ "$plan_review_checks" -lt 1 ]; then
+          plan_review_state=$(jq -r \
+            '[.checks[] | select(.name == "plan-review / publish-plan-review")] | if length == 1 then .[0].state else "MISSING" end' \
+            /tmp/adopt-authoritative.json)
+          if [ "$plan_review_state" != "SUCCESS" ]; then
             echo "Merged plan head lacks a successful isolated plan-verdict publisher check." >&2
             exit 1
           fi
