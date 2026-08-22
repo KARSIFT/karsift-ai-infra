@@ -10,10 +10,12 @@ import re
 import subprocess
 
 from authoritative_checks import (
+    EvidenceError,
     evaluate,
     flatten_check_runs,
     flatten_statuses,
     select_authoritative,
+    validate_pull_request_binding,
 )
 
 
@@ -67,10 +69,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-runs-file", required=True)
     parser.add_argument("--statuses-file", required=True)
+    parser.add_argument("--pull-request-file", required=True)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--head-sha", required=True)
-    parser.add_argument("--base-sha", default="")
-    parser.add_argument("--pr-number", type=int)
+    parser.add_argument("--base-sha", required=True)
+    parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--exclude-prefix", action="append", default=[])
     parser.add_argument("--workflow-event", action="append", default=[])
     parser.add_argument("--output", required=True)
@@ -86,13 +89,14 @@ def main() -> int:
         "base_sha": args.base_sha,
         "pr_number": args.pr_number,
     }
+    validate_pull_request_binding(_read(args.pull_request_file), identity)
     for item in check_runs + statuses:
-        item.setdefault("repository", args.repository)
-        item.setdefault("head_sha", args.head_sha)
-        if args.base_sha:
-            item.setdefault("base_sha", args.base_sha)
-        if args.pr_number is not None:
-            item.setdefault("pr_number", args.pr_number)
+        for field, verified_value in identity.items():
+            if field in item and item[field] != verified_value:
+                raise EvidenceError(
+                    f"gate evidence conflicts with verified pull request {field}"
+                )
+            item[field] = verified_value
     result = evaluate(
         select_authoritative(
             check_runs,

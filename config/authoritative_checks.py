@@ -15,6 +15,36 @@ class EvidenceError(ValueError):
     """The supplied gate history is incomplete, ambiguous, or mis-bound."""
 
 
+def validate_pull_request_binding(
+    payload: Any, expected: dict[str, Any]
+) -> None:
+    """Prove that an authenticated PR payload owns the requested gate identity."""
+
+    if not isinstance(payload, dict):
+        raise EvidenceError("invalid pull request identity payload")
+    head = payload.get("head")
+    base = payload.get("base")
+    if not isinstance(head, dict) or not isinstance(base, dict):
+        raise EvidenceError("invalid pull request identity payload")
+    head_repo = head.get("repo")
+    base_repo = base.get("repo")
+    if not isinstance(head_repo, dict) or not isinstance(base_repo, dict):
+        raise EvidenceError("invalid pull request repository identity")
+    actual = {
+        "repository": base_repo.get("full_name"),
+        "head_repository": head_repo.get("full_name"),
+        "head_sha": head.get("sha"),
+        "base_sha": base.get("sha"),
+        "pr_number": payload.get("number"),
+    }
+    for field in ("repository", "head_sha", "base_sha", "pr_number"):
+        expected_value = expected.get(field)
+        if expected_value in (None, "") or actual[field] != expected_value:
+            raise EvidenceError(f"pull request is not bound to expected {field}")
+    if actual["head_repository"] != expected["repository"]:
+        raise EvidenceError("pull request head belongs to another repository")
+
+
 def _pages(payload: Any, list_key: str) -> list[dict[str, Any]]:
     pages = payload if isinstance(payload, list) else [payload]
     if not pages or any(not isinstance(page, dict) for page in pages):
