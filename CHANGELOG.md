@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Made checked adoption-roster merges delete their ephemeral head branches.
+  Deterministic policy tests now keep both roster and ordinary task/plan merge
+  paths aligned with merged-branch cleanup, while protected integration and
+  production branches remain untouched.
+
 - Made post-merge task completion fetch its authority identity from the live
   merged caller PR instead of the triggering event's stale body snapshot.
   Corrected-body failed-job retries now converge safely; the live identity must

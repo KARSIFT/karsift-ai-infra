@@ -660,7 +660,8 @@ jobs:
           CHECKED_HEAD_SHA: ${{ steps.roster-checks.outputs.head_sha }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
+          gh pr merge "$PR_NUMBER" --merge --delete-branch \
+            --match-head-commit "$CHECKED_HEAD_SHA"
 
       - name: Close the loop back to the originating issue, if any
         if: steps.commit.outputs.changed == 'true' && steps.verify.outputs.source_issue != ''

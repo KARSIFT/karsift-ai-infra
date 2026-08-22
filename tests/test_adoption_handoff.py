@@ -94,6 +94,13 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn("pending_checks", roster_wait)
         self.assertIn("failed_checks", roster_wait)
 
+    def test_checked_roster_merge_deletes_its_ephemeral_head_branch(self):
+        merge = self.adopt.split("- name: Merge checked roster PR", 1)[1].split(
+            "- name:", 1
+        )[0]
+        self.assertIn('gh pr merge "$PR_NUMBER" --merge --delete-branch', merge)
+        self.assertIn('--match-head-commit "$CHECKED_HEAD_SHA"', merge)
+
 
 if __name__ == "__main__":
     unittest.main()

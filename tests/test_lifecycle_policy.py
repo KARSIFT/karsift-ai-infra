@@ -37,6 +37,14 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         )
         self.assertIn("safe no-op", self.advance)
 
+    def test_ephemeral_plan_task_and_roster_merges_delete_head_branches(self):
+        self.assertIn(
+            'gh pr merge "$PR_NUMBER" --squash --delete-branch', self.merge
+        )
+        self.assertIn(
+            'gh pr merge "$PR_NUMBER" --merge --delete-branch', self.adopt
+        )
+
     def test_post_merge_task_marker_is_task_branch_scoped(self):
         marker = "- name: Publish task completion marker and close linked task issue"
         marker_block = self.merge.split(marker, 1)[1].split("- name:", 1)[0]
