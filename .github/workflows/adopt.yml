@@ -664,10 +664,11 @@ jobs:
           fi
 
   # Adoption is the authorization event for the entire ordered roster. Start
-  # its root task immediately; later tasks are released one at a time by
-  # auto-advance after the preceding task's PR actually merges and closes its
-  # issue. This removes the manual gap that encouraged dispatching every task
-  # in parallel and makes the safe path the automatic path.
+  # its root task immediately; later tasks are released one at a time only
+  # after a valid App marker proves the preceding task's exact caller PR merged.
+  # Issue closure merely wakes that validation. This removes the manual gap
+  # that encouraged dispatching every task in parallel and makes the safe path
+  # the automatic path.
   implement-first-task:
     needs: adopt
     if: needs.adopt.outputs.should_dispatch == 'true'

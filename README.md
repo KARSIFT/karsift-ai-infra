@@ -340,8 +340,9 @@ Only a genuine App-signed FAIL verdict or failed CI can start implementation.
 ## Ordered autonomous task execution
 
 Adoption starts the first task automatically. The adopted roster records an explicit
-`depends_on` edge from every later task to its predecessor, and `auto-advance.yml` releases the
-next task only after the preceding task's implementation PR merges and its tracking issue closes.
+`depends_on` edge from every later task to its predecessor. `auto-advance.yml` releases the next
+task only after one valid App-authored completion marker proves the preceding task's exact reviewed
+caller PR merged. The issue-close event is only a wake-up hint; closed state alone cannot advance.
 For an ordinary next task, it preserves the existing deterministic-branch guard and dispatches
 `implement.yml` attempt 1. For a task with a valid operator/live-actions contract at
 `<package>/.karsift/live-evidence/<task_id>.yaml`, it does not execute the general implementer:
@@ -411,8 +412,9 @@ until a human reviews and merges it.
 
 `merge-gate.yml` gates each *task*; `release.yml` gates the layer above it - promoting a project's
 integration branch (e.g. `develop`) to its production branch (e.g. `main`) once an entire *package*
-is done. Completion plus green promotion-PR checks is the gate; founder comments are not release
-authority.
+is done. Package completion means every roster entry has one valid App-authored marker bound to a
+live merged caller PR at its reviewed head. Those markers plus newest green promotion-PR checks are
+the gate; issue state and founder comments are not release authority.
 
 A package's task roster is fixed once, at adoption time: `adopt.yml` writes
 `<package_path>/.karsift/tasks.json`
@@ -485,7 +487,7 @@ karsift-ai-infra/
     review.yml
     remediate.yml           # re-dispatches implement.yml once on a FAIL verdict, then escalates
     merge-gate.yml          # risk-aware, fails closed, auto_merge_enabled defaults false
-    release.yml              # one human approval per completed package, gates develop -> main
+    release.yml              # marker-validated serialized package promotion, gates develop -> main
   templates/project-repo/
     .github/workflows/pipeline.yml   # thin caller template - copy into a project repo
 ```

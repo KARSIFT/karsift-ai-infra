@@ -13,6 +13,11 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         cls.advance = (ROOT / ".github/workflows/auto-advance.yml").read_text()
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
         cls.prompt = (ROOT / "prompts/implement.md").read_text()
+        cls.plan_prompt = (ROOT / "prompts/plan.md").read_text()
+        cls.readme = (ROOT / "README.md").read_text()
+        cls.template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text()
 
     def test_authoritative_selector_is_used_by_adopt_merge_and_release(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()
@@ -31,6 +36,20 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         self.assertIn("Relates to OWNER/CALLER#N", self.prompt)
         for keyword in ("close", "fix", "resolve"):
             self.assertIn(keyword, self.prompt)
+
+    def test_authority_docs_treat_issue_close_as_a_wake_hint_only(self):
+        combined = "\n".join(
+            (self.readme, self.plan_prompt, self.template, self.advance, self.adopt)
+        )
+        for stale in (
+            "roster closes",
+            "issue closing is what triggers promotion",
+            "release-approval issue",
+            "release promotion (one human decision",
+        ):
+            self.assertNotIn(stale, combined)
+        self.assertIn("closed state alone cannot advance", combined)
+        self.assertIn("App-authored completion marker", combined)
 
 
 if __name__ == "__main__":
