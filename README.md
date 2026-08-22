@@ -153,9 +153,11 @@ remediation decision, skipped retry jobs, and one trusted sanitized escalation
 marker for that exact source run and head; markers from later source heads do
 not make the earlier proof ambiguous. The controlled failing source head and the
 later metadata-bearing carrier head are intentionally distinct: allowlisted
-evidence binds the source run/head, and GitHub's compare metadata must prove that
-source is an ancestor of the exact dispatched carrier head. It reads Actions/PR
-metadata only and never downloads logs or artifacts.
+evidence binds the source run's immutable `head_sha` (not the mutable head in its
+PR association), and GitHub's compare metadata must prove that source is an
+ancestor of the exact dispatched carrier head. It reads Actions/PR metadata only
+and never downloads logs or artifacts. Trusted marker authors include GitHub's
+GraphQL-normalized built-in Actions identity as well as its REST-style bot login.
 
 Before either task or plan review becomes an App-signed record, a bounded
 normalizer removes full-line commit/task/package/issue/base binding lookalikes
