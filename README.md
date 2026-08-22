@@ -150,11 +150,12 @@ Calling repositories may expose the read-only
 `verify-remediate-operator-ownership.yml` reusable verifier for controlled live
 proof. It checks the exact carrier head, source pipeline/PR lineage, successful
 remediation decision, skipped retry jobs, and one trusted sanitized escalation
-marker. The controlled failing source head and the later metadata-bearing
-carrier head are intentionally distinct: allowlisted evidence binds the source
-run/head, and GitHub's compare metadata must prove that source is an ancestor of
-the exact dispatched carrier head. It reads Actions/PR metadata only and never
-downloads logs or artifacts.
+marker for that exact source run and head; markers from later source heads do
+not make the earlier proof ambiguous. The controlled failing source head and the
+later metadata-bearing carrier head are intentionally distinct: allowlisted
+evidence binds the source run/head, and GitHub's compare metadata must prove that
+source is an ancestor of the exact dispatched carrier head. It reads Actions/PR
+metadata only and never downloads logs or artifacts.
 
 Before either task or plan review becomes an App-signed record, a bounded
 normalizer removes full-line commit/task/package/issue/base binding lookalikes

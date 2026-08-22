@@ -143,10 +143,14 @@ def verify_escalation_marker(
     source_head_sha: str,
 ) -> VerificationResult:
     prefix = f"{OPERATOR_ESCALATION_MARKER_PREFIX} `{task_id}`"
+    source_run_token = f"run_id: `{source_run_id}`"
+    source_head_token = f"head_sha: `{source_head_sha}`"
     matches = [
         comment
         for comment in comments
         if prefix in str(comment.get("body") or "")
+        and source_run_token in str(comment.get("body") or "")
+        and source_head_token in str(comment.get("body") or "")
     ]
     if len(matches) != 1:
         return VerificationResult(False, "missing_or_duplicate_escalation_marker")
@@ -158,8 +162,8 @@ def verify_escalation_marker(
         f"task_id: `{task_id}`",
         f"package_path: `{package_path}`",
         f"pr_number: `{pr_number}`",
-        f"run_id: `{source_run_id}`",
-        f"head_sha: `{source_head_sha}`",
+        source_run_token,
+        source_head_token,
     ]
     if any(token not in body for token in required):
         return VerificationResult(False, "escalation_metadata_incomplete")
