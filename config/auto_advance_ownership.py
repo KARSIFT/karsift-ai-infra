@@ -248,6 +248,27 @@ def is_valid_predeclared_pending_evidence(
     if any(line in terminal_values for line in lower_lines):
         return False
 
+    tracked_sections = {
+        "gate_status",
+        "result",
+        "conclusion",
+        "run_id",
+        "source_run_id",
+        "pr_number",
+        "verdict",
+    }
+    for index, line in enumerate(lower_lines):
+        section = line.lstrip("#").strip() if line.startswith("##") else ""
+        if section not in tracked_sections:
+            continue
+        next_value = next(
+            (candidate for candidate in lower_lines[index + 1 :] if candidate),
+            "",
+        )
+        if section in {"gate_status", "source_run_id"} and next_value == "pending":
+            continue
+        return False
+
     for line in lower_lines:
         for prefix in (*completed_prefixes, "source_run_id:"):
             if not line.startswith(prefix):

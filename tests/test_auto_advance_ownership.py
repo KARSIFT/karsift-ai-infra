@@ -456,6 +456,8 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             adopted_plan_stub.replace("\npending\n", "\ncomplete\n"),
             adopted_plan_stub + "run_id: 123\n",
             adopted_plan_stub + "source_run_id: 123\n",
+            adopted_plan_stub + "## run_id\n\n123\n",
+            adopted_plan_stub + "## verdict\n\nPASS\n",
             adopted_plan_stub + f"Package: `{PACKAGE}-other`\n",
             adopted_plan_stub.replace("VOC-102-T01", "VOC-999-T01", 1),
         ):
