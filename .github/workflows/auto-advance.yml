@@ -18,7 +18,7 @@ name: auto-advance (reusable)
 # Deliberately conservative about when it fires - a wrongly-triggered
 # duplicate dispatch is a worse failure mode than staying silent:
 #   - No-ops on any issue whose title isn't "<CHANGE-ID>: ..." (mirrors
-#     release.yml's own check-completion guard).
+#     release.yml's own serialized convergence evaluator).
 #   - No-ops if there's no next task (release.yml's serialized evaluator
 #     handles the completed roster and release audit instead).
 #   - No-ops if the next task's issue is already closed (already done or
@@ -74,7 +74,7 @@ jobs:
           path: karsift-ai-infra
           persist-credentials: false
 
-      # Same identify pattern as release.yml's check-completion job (title
+      # Same identify pattern as release.yml's serialized convergence job (title
       # prefix -> package directory glob -> roster file), reused verbatim
       # for consistency - plus the closed issue's own task_id, parsed from
       # the same "<change_id>: <task_id> - <title>" convention plan.yml
@@ -139,7 +139,7 @@ jobs:
           PYEOF
           )
           if [ -z "$next" ]; then
-            echo "No next task after $closed_task_id in $roster (last task, or not found in roster) - nothing to do; release.yml's check-completion handles the last-task case."
+            echo "No next task after $closed_task_id in $roster (last task, or not found in roster) - nothing to do; release.yml's serialized convergence evaluator handles the last-task case."
             exit 0
           fi
 
