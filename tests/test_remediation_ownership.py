@@ -160,6 +160,99 @@ class RemediationOwnershipTests(unittest.TestCase):
         ):
             self.assertEqual(verifier_runner.associated_base_sha(malformed), "")
 
+    def test_hosted_verifier_binds_source_to_later_carrier_head(self):
+        source = "a" * 40
+        carrier = "c" * 40
+        run = {"pull_requests": [{"head": {"sha": source}}]}
+        self.assertEqual(verifier_runner.associated_head_sha(run), source)
+        self.assertEqual(
+            verifier_runner.evidence_path_for_task(Path("/tmp/pkg"), "VOC-106-T01"),
+            Path("/tmp/pkg/t01-evidence.md"),
+        )
+        comparison = {
+            "status": "ahead",
+            "merge_base_commit": {"sha": source},
+            "base_commit": {"sha": source},
+            "commits": [{"sha": carrier}],
+        }
+        self.assertTrue(
+            verifier.verify_source_to_carrier_lineage(
+                comparison=comparison,
+                source_head_sha=source,
+                carrier_head_sha=carrier,
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_source_to_carrier_lineage(
+                comparison=comparison,
+                source_head_sha=carrier,
+                carrier_head_sha=carrier,
+            ).ok
+        )
+
+        evidence = "\n".join(
+            [
+                "gate_status: source-proof-complete",
+                "source_run_id: `123`",
+                f"source_head_sha: `{source}`",
+                "source_pipeline_conclusion: `success`",
+                "should_retry: `false`",
+                "implementer_job: `skipped`",
+                "operator_escalation_marker: `present`",
+                "ordinary_retry_fixture: `passed`",
+            ]
+        )
+        self.assertTrue(
+            verifier.verify_source_evidence(
+                evidence,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_source_evidence(
+                evidence.replace("should_retry: `false`", "should_retry: `true`"),
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+
+        marker = {
+            "author": {"login": "github-actions[bot]"},
+            "body": "\n".join(
+                [
+                    f"{verifier.OPERATOR_ESCALATION_MARKER_PREFIX} `VOC-106-T01`",
+                    "should_retry: `false`",
+                    "task_id: `VOC-106-T01`",
+                    "package_path: `specs/changes/VOC-106-example`",
+                    "pr_number: `7`",
+                    "run_id: `123`",
+                    f"head_sha: `{source}`",
+                ]
+            ),
+        }
+        self.assertTrue(
+            verifier.verify_escalation_marker(
+                [marker],
+                task_id="VOC-106-T01",
+                package_path="specs/changes/VOC-106-example",
+                pr_number=7,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+        marker["body"] = marker["body"].replace(source, carrier)
+        self.assertFalse(
+            verifier.verify_escalation_marker(
+                [marker],
+                task_id="VOC-106-T01",
+                package_path="specs/changes/VOC-106-example",
+                pr_number=7,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+
     def test_source_run_policy_rejects_malformed_associations_cleanly(self):
         common = {
             "repository": {"full_name": "KARSIFT/example"},

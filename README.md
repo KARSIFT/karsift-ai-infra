@@ -150,7 +150,11 @@ Calling repositories may expose the read-only
 `verify-remediate-operator-ownership.yml` reusable verifier for controlled live
 proof. It checks the exact carrier head, source pipeline/PR lineage, successful
 remediation decision, skipped retry jobs, and one trusted sanitized escalation
-marker. It reads Actions/PR metadata only and never downloads logs or artifacts.
+marker. The controlled failing source head and the later metadata-bearing
+carrier head are intentionally distinct: allowlisted evidence binds the source
+run/head, and GitHub's compare metadata must prove that source is an ancestor of
+the exact dispatched carrier head. It reads Actions/PR metadata only and never
+downloads logs or artifacts.
 
 Before either task or plan review becomes an App-signed record, a bounded
 normalizer removes full-line commit/task/package/issue/base binding lookalikes
@@ -338,8 +342,11 @@ or duplicate marker, or marker/contract conflict fails closed. Narrative prose i
 ownership. “No marker” means the task stanza was successfully read and contains no ownership
 marker; a missing or unreadable `tasks.md` cannot establish that condition and therefore fails
 closed instead of guessing that the task is ordinary. Re-entry repairs a partially published
-carrier without overwriting an existing evidence file. Implementer jobs remain serialized per
-change package.
+carrier without overwriting an existing evidence file. When an adopted plan already contains a
+strictly identity-bound, incomplete `source_run_id: pending` evidence stub on the protected
+integration branch, the first carrier publication normalizes that stub to the canonical pending
+body; completed, mismatched, ambiguous, or oversized content still fails closed. Implementer jobs
+remain serialized per change package.
 
 Carrier PRs inherit their `Risk classification: R#` line from the adopted package's root
 `change.yaml`. The publisher and verifier accept exactly one root `risk: R0` through `risk: R4`
