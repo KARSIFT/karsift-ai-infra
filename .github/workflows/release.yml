@@ -42,7 +42,9 @@ jobs:
     if: |
       (github.event_name == 'issues' && github.event.action == 'closed') ||
       (github.event_name == 'workflow_dispatch' && inputs.release_issue_number != '') ||
-      (github.event_name == 'check_run' && github.event.action == 'completed')
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      (github.event_name == 'check_run' && github.event.action == 'completed') ||
+      (github.event_name == 'workflow_run' && github.event.action == 'completed')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -73,6 +75,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           PYTHONPATH: karsift-ai-infra/config
+          EVENT_PR_BASE: ${{ github.event.pull_request.base.ref }}
+          EVENT_PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           echo "should_evaluate=false" >> "$GITHUB_OUTPUT"
@@ -110,6 +115,22 @@ jobs:
               echo "Release audit is already terminal; successful no-op."
               exit 0
             fi
+          elif [ "$event" = "pull_request" ]; then
+            if [ "$EVENT_PR_BASE" != "${{ inputs.production_branch }}" ] || \
+               [ "$EVENT_PR_HEAD" != "${{ inputs.integration_branch }}" ]; then
+              echo "Pull request is not the promotion pair; nothing to evaluate."
+              exit 0
+            fi
+            promotion_pr="$EVENT_PR_NUMBER"
+            pr_body=$(gh pr view "$promotion_pr" --json body -q .body)
+            mapfile -t release_issues < <(printf '%s\n' "$pr_body" | grep -oP '(?<=release_issue: `)[0-9]+(?=`)' || true)
+            mapfile -t change_ids < <(printf '%s\n' "$pr_body" | grep -oP '(?<=change_id: `)[A-Za-z][A-Za-z0-9]*-[0-9]+(?=`)' || true)
+            if [ "${#release_issues[@]}" -ne 1 ] || [ "${#change_ids[@]}" -ne 1 ]; then
+              echo "Promotion PR lacks one machine-readable release identity; refusing." >&2
+              exit 1
+            fi
+            release_issue="${release_issues[0]}"
+            change_id="${change_ids[0]}"
           else
             gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \
               --state open --json number,state,headRefName,headRefOid,baseRefName > /tmp/open-promotions.json

@@ -21,6 +21,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("github.event_name == 'issues'", self.release)
         self.assertIn("github.event_name == 'workflow_dispatch'", self.release)
         self.assertIn("github.event_name == 'check_run'", self.release)
+        self.assertIn("github.event_name == 'workflow_run'", self.release)
         self.assertEqual(self.release.count("  converge:"), 1)
         self.assertIn("group: release-converge-", self.release)
         self.assertEqual(self.release.count("gh pr merge"), 1)
@@ -32,6 +33,7 @@ class ReleasePolicyTests(unittest.TestCase):
 
     def test_terminal_check_wakes_only_release_evaluation(self):
         self.assertIn("check_run:\n    types: [completed]", self.template)
+        self.assertIn("workflow_run:", self.template)
         self.assertIn("github.event_name == 'check_run'", self.template)
         self.assertIn("release_reevaluation", self.release)
         self.assertNotIn("workflow run pipeline", self.release)
