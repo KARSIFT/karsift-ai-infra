@@ -2,13 +2,22 @@
 
 ## Unreleased
 
+- Upgraded every reusable and self-CI checkout to the verified immutable
+  `actions/checkout` v7.0.1 commit and its Node.js 24 runtime. Every checkout
+  now disables persisted credentials; adoption configures its scoped write
+  token explicitly, preserving App-token preference and the documented
+  `GITHUB_TOKEN` fallback without relying on version-specific Git config.
+  Policy coverage rejects an outdated, floating, credential-persisting, or
+  unsafe-fork checkout regression.
+
 - Made checked adoption-roster merges delete their ephemeral head branches
   only after confirmed merge and through an exact-SHA lease. Adoption is
   serialized per plan authority; queued-but-unmerged and concurrently advanced
   refs remain fail-closed, while a ref removed concurrently by native cleanup
   is accepted only after an authoritative absence recheck. No-change
   reconciliation recovers interrupted post-merge cleanup only when the current
-  ref exactly matches a uniquely proven merged roster PR. Deterministic policy tests keep roster and ordinary
+  ref exactly matches a uniquely proven merged roster PR. Deterministic policy
+  tests keep roster and ordinary
   task/plan cleanup aligned while protected long-lived branches remain untouched.
 
 - Made post-merge task completion fetch its authority identity from the live

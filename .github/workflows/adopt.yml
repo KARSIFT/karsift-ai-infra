@@ -98,12 +98,13 @@ jobs:
           branch=$(gh pr view "${{ inputs.pr_number }}" --json baseRefName -q .baseRefName)
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.target.outputs.branch }}
+          persist-credentials: false
 
       - name: Checkout shared lifecycle policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -535,20 +536,21 @@ jobs:
           git commit -m "$(basename "$package_path" | grep -oP '^[A-Z]+-\d+'): record task-issue roster and authority_issue"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      # Same extraheader-precedence fix implement.yml's "Push branch" step
-      # documents (2026-07-28 incident) - actions/checkout's own persisted
-      # GITHUB_TOKEN credential takes precedence over whatever's embedded in
-      # the remote URL unless explicitly unset first.
+      # Checkout credential persistence is disabled above. Configure the
+      # intended write identity explicitly so action-runtime credential
+      # storage changes cannot silently replace the App token with
+      # GITHUB_TOKEN; the latter remains the documented no-App fallback.
       - name: Push roster branch
         if: steps.commit.outputs.changed == 'true'
         env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          if [ -n "$APP_TOKEN" ]; then
-            git config --local --unset-all http.https://github.com/.extraheader || true
-            git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "No roster branch write token is available; refusing to push." >&2
+            exit 1
           fi
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git"
           # The deterministic roster branch may still exist after its first
           # PR was merged. Reconciliation can legitimately need a newer
           # bookkeeping commit (for example after adoption evidence fields
@@ -726,7 +728,7 @@ jobs:
         if: steps.commit.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           CHECKED_HEAD_REF: ${{ steps.commit.outputs.branch }}
           CHECKED_BASE_REF: ${{ steps.target.outputs.branch }}
         run: |
@@ -735,6 +737,11 @@ jobs:
             echo "Reconciliation roster branch identity is malformed; refusing cleanup." >&2
             exit 1
           fi
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "No roster branch cleanup token is available; refusing cleanup." >&2
+            exit 1
+          fi
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git"
 
           remote_sha=$(git ls-remote --heads origin "refs/heads/$CHECKED_HEAD_REF" | awk '{print $1}')
           if [ -z "$remote_sha" ]; then
@@ -765,10 +772,6 @@ jobs:
             exit 1
           fi
 
-          if [ -n "$APP_TOKEN" ]; then
-            git config --local --unset-all http.https://github.com/.extraheader || true
-            git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${{ github.repository }}.git"
-          fi
           if ! git push \
             --force-with-lease="refs/heads/$CHECKED_HEAD_REF:$remote_sha" \
             origin --delete "refs/heads/$CHECKED_HEAD_REF"; then

@@ -27,15 +27,18 @@ jobs:
         if: inputs.reuse_evidence
         run: echo "Exact-SHA CI evidence was revalidated by the reuse policy and merge gate."
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: ${{ !inputs.reuse_evidence }}
+        with:
+          persist-credentials: false
 
       - name: Checkout karsift-ai-infra
         if: ${{ !inputs.reuse_evidence }}
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
+          persist-credentials: false
 
       - name: Detect and run pnpm checks
         if: ${{ !inputs.reuse_evidence }}

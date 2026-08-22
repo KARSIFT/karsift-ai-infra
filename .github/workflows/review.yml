@@ -169,7 +169,7 @@ jobs:
       # commit really was unreachable, not a model quality problem either
       # time. Checking out the exact reviewed SHA removes the root cause:
       # the reviewer now has the real file tree for what it's reviewing.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: steps.pr.outputs.stale != 'true'
         with:
           ref: ${{ steps.pr.outputs.sha }}
@@ -199,7 +199,7 @@ jobs:
 
       - name: Checkout karsift-ai-infra
         if: steps.pr.outputs.stale != 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra

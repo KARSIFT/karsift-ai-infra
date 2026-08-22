@@ -62,12 +62,13 @@ jobs:
       issue_number: ${{ steps.next.outputs.issue_number }}
       evidence_relative_path: ${{ steps.next.outputs.evidence_relative_path }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.integration_branch }}
+          persist-credentials: false
 
       - name: Checkout shared auto-advance policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -184,7 +185,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout shared auto-advance policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -225,7 +226,7 @@ jobs:
       issues: read
     steps:
       - name: Checkout shared auto-advance policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}

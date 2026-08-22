@@ -68,6 +68,9 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertNotIn("steps.commit.outputs.changed", root_dispatch)
         self.assertIn("git push -u --force-with-lease origin", self.adopt)
         self.assertNotIn("git push -u --force origin", self.adopt)
+        self.assertIn("PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}", self.adopt)
+        self.assertIn("No roster branch write token is available", self.adopt)
+        self.assertNotIn("http.https://github.com/.extraheader", self.adopt)
 
     def test_caller_template_has_reconciliation_dispatch(self):
         self.assertIn(
@@ -125,6 +128,8 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn('if [ "$matching_merges" != "1" ]', recovery)
         self.assertIn('--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$remote_sha"', recovery)
         self.assertIn("Leased reconciliation cleanup failed and the ref still exists", recovery)
+        self.assertIn("No roster branch cleanup token is available", recovery)
+        self.assertIn('git remote set-url origin "https://x-access-token:${PUSH_TOKEN}', recovery)
 
     def test_adoption_is_serialized_for_the_same_plan_authority(self):
         self.assertIn(
