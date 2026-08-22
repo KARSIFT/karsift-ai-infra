@@ -415,10 +415,49 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             ),
             "normalize",
         )
+        adopted_plan_stub = "\n".join(
+            [
+                "# VOC-102-T01 evidence — live deploy verification",
+                "",
+                "Pending until the predecessor merges and operator reconciliation runs.",
+                "",
+                "## gate_status",
+                "",
+                "pending",
+                "",
+                "## Required proof",
+                "",
+                "1. A qualifying workflow reaches conclusion success.",
+                "2. No duplicate operational incident is open.",
+                "",
+            ]
+        )
+        self.assertTrue(
+            ownership.is_valid_predeclared_pending_evidence(
+                adopted_plan_stub,
+                task_id="VOC-102-T01",
+                change_id="VOC-102",
+                package_path=PACKAGE,
+            )
+        )
+        self.assertEqual(
+            publisher.evidence_file_action(
+                adopted_plan_stub,
+                has_trusted_pr=False,
+                pending_body=pending,
+                valid_predeclared_pending=True,
+            ),
+            "normalize",
+        )
         for unsafe in (
             predeclared.replace("source_run_id: pending", "source_run_id: `123`"),
             predeclared + "gate_status: complete\n",
             predeclared.replace("VOC-102-T01", "VOC-999-T01", 1),
+            adopted_plan_stub.replace("\npending\n", "\ncomplete\n"),
+            adopted_plan_stub + "run_id: 123\n",
+            adopted_plan_stub + "source_run_id: 123\n",
+            adopted_plan_stub + f"Package: `{PACKAGE}-other`\n",
+            adopted_plan_stub.replace("VOC-102-T01", "VOC-999-T01", 1),
         ):
             self.assertFalse(
                 ownership.is_valid_predeclared_pending_evidence(

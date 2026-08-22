@@ -188,17 +188,13 @@ def is_valid_predeclared_pending_evidence(
     if not text or len(text.encode("utf-8")) > 4096 or "\x00" in text or "\r" in text:
         return False
     lines = text.splitlines()
+    stripped_lines = [line.strip() for line in lines]
     required = {
         f"# {task_id} — Evidence (pending operator live evidence)",
         f"Package: `{package_path}`",
         f"Change: `{change_id}`",
         "source_run_id: pending",
     }
-    if not required.issubset(lines):
-        return False
-    source_lines = [line for line in lines if line.startswith("source_run_id:")]
-    if source_lines != ["source_run_id: pending"]:
-        return False
     completed_prefixes = (
         "gate_status:",
         "result:",
@@ -207,7 +203,68 @@ def is_valid_predeclared_pending_evidence(
         "pr_number:",
         "verdict:",
     )
-    return not any(line.strip().lower().startswith(completed_prefixes) for line in lines)
+    if required.issubset(lines):
+        source_lines = [line for line in lines if line.startswith("source_run_id:")]
+        return source_lines == ["source_run_id: pending"] and not any(
+            line.lower().startswith(completed_prefixes) for line in stripped_lines
+        )
+
+    # Adopted plans may predeclare a human-readable pending stub before the
+    # deterministic carrier exists. The publisher only needs authority to
+    # replace that stub with its canonical pending body; it must never treat
+    # the stub as completion evidence. Bind the fallback to exactly one task
+    # heading, reject conflicting identity fields, require an explicit pending
+    # sentinel, and refuse every recognized result/run/verdict field.
+    heading_re = re.compile(rf"^#\s+{re.escape(task_id)}(?:\s|—|-)")
+    if sum(bool(heading_re.match(line)) for line in stripped_lines) != 1:
+        return False
+
+    package_lines = [line for line in stripped_lines if line.startswith("Package:")]
+    if package_lines and package_lines != [f"Package: `{package_path}`"]:
+        return False
+    change_lines = [line for line in stripped_lines if line.startswith("Change:")]
+    if change_lines and change_lines != [f"Change: `{change_id}`"]:
+        return False
+
+    lower_lines = [line.lower() for line in stripped_lines]
+    pending_sentinels = {
+        "pending",
+        "gate_status: pending",
+        "source_run_id: pending",
+    }
+    if not any(line in pending_sentinels for line in lower_lines):
+        return False
+
+    terminal_values = {
+        "pass",
+        "passed",
+        "success",
+        "succeeded",
+        "complete",
+        "completed",
+        "fail",
+        "failed",
+    }
+    if any(line in terminal_values for line in lower_lines):
+        return False
+
+    for line in lower_lines:
+        for prefix in (*completed_prefixes, "source_run_id:"):
+            if not line.startswith(prefix):
+                continue
+            if prefix in {"gate_status:", "source_run_id:"} and line.removeprefix(
+                prefix
+            ).strip() == "pending":
+                break
+            return False
+    return not any(
+        line.startswith("|")
+        and re.search(
+            r"\b(pass|passed|success|succeeded|complete|completed|fail|failed)\b",
+            line,
+        )
+        for line in lower_lines
+    )
 
 
 def carrier_pr_body(
