@@ -41,6 +41,11 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertNotIn("COMMENT_BODY", self.workflow)
         self.assertIn("Deprecated compatibility input", self.workflow)
 
+    def test_app_secret_description_matches_authoritative_task_completion(self):
+        self.assertIn("publish the immutable task-completion", self.workflow)
+        self.assertIn("Publish task completion marker and close", self.workflow)
+        self.assertNotIn('see "Close linked task issue" below', self.workflow)
+
     def test_verdict_uses_shared_fail_dominant_classifier(self):
         self.assertIn("config/classify-review-verdict.py", self.workflow)
 

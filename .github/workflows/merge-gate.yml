@@ -56,14 +56,16 @@ on:
     secrets:
       KARSIFT_BOT_APP_ID:
         description: >
-          Optional. GitHub App ID used to close a merged PR's linked task
-          issue with an identity other than the default GITHUB_TOKEN. Required
-          for that close to actually propagate to release.yml's `issues:
-          closed` trigger - GitHub does not fire further workflow-triggering
+          Optional. GitHub App ID used to publish the immutable task-completion
+          marker and close a merged PR's linked task issue with an identity
+          other than the default GITHUB_TOKEN. Required for the marker and
+          close to propagate to release.yml's `issue_comment` and `issues:
+          closed` triggers - GitHub does not fire further workflow-triggering
           events for actions performed by the default GITHUB_TOKEN (anti-
-          recursion protection; see "Close linked task issue" below for where
-          this was found live). Without it, the issue still closes, but
-          release.yml's package-completion check never sees it happen.
+          recursion protection; see "Publish task completion marker and close
+          linked task issue" below for where this was found live). Without it,
+          the task cannot emit authoritative completion evidence or wake the
+          package-completion check.
         required: false
       KARSIFT_BOT_PRIVATE_KEY:
         description: "Optional, paired with KARSIFT_BOT_APP_ID - see that secret's description."
