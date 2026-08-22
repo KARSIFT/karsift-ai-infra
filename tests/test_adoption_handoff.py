@@ -94,6 +94,44 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn("pending_checks", roster_wait)
         self.assertIn("failed_checks", roster_wait)
 
+    def test_checked_roster_merge_deletes_only_confirmed_exact_head(self):
+        merge = self.adopt.split("- name: Merge checked roster PR and clean its exact head", 1)[1].split(
+            "- name:", 1
+        )[0]
+        self.assertIn('gh pr merge "$PR_NUMBER" --merge --match-head-commit', merge)
+        self.assertNotIn("gh pr merge \"$PR_NUMBER\" --merge --delete-branch", merge)
+        self.assertIn('--match-head-commit "$CHECKED_HEAD_SHA"', merge)
+        self.assertIn(".merged == true", merge)
+        self.assertIn("$remote_sha", merge)
+        self.assertIn('--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA"', merge)
+        self.assertIn("if ! git push", merge)
+        self.assertIn("remaining_sha=$(git ls-remote --heads origin", merge)
+        self.assertIn('if [ -z "$remaining_sha" ]', merge)
+        self.assertIn("Leased roster branch deletion failed and the ref still exists", merge)
+
+    def test_no_change_reconciliation_recovers_only_exact_merged_head_cleanup(self):
+        commit = self.adopt.split("- name: Commit task roster to a branch", 1)[1].split(
+            "- name: Push roster branch", 1
+        )[0]
+        recovery = self.adopt.split("- name: Recover cleanup for an already-merged roster", 1)[1].split(
+            "- name:", 1
+        )[0]
+        self.assertLess(commit.index("echo \"branch=$branch\""), commit.index("git diff --cached --quiet"))
+        self.assertIn("if: steps.commit.outputs.changed == 'false'", self.adopt)
+        self.assertIn(".merged_at != null", recovery)
+        self.assertIn(".head.repo.full_name == $repository", recovery)
+        self.assertIn(".head.ref == $ref and .head.sha == $sha", recovery)
+        self.assertIn(".base.ref == $base", recovery)
+        self.assertIn('if [ "$matching_merges" != "1" ]', recovery)
+        self.assertIn('--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$remote_sha"', recovery)
+        self.assertIn("Leased reconciliation cleanup failed and the ref still exists", recovery)
+
+    def test_adoption_is_serialized_for_the_same_plan_authority(self):
+        self.assertIn(
+            "group: adopt-${{ github.repository }}-${{ inputs.pr_number }}", self.adopt
+        )
+        self.assertIn("cancel-in-progress: false", self.adopt)
+
 
 if __name__ == "__main__":
     unittest.main()

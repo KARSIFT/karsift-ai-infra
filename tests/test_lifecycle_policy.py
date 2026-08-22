@@ -37,6 +37,19 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         )
         self.assertIn("safe no-op", self.advance)
 
+    def test_ephemeral_plan_task_and_roster_merges_delete_head_branches(self):
+        self.assertIn(
+            'gh pr merge "$PR_NUMBER" --squash --delete-branch', self.merge
+        )
+        self.assertIn(
+            '--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA"',
+            self.adopt,
+        )
+        self.assertIn("remaining_sha=$(git ls-remote --heads origin", self.adopt)
+        self.assertIn("Leased roster branch deletion failed and the ref still exists", self.adopt)
+        self.assertIn("Recover cleanup for an already-merged roster", self.adopt)
+        self.assertIn("Current roster ref is not uniquely proven as an already-merged exact head", self.adopt)
+
     def test_post_merge_task_marker_is_task_branch_scoped(self):
         marker = "- name: Publish task completion marker and close linked task issue"
         marker_block = self.merge.split(marker, 1)[1].split("- name:", 1)[0]

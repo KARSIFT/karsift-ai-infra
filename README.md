@@ -321,6 +321,12 @@ A remediation retry carries the failed head into `implement.yml`, validates it
 before model work, revalidates it immediately before publishing, and uses an
 explicit SHA-valued force-with-lease. A commit arriving in either timing window
 therefore survives instead of being overwritten by the stale retry.
+Adoption similarly removes its merged roster ref through an exact-SHA lease;
+if native merged-branch cleanup wins the deletion race, an authoritative
+absence recheck is accepted, while any surviving ref still stops dispatch.
+An unchanged reconciliation also checks for a retained roster ref and removes
+it only when GitHub proves its current SHA is the unique head of a merged roster
+PR for the expected integration branch.
 The implementer records the pre-model task tip and the fetched integration tip
 as separate boundaries. It soft-resets only to the former, but its recovery
 bundle spans from the integration anchor through the complete task lineage.
@@ -396,6 +402,12 @@ Those come from `adopt.yml`, which fires after a `plan/`-branch PR merges and re
 independent PASS verdict is bound to the exact merged head. It writes adoption metadata and the task
 roster together through a checked bookkeeping PR. A caller can dispatch the same merged plan PR to
 reconcile a missed event; task issue lookup and the roster commit are idempotent.
+Adoption is serialized per plan authority. After the checked roster PR is
+confirmed merged, its ephemeral `karsift/roster-*` head is deleted only through
+an exact-SHA lease; a queued-but-not-merged PR or concurrently advanced ref is
+never deleted. Caller repositories should also enable GitHub's native
+`delete_branch_on_merge` setting as a low-cost second guard; protected
+integration and production branches are not eligible for that deletion.
 
 **Anyone - a human, or another agent - can start this by opening an issue,** not just by dispatching
 `plan.yml` by hand. The calling project's `pipeline.yml` routes any newly-opened issue with no
