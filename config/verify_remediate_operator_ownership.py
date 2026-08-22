@@ -56,6 +56,52 @@ def verify_source_run(
     return VerificationResult(True)
 
 
+def verify_source_to_carrier_lineage(
+    *,
+    comparison: dict,
+    source_head_sha: str,
+    carrier_head_sha: str,
+) -> VerificationResult:
+    if not SHA_RE.fullmatch(source_head_sha) or not SHA_RE.fullmatch(carrier_head_sha):
+        return VerificationResult(False, "invalid_head_lineage")
+    if source_head_sha == carrier_head_sha:
+        return VerificationResult(False, "source_and_carrier_head_not_distinct")
+    if (
+        comparison.get("status") != "ahead"
+        or comparison.get("merge_base_commit", {}).get("sha") != source_head_sha
+        or comparison.get("base_commit", {}).get("sha") != source_head_sha
+    ):
+        return VerificationResult(False, "source_not_carrier_ancestor")
+    commits = comparison.get("commits")
+    if not isinstance(commits, list) or not commits:
+        return VerificationResult(False, "source_not_carrier_ancestor")
+    if commits[-1].get("sha") != carrier_head_sha:
+        return VerificationResult(False, "carrier_head_mismatch")
+    return VerificationResult(True)
+
+
+def verify_source_evidence(
+    evidence_text: str,
+    *,
+    source_run_id: int,
+    source_head_sha: str,
+) -> VerificationResult:
+    required = [
+        "gate_status: source-proof-complete",
+        f"source_run_id: `{source_run_id}`",
+        f"source_head_sha: `{source_head_sha}`",
+        "source_pipeline_conclusion: `success`",
+        "should_retry: `false`",
+        "implementer_job: `skipped`",
+        "operator_escalation_marker: `present`",
+        "ordinary_retry_fixture: `passed`",
+    ]
+    lines = evidence_text.splitlines()
+    if any(lines.count(item) != 1 for item in required):
+        return VerificationResult(False, "source_evidence_incomplete")
+    return VerificationResult(True)
+
+
 def _matching_jobs(jobs: list[dict], suffix: str) -> list[dict]:
     return [job for job in jobs if str(job.get("name") or "").endswith(suffix)]
 
@@ -94,6 +140,7 @@ def verify_escalation_marker(
     package_path: str,
     pr_number: int,
     source_run_id: int,
+    source_head_sha: str,
 ) -> VerificationResult:
     prefix = f"{OPERATOR_ESCALATION_MARKER_PREFIX} `{task_id}`"
     matches = [
@@ -112,6 +159,7 @@ def verify_escalation_marker(
         f"package_path: `{package_path}`",
         f"pr_number: `{pr_number}`",
         f"run_id: `{source_run_id}`",
+        f"head_sha: `{source_head_sha}`",
     ]
     if any(token not in body for token in required):
         return VerificationResult(False, "escalation_metadata_incomplete")
@@ -128,6 +176,7 @@ def verify_carrier_state(
     current_ref: str,
     comments: list[dict],
     source_run_id: int,
+    source_head_sha: str,
 ) -> VerificationResult:
     if not SHA_RE.fullmatch(current_ref):
         return VerificationResult(False, "invalid_current_ref")
@@ -150,4 +199,5 @@ def verify_carrier_state(
         package_path=package_path,
         pr_number=int(pr.get("number") or 0),
         source_run_id=source_run_id,
+        source_head_sha=source_head_sha,
     )
