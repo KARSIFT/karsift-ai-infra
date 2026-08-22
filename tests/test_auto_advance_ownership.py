@@ -387,6 +387,47 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             publisher.evidence_file_action(
                 completed, has_trusted_pr=False, pending_body=pending
             )
+        predeclared = "\n".join(
+            [
+                "# VOC-102-T01 — Evidence (pending operator live evidence)",
+                "",
+                "Deterministic operator proof stub from the adopted plan.",
+                f"Package: `{PACKAGE}`",
+                "Change: `VOC-102`",
+                "source_run_id: pending",
+                "",
+            ]
+        )
+        self.assertTrue(
+            ownership.is_valid_predeclared_pending_evidence(
+                predeclared,
+                task_id="VOC-102-T01",
+                change_id="VOC-102",
+                package_path=PACKAGE,
+            )
+        )
+        self.assertEqual(
+            publisher.evidence_file_action(
+                predeclared,
+                has_trusted_pr=False,
+                pending_body=pending,
+                valid_predeclared_pending=True,
+            ),
+            "normalize",
+        )
+        for unsafe in (
+            predeclared.replace("source_run_id: pending", "source_run_id: `123`"),
+            predeclared + "gate_status: complete\n",
+            predeclared.replace("VOC-102-T01", "VOC-999-T01", 1),
+        ):
+            self.assertFalse(
+                ownership.is_valid_predeclared_pending_evidence(
+                    unsafe,
+                    task_id="VOC-102-T01",
+                    change_id="VOC-102",
+                    package_path=PACKAGE,
+                )
+            )
         allowed = f"{PACKAGE}/t01-evidence.md"
         publisher.validate_carrier_changed_paths({allowed}, allowed)
         with self.assertRaises(publisher.PublisherError):

@@ -20,6 +20,7 @@ from auto_advance_ownership import (
     carrier_pr_body,
     derive_evidence_relative_path,
     is_valid_carrier_pr,
+    is_valid_predeclared_pending_evidence,
     parse_package_risk,
     pending_evidence_body,
 )
@@ -144,12 +145,15 @@ def evidence_file_action(
     *,
     has_trusted_pr: bool,
     pending_body: str,
+    valid_predeclared_pending: bool = False,
 ) -> str:
     if existing_text is None:
         return "create"
-    if not has_trusted_pr and existing_text != pending_body:
-        raise PublisherError("untrusted_orphan_carrier")
-    return "preserve"
+    if has_trusted_pr:
+        return "preserve"
+    if valid_predeclared_pending and existing_text != pending_body:
+        return "normalize"
+    raise PublisherError("untrusted_orphan_carrier")
 
 
 def validate_inputs(
@@ -339,8 +343,18 @@ def ensure_carrier(
         existing_text,
         has_trusted_pr=existing is not None,
         pending_body=pending_body,
+        valid_predeclared_pending=(
+            existing is None
+            and existing_text is not None
+            and is_valid_predeclared_pending_evidence(
+                existing_text,
+                task_id=task_id,
+                change_id=change_id,
+                package_path=package_path,
+            )
+        ),
     )
-    if action == "create":
+    if action in {"create", "normalize"}:
         target.write_text(pending_body, encoding="utf-8")
         run_git(["add", evidence_path], cwd=clone_dir)
         run_git(
