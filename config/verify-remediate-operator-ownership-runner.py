@@ -92,6 +92,20 @@ def require(result) -> None:
         raise VerificationError(result.reason)
 
 
+def associated_base_sha(run: dict) -> str:
+    """Return the single Actions PR association's base SHA, or fail closed."""
+    pull_requests = run.get("pull_requests")
+    if not isinstance(pull_requests, list) or len(pull_requests) != 1:
+        return ""
+    source_pr = pull_requests[0]
+    if not isinstance(source_pr, dict):
+        return ""
+    base = source_pr.get("base")
+    if not isinstance(base, dict):
+        return ""
+    return str(base.get("sha") or "")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
@@ -146,7 +160,7 @@ def main() -> int:
             )
         )
         expected_head_sha = str(pr.get("headRefOid") or "")
-        expected_base_sha = str(run.get("pull_requests") or [{}])[0].get("base", {}).get("sha", "")
+        expected_base_sha = associated_base_sha(run)
         if not expected_base_sha:
             expected_base_sha = str(
                 json.loads(

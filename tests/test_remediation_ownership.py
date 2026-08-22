@@ -21,6 +21,14 @@ def load(name: str, path: Path):
 
 ownership = load("remediation_ownership", ROOT / "config/remediation-ownership.py")
 decision = load("decide_remediation", ROOT / "config/decide-remediation.py")
+verifier_runner = load(
+    "verify_remediate_operator_ownership_runner",
+    ROOT / "config/verify-remediate-operator-ownership-runner.py",
+)
+verifier = load(
+    "verify_remediate_operator_ownership",
+    ROOT / "config/verify_remediate_operator_ownership.py",
+)
 
 
 def contract(task_id: str, owner: str = "operator") -> str:
@@ -135,6 +143,40 @@ class RemediationOwnershipTests(unittest.TestCase):
             ),
             "REVIEW_INFRA_FAILURE",
         )
+
+    def test_hosted_verifier_extracts_base_sha_without_crashing(self):
+        base_sha = "b" * 40
+        valid = {
+            "pull_requests": [
+                {"number": 7, "head": {"sha": "a" * 40}, "base": {"sha": base_sha}}
+            ]
+        }
+        self.assertEqual(verifier_runner.associated_base_sha(valid), base_sha)
+        for malformed in (
+            {},
+            {"pull_requests": []},
+            {"pull_requests": [None]},
+            {"pull_requests": [{"base": None}]},
+        ):
+            self.assertEqual(verifier_runner.associated_base_sha(malformed), "")
+
+    def test_source_run_policy_rejects_malformed_associations_cleanly(self):
+        common = {
+            "repository": {"full_name": "KARSIFT/example"},
+            "name": "pipeline",
+            "path": ".github/workflows/pipeline.yml",
+            "event": "pull_request",
+            "status": "completed",
+        }
+        for source_pr in (None, {"number": 7, "head": None, "base": None}):
+            result = verifier.verify_source_run(
+                run={**common, "pull_requests": [source_pr]},
+                repository="KARSIFT/example",
+                pr_number=7,
+                expected_head_sha="a" * 40,
+                expected_base_sha="b" * 40,
+            )
+            self.assertFalse(result.ok)
 
 
 if __name__ == "__main__":
