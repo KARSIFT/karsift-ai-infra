@@ -104,6 +104,7 @@ jobs:
     outputs:
       branch: ${{ steps.branch.outputs.branch }}
       base_sha: ${{ steps.branch.outputs.base_sha }}
+      integration_sha: ${{ steps.branch.outputs.integration_sha }}
       has_changes: ${{ steps.commit.outputs.has_changes }}
       head_sha: ${{ steps.bundle.outputs.head_sha }}
       risk: ${{ steps.package.outputs.risk }}
@@ -326,6 +327,12 @@ jobs:
             git checkout -b "$branch" "origin/${{ inputs.integration_branch }}"
             echo "sync_mode=fresh" >> "$GITHUB_OUTPUT"
           fi
+          # Keep two boundaries distinct. base_sha is the pre-model branch tip
+          # used by the soft reset; integration_sha is the immutable common
+          # history a clean publisher can obtain without trusting the existing
+          # task branch on a remediation attempt.
+          integration_sha=$(git rev-parse "origin/${{ inputs.integration_branch }}")
+          echo "integration_sha=$integration_sha" >> "$GITHUB_OUTPUT"
           echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Escalates to config/roles.yml's `implementer_escalation` (if
@@ -931,15 +938,17 @@ jobs:
       # already succeeded once. Bundling the new commit(s) as a build
       # artifact right after commit, before the risky push, means a
       # push-only failure is now recoverable without re-invoking the model:
-      # download the artifact, `git bundle unbundle` it onto a checkout of
-      # the base branch, and push by hand (or via a future automated retry
-      # job - not built yet, this just makes that possible).
+      # download the artifact, verify it against the integration branch, and
+      # publish it from an isolated runner. A remediation base can be a locally
+      # rebased derivative that the publisher has never fetched, so the bundle
+      # includes the complete task-only lineage from the integration anchor,
+      # while base_sha remains the separate pre-model soft-reset boundary.
       - name: Bundle committed work as a recovery artifact
         id: bundle
         if: steps.commit.outputs.has_changes == 'true'
         run: |
           set -euo pipefail
-          git bundle create /tmp/implementer-work.bundle "${{ steps.branch.outputs.base_sha }}..HEAD"
+          git bundle create /tmp/implementer-work.bundle "${{ steps.branch.outputs.integration_sha }}..HEAD"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Upload recovery artifact
@@ -1034,7 +1043,7 @@ jobs:
           PUBLISH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PUBLISH_BRANCH: ${{ needs.implement.outputs.branch }}
           PUBLISH_HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
-          PUBLISH_BASE_SHA: ${{ needs.implement.outputs.base_sha }}
+          PUBLISH_INTEGRATION_SHA: ${{ needs.implement.outputs.integration_sha }}
           EXPECTED_OLD_HEAD: ${{ inputs.expected_head_sha }}
         run: |
           set -euo pipefail
@@ -1045,7 +1054,7 @@ jobs:
           fi
           if ! [[ "$PUBLISH_BRANCH" =~ ^agent/[A-Za-z0-9._/-]+$ ]] ||
              ! [[ "$PUBLISH_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-             ! [[ "$PUBLISH_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+             ! [[ "$PUBLISH_INTEGRATION_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Publication metadata is malformed; refusing publication." >&2
             exit 1
           fi
@@ -1060,19 +1069,24 @@ jobs:
           git --git-dir="$git_dir" remote add origin "$remote"
           git --git-dir="$git_dir" fetch --no-tags origin \
             "${{ inputs.integration_branch }}:refs/heads/${{ inputs.integration_branch }}"
+          if ! git --git-dir="$git_dir" merge-base --is-ancestor \
+            "$PUBLISH_INTEGRATION_SHA" "refs/heads/${{ inputs.integration_branch }}"; then
+            echo "Integration history changed before publication; refusing an unverifiable bundle." >&2
+            exit 1
+          fi
           git --git-dir="$git_dir" bundle verify "$bundle"
           git --git-dir="$git_dir" fetch "$bundle" \
             "$PUBLISH_HEAD_SHA:refs/heads/$PUBLISH_BRANCH"
           bundled_head=$(git --git-dir="$git_dir" rev-parse "refs/heads/$PUBLISH_BRANCH")
           if [ "$bundled_head" != "$PUBLISH_HEAD_SHA" ] ||
              ! git --git-dir="$git_dir" merge-base --is-ancestor \
-               "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA"; then
+               "$PUBLISH_INTEGRATION_SHA" "$PUBLISH_HEAD_SHA"; then
             echo "Bundle does not contain the authorized commit lineage." >&2
             exit 1
           fi
 
-          if git --git-dir="$git_dir" diff-tree --no-commit-id --name-only -r \
-            "$PUBLISH_BASE_SHA" "$PUBLISH_HEAD_SHA" \
+          if git --git-dir="$git_dir" log --format= --name-only \
+            "$PUBLISH_INTEGRATION_SHA..$PUBLISH_HEAD_SHA" \
             | grep -E '^\.github/workflows/' >/dev/null; then
             echo "Automated implementation cannot publish workflow-file changes; supervised review and publication are required." >&2
             exit 1

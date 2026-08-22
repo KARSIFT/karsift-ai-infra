@@ -321,6 +321,14 @@ A remediation retry carries the failed head into `implement.yml`, validates it
 before model work, revalidates it immediately before publishing, and uses an
 explicit SHA-valued force-with-lease. A commit arriving in either timing window
 therefore survives instead of being overwritten by the stale retry.
+The implementer records the pre-model task tip and the fetched integration tip
+as separate boundaries. It soft-resets only to the former, but its recovery
+bundle spans from the integration anchor through the complete task lineage.
+The isolated publisher fetches only that trusted integration history, verifies
+and imports the self-contained task bundle, scans the whole lineage for denied
+workflow changes, and then applies the exact old-head lease. This also covers a
+remediation branch whose prior commits were locally rebased and therefore never
+existed on the remote under their new commit IDs.
 
 Reviewer responses are shape-validated inside the bounded transient-retry loop.
 A provider process that exits successfully but omits its documented non-empty
