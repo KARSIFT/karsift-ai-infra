@@ -78,9 +78,10 @@ task is genuinely needed, its own instructions must say explicitly that a commit
 under this package's own directory does not count as drift for that check - it's
 the task's own bookkeeping, not new unreviewed scope. Prefer, if the calling
 project's release mechanism supports it, a package with no such snapshot-then-check
-task at all: one task that confirms the promotion's preconditions and whose own
-issue closing is what triggers promotion (see the project's own release
-documentation for whether closing a task issue does this).
+task at all: one task that confirms the promotion's preconditions and whose exact
+reviewed PR merge lets the merge gate publish the completion marker that release
+validates. An issue-close event may wake evaluation, but closed state alone must
+never be treated as completion proof.
 
 Propose a risk classification using the project's own scheme if it has one. This is
 a **draft proposal for a human to review at adoption time, never a determination**.

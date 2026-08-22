@@ -5,11 +5,12 @@ name: auto-advance (reusable)
 # human/founder already authorized its whole task roster in one decision at
 # adoption time (see adopt.yml) - so routine task-to-task progression
 # through that already-authorized roster is not a second decision point.
-# The two decisions that still need a human are package adoption (merging
-# the plan/ PR) and release promotion (release.yml's "Release: <id>" issue,
-# unaffected by this file) - this workflow only fills the gap in between:
-# when a task's tracking issue closes (normally via its PR merging), find
-# the next task_id in `<package_path>/.karsift/tasks.json` and either dispatch
+# Package adoption is the human authorization decision. Release promotion is
+# automatic only after caller-merge markers and promotion checks validate; its
+# release issue is an audit record, not an approval gate. This workflow fills
+# the gap in between: when a task issue closes, treat that event only as a wake
+# hint, validate the App-authored marker against the live exact caller merge,
+# then find the next task_id in `<package_path>/.karsift/tasks.json` and dispatch
 # implement.yml for an ordinary next task or prepare a deterministic
 # operator-owned live-evidence carrier without starting the implementer
 # (VOC-102).
@@ -18,8 +19,8 @@ name: auto-advance (reusable)
 # duplicate dispatch is a worse failure mode than staying silent:
 #   - No-ops on any issue whose title isn't "<CHANGE-ID>: ..." (mirrors
 #     release.yml's own check-completion guard).
-#   - No-ops if there's no next task (release.yml's check-completion job
-#     handles that case - opening the release-approval issue instead).
+#   - No-ops if there's no next task (release.yml's serialized evaluator
+#     handles the completed roster and release audit instead).
 #   - No-ops if the next task's issue is already closed (already done or
 #     already in flight).
 #   - For ordinary next tasks only: no-ops if a PR already exists on the
