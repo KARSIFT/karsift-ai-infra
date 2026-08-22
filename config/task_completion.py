@@ -56,6 +56,7 @@ def validate_review_authority(
     comments: list[dict[str, Any]],
     *,
     reviewed_head_sha: str,
+    reviewed_base_sha: str,
     identity: dict[str, str],
 ) -> None:
     """Bind live PR identity to the newest App-signed exact-head PASS review."""
@@ -64,6 +65,7 @@ def validate_review_authority(
         f"task_id: `{identity['task_id']}`",
         f"package_path: `{identity['package_path']}`",
         f"authority_issue: `{identity['authority_issue']}`",
+        f"base_sha: `{reviewed_base_sha}`",
     )
     candidates: list[dict[str, Any]] = []
     for comment in comments:

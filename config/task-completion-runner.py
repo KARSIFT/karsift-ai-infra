@@ -144,7 +144,11 @@ def validate_entry(repository: str, package_path: str, entry: dict[str, Any]) ->
 
 
 def publish_completion(
-    *, repository: str, pr_number: int, reviewed_head_sha: str
+    *,
+    repository: str,
+    pr_number: int,
+    reviewed_head_sha: str,
+    reviewed_base_sha: str,
 ) -> None:
     """Publish completion from live, merged caller-PR authority metadata."""
     pr = pull(repository, pr_number)
@@ -162,10 +166,11 @@ def publish_completion(
     validate_review_authority(
         comments(repository, pr_number),
         reviewed_head_sha=reviewed_head_sha,
+        reviewed_base_sha=reviewed_base_sha,
         identity=identity,
     )
     validate_roster_authority(
-        roster(repository, identity["package_path"], reviewed_head_sha),
+        roster(repository, identity["package_path"], reviewed_base_sha),
         identity,
     )
     issue_number = int(identity["authority_issue"])
@@ -244,6 +249,7 @@ def main() -> int:
         command.add_argument("--repository", required=True)
     publish.add_argument("--pr-number", required=True, type=int)
     publish.add_argument("--reviewed-head-sha", required=True)
+    publish.add_argument("--reviewed-base-sha", required=True)
     for command in (validate_task, validate_roster):
         command.add_argument("--package-path", required=True)
     validate_task.add_argument("--roster", required=True)
@@ -256,6 +262,7 @@ def main() -> int:
             repository=args.repository,
             pr_number=args.pr_number,
             reviewed_head_sha=args.reviewed_head_sha,
+            reviewed_base_sha=args.reviewed_base_sha,
         )
         return 0
 

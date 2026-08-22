@@ -32,6 +32,7 @@ REPOSITORY = "KARSIFT/caller"
 PR_NUMBER = 18
 ISSUE_NUMBER = 17
 HEAD = "a" * 40
+BASE = "c" * 40
 MERGE = "b" * 40
 MERGED_AT = "2026-08-22T00:00:10Z"
 BODY = (
@@ -78,6 +79,7 @@ def review_comment(*, issue_number=ISSUE_NUMBER, verdict="PASS", comment_id=1):
             "task_id: `VOC-108-T00`\n"
             "package_path: `specs/changes/VOC-108-example`\n"
             f"authority_issue: `{issue_number}`\n\n"
+            f"base_sha: `{BASE}`\n\n"
             f"VERDICT: {verdict}"
         ),
     }
@@ -98,7 +100,7 @@ def completion_timeline(*, close_after_marker):
 
 
 class TaskCompletionRunnerTests(unittest.TestCase):
-    def test_roster_loader_accepts_github_wrapped_base64_at_exact_head(self):
+    def test_roster_loader_accepts_github_wrapped_base64_at_exact_base(self):
         encoded = base64.b64encode(json.dumps(ROSTER).encode()).decode()
         wrapped = f"{encoded[:20]}\n{encoded[20:]}\n"
         with patch.object(
@@ -107,10 +109,10 @@ class TaskCompletionRunnerTests(unittest.TestCase):
             return_value={"encoding": "base64", "content": wrapped},
         ) as gh:
             self.assertEqual(
-                RUNNER.roster(REPOSITORY, "specs/changes/VOC-108-example", HEAD),
+                RUNNER.roster(REPOSITORY, "specs/changes/VOC-108-example", BASE),
                 ROSTER,
             )
-        self.assertIn(f"?ref={HEAD}", gh.call_args.args[-1])
+        self.assertIn(f"?ref={BASE}", gh.call_args.args[-1])
 
     def test_corrected_live_body_drives_first_publication_after_merge(self):
         with (
@@ -124,6 +126,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                 repository=REPOSITORY,
                 pr_number=PR_NUMBER,
                 reviewed_head_sha=HEAD,
+                reviewed_base_sha=BASE,
             )
 
         get_pull.assert_called_once_with(REPOSITORY, PR_NUMBER)
@@ -148,6 +151,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                             repository=REPOSITORY,
                             pr_number=PR_NUMBER,
                             reviewed_head_sha=expected_head,
+                            reviewed_base_sha=BASE,
                         )
                 get_comments.assert_not_called()
                 gh.assert_not_called()
@@ -168,6 +172,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                     repository=REPOSITORY,
                     pr_number=PR_NUMBER,
                     reviewed_head_sha=HEAD,
+                    reviewed_base_sha=BASE,
                 )
         get_roster.assert_called_once()
         get_issue.assert_not_called()
@@ -190,6 +195,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                             repository=REPOSITORY,
                             pr_number=PR_NUMBER,
                             reviewed_head_sha=HEAD,
+                            reviewed_base_sha=BASE,
                         )
                 get_issue.assert_not_called()
                 gh.assert_not_called()
@@ -217,6 +223,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                 repository=REPOSITORY,
                 pr_number=PR_NUMBER,
                 reviewed_head_sha=HEAD,
+                reviewed_base_sha=BASE,
             )
         gh.assert_not_called()
 
@@ -243,6 +250,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                 repository=REPOSITORY,
                 pr_number=PR_NUMBER,
                 reviewed_head_sha=HEAD,
+                reviewed_base_sha=BASE,
             )
         self.assertEqual(gh.call_count, 2)
         self.assertIn('"state": "open"', gh.call_args_list[0].kwargs["input_data"])
@@ -260,6 +268,7 @@ class TaskCompletionRunnerTests(unittest.TestCase):
                 repository=REPOSITORY,
                 pr_number=PR_NUMBER,
                 reviewed_head_sha=HEAD,
+                reviewed_base_sha=BASE,
             )
         self.assertEqual(gh.call_count, 3)
         self.assertIn('"state": "open"', gh.call_args_list[1].kwargs["input_data"])

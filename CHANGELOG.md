@@ -5,8 +5,9 @@
 - Made post-merge task completion fetch its authority identity from the live
   merged caller PR instead of the triggering event's stale body snapshot.
   Corrected-body failed-job retries now converge safely; the live identity must
-  match both the adopted roster and newest App-signed exact-head PASS review.
-  Mismatched or ambiguous bindings remain fail-closed, partial publication
+  match both the immutable adopted roster at the reviewed base and newest
+  App-signed exact-base/head PASS review. Mismatched or ambiguous bindings
+  remain fail-closed, partial publication
   restores a missing post-marker close wake-up, and a timeline-proven complete
   retry is mutation-free.
 

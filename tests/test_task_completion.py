@@ -92,6 +92,7 @@ class TaskCompletionTests(unittest.TestCase):
                     "task_id: `VOC-108-T00`\n"
                     "package_path: `specs/changes/VOC-108-example`\n"
                     "authority_issue: `17`\n\n"
+                    f"base_sha: `{'c' * 40}`\n\n"
                     f"VERDICT: {verdict}"
                 ),
             }
@@ -99,6 +100,7 @@ class TaskCompletionTests(unittest.TestCase):
         validate_review_authority(
             [review("PASS", comment_id=1)],
             reviewed_head_sha=RECORD["reviewed_head_sha"],
+            reviewed_base_sha="c" * 40,
             identity=EXPECTED,
         )
         for reviews in (
@@ -110,6 +112,7 @@ class TaskCompletionTests(unittest.TestCase):
                     validate_review_authority(
                         reviews,
                         reviewed_head_sha=RECORD["reviewed_head_sha"],
+                        reviewed_base_sha="c" * 40,
                         identity=EXPECTED,
                     )
 

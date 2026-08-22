@@ -566,4 +566,5 @@ jobs:
           python3 karsift-ai-infra/config/task-completion-runner.py publish \
             --repository "${{ github.repository }}" \
             --pr-number "${{ github.event.pull_request.number }}" \
-            --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}"
+            --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}" \
+            --reviewed-base-sha "${{ needs.report-status.outputs.base_sha }}"
