@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Allowed the live-evidence carrier publisher to normalize small, task-bound
+  adopted-plan stubs that are explicitly pending but do not use the canonical
+  carrier template. Completed, ambiguous, mismatched, malformed, and oversized
+  evidence remains fail-closed, preventing a safe predeclared stub from
+  stranding an operator-owned task as `untrusted_orphan_carrier`.
+
 - Separated live-evidence workflow dispatch authority from App-authenticated
   repository mutations. Only the dedicated reconcile job receives a scoped
   `GITHUB_TOKEN` with Actions write access; the App no longer requests an
