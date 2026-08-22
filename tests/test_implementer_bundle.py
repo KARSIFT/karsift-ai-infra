@@ -162,6 +162,24 @@ class ImplementerBundleTests(unittest.TestCase):
             git(self.root, "--git-dir", str(self.remote), "rev-parse", branch), head
         )
 
+    def test_soft_reset_uses_distinct_pre_model_tip_and_preserves_prior_history(self):
+        self.assertIn(
+            'git reset --soft "${{ steps.branch.outputs.base_sha }}"', WORKFLOW
+        )
+        work = self.clone("soft-reset")
+        git(work, "checkout", "-b", "agent/voc-test-voc-test-t00")
+        pre_model = self.commit(
+            work, "prior-task.txt", "prior\n", "prior task commit"
+        )
+        self.assertNotEqual(pre_model, self.integration_sha)
+        self.commit(work, "model-change.txt", "model\n", "model-authored commit")
+
+        git(work, "reset", "--soft", pre_model)
+
+        self.assertEqual(git(work, "rev-parse", "HEAD"), pre_model)
+        self.assertEqual(git(work, "diff", "--cached", "--name-only"), "model-change.txt")
+        self.assertEqual((work / "prior-task.txt").read_text(), "prior\n")
+
     def test_remediation_bundle_contains_locally_rebased_prior_commits(self):
         _, branch, first_head, first_bundle = self.make_attempt_one()
         first = self.publish(
