@@ -78,6 +78,22 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn("inputs.action == 'reconcile'", self.template)
         self.assertIn("inputs.action == 'reconcile-release'", self.template)
 
+    def test_roster_pr_wait_uses_authoritative_exact_sha_checks(self):
+        roster_wait = self.adopt.split("- name: Wait for roster PR checks", 1)[1].split(
+            "- name: Merge checked roster PR", 1
+        )[0]
+        self.assertNotIn("statusCheckRollup", roster_wait)
+        self.assertNotIn("gh pr checks", roster_wait)
+        self.assertIn("/check-runs?per_page=100", roster_wait)
+        self.assertIn("/status?per_page=100", roster_wait)
+        self.assertIn("authoritative-checks-runner.py", roster_wait)
+        self.assertIn('--workflow-event "pull_request"', roster_wait)
+        self.assertIn("/tmp/roster-pr.json", roster_wait)
+        self.assertIn("stable_green_count", roster_wait)
+        self.assertIn("previous_head_sha", roster_wait)
+        self.assertIn("pending_checks", roster_wait)
+        self.assertIn("failed_checks", roster_wait)
+
 
 if __name__ == "__main__":
     unittest.main()
