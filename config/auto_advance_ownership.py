@@ -177,6 +177,39 @@ def pending_evidence_body(task_id: str, change_id: str, package_path: str) -> st
     )
 
 
+def is_valid_predeclared_pending_evidence(
+    text: str,
+    *,
+    task_id: str,
+    change_id: str,
+    package_path: str,
+) -> bool:
+    """Recognize an adopted-plan stub that is safe to normalize into a carrier."""
+    if not text or len(text.encode("utf-8")) > 4096 or "\x00" in text or "\r" in text:
+        return False
+    lines = text.splitlines()
+    required = {
+        f"# {task_id} — Evidence (pending operator live evidence)",
+        f"Package: `{package_path}`",
+        f"Change: `{change_id}`",
+        "source_run_id: pending",
+    }
+    if not required.issubset(lines):
+        return False
+    source_lines = [line for line in lines if line.startswith("source_run_id:")]
+    if source_lines != ["source_run_id: pending"]:
+        return False
+    completed_prefixes = (
+        "gate_status:",
+        "result:",
+        "conclusion:",
+        "run_id:",
+        "pr_number:",
+        "verdict:",
+    )
+    return not any(line.strip().lower().startswith(completed_prefixes) for line in lines)
+
+
 def carrier_pr_body(
     *,
     change_id: str,
