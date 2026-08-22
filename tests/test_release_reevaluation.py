@@ -31,6 +31,21 @@ class ReleaseReevaluationTests(unittest.TestCase):
             )
         )
 
+    def test_external_check_without_pr_array_binds_to_unique_live_promotion(self):
+        event = self.event(pull_requests=[])
+        promotion = {
+            "state": "OPEN",
+            "headRefName": "develop",
+            "headRefOid": "a" * 40,
+            "baseRefName": "main",
+        }
+        self.assertTrue(
+            should_reevaluate(
+                event, repository="KARSIFT/caller", integration_branch="develop",
+                production_branch="main", promotion_pr=promotion
+            )
+        )
+
     def test_nonterminal_foreign_or_nonpromotion_event_is_ignored(self):
         cases = [
             self.event(status="in_progress"),

@@ -111,22 +111,30 @@ jobs:
               exit 0
             fi
           else
-            if ! python3 - "$GITHUB_EVENT_PATH" "${{ github.repository }}" \
+            gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \
+              --state open --json number,state,headRefName,headRefOid,baseRefName > /tmp/open-promotions.json
+            promotion_count=$(jq 'length' /tmp/open-promotions.json)
+            if [ "$promotion_count" -ne 1 ]; then
+              echo "Terminal check has no unique open promotion PR; safe no-op."
+              exit 0
+            fi
+            if ! python3 - "$GITHUB_EVENT_PATH" /tmp/open-promotions.json "${{ github.repository }}" \
               "${{ inputs.integration_branch }}" "${{ inputs.production_branch }}" <<'PYEOF'
           import json
           import sys
           from release_reevaluation import should_reevaluate
           event = json.load(open(sys.argv[1], encoding="utf-8"))
+          promotion_pr = json.load(open(sys.argv[2], encoding="utf-8"))[0]
           raise SystemExit(0 if should_reevaluate(
-              event, repository=sys.argv[2], integration_branch=sys.argv[3],
-              production_branch=sys.argv[4]
+              event, promotion_pr=promotion_pr, repository=sys.argv[3],
+              integration_branch=sys.argv[4], production_branch=sys.argv[5]
           ) else 1)
           PYEOF
             then
               echo "Terminal check is not bound to the promotion PR; nothing to evaluate."
               exit 0
             fi
-            promotion_pr=$(jq -r '.check_run.pull_requests[0].number' "$GITHUB_EVENT_PATH")
+            promotion_pr=$(jq -r '.[0].number' /tmp/open-promotions.json)
             pr_body=$(gh pr view "$promotion_pr" --json body -q .body)
             mapfile -t release_issues < <(printf '%s\n' "$pr_body" | grep -oP '(?<=release_issue: `)[0-9]+(?=`)' || true)
             mapfile -t change_ids < <(printf '%s\n' "$pr_body" | grep -oP '(?<=change_id: `)[A-Za-z][A-Za-z0-9]*-[0-9]+(?=`)' || true)
@@ -319,7 +327,8 @@ jobs:
           python3 karsift-ai-infra/config/authoritative-checks-runner.py \
             --check-runs-file /tmp/release-check-runs.json --statuses-file /tmp/release-statuses.json \
             --repository "${{ github.repository }}" --pr-number "$PR_NUMBER" --base-sha "$base_sha" \
-            --head-sha "$HEAD_SHA" --workflow-event "pull_request" \
+            --head-sha "$HEAD_SHA" --workflow-event "pull_request" --workflow-event "push" \
+            --workflow-event "workflow_dispatch" --workflow-event "schedule" \
             --exclude-prefix "release /" --output /tmp/release-authoritative.json
           total=$(jq -r .total_count /tmp/release-authoritative.json)
           pending=$(jq -r .pending /tmp/release-authoritative.json)

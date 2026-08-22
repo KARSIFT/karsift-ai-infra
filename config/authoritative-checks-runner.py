@@ -21,7 +21,7 @@ def _read(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _workflow_runs(check_runs, repository: str, required_event: str):
+def _workflow_runs(check_runs, repository: str, required_events: set[str]):
     cache = {}
     selected = []
     pattern = re.compile(
@@ -48,7 +48,7 @@ def _workflow_runs(check_runs, repository: str, required_event: str):
                 raise ValueError("could not validate workflow run identity")
             cache[run_id] = json.loads(result.stdout)
         run = cache[run_id]
-        if run.get("event") != required_event:
+        if run.get("event") not in required_events:
             continue
         if (
             (run.get("repository") or {}).get("full_name") != repository
@@ -72,14 +72,14 @@ def main() -> int:
     parser.add_argument("--base-sha", default="")
     parser.add_argument("--pr-number", type=int)
     parser.add_argument("--exclude-prefix", action="append", default=[])
-    parser.add_argument("--workflow-event", default="")
+    parser.add_argument("--workflow-event", action="append", default=[])
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     check_runs = flatten_check_runs(_read(args.check_runs_file))
     statuses = flatten_statuses(_read(args.statuses_file))
     if args.workflow_event:
-        check_runs = _workflow_runs(check_runs, args.repository, args.workflow_event)
+        check_runs = _workflow_runs(check_runs, args.repository, set(args.workflow_event))
     identity = {
         "repository": args.repository,
         "head_sha": args.head_sha,
