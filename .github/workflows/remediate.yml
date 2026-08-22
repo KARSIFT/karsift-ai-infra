@@ -88,14 +88,14 @@ jobs:
       ownership_reason: ${{ steps.parse.outputs.ownership_reason }}
     steps:
       - name: Checkout karsift-ai-infra policy helpers
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra
           persist-credentials: false
 
       - name: Checkout caller repository at the remediation head
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.expected_head_sha }}
           path: caller

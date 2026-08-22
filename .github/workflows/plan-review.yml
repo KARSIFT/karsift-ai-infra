@@ -120,7 +120,7 @@ jobs:
       # Checks out the PR's own reviewed commit, not the integration branch -
       # same reasoning as review.yml's identical step (see that file's own
       # comment for the live incident this avoids repeating).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.pr.outputs.sha }}
           fetch-depth: 0
@@ -147,7 +147,7 @@ jobs:
             "$merge_base" "$EXPECTED_HEAD_SHA" -- > /tmp/pr.diff
 
       - name: Checkout karsift-ai-infra
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: KARSIFT/karsift-ai-infra
           path: karsift-ai-infra

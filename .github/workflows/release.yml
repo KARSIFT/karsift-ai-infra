@@ -57,12 +57,13 @@ jobs:
       release_issue_number: ${{ steps.identify.outputs.release_issue_number }}
       promotion_pr_number: ${{ steps.identify.outputs.promotion_pr_number }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.integration_branch }}
+          persist-credentials: false
 
       - name: Checkout shared lifecycle policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -200,11 +201,12 @@ jobs:
       pull-requests: write
       statuses: read
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.integration_branch }}
+          persist-credentials: false
       - name: Checkout shared lifecycle policy
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}

@@ -60,15 +60,17 @@ jobs:
           echo "reason=not_ready_for_review" >> "$GITHUB_OUTPUT"
 
       - id: source-checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         if: inputs.event_action == 'ready_for_review'
         continue-on-error: true
+        with:
+          persist-credentials: false
 
       - name: Checkout shared reuse policy
         id: policy-checkout
         if: inputs.event_action == 'ready_for_review'
         continue-on-error: true
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}

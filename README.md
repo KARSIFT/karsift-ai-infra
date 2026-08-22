@@ -409,6 +409,11 @@ never deleted. Caller repositories should also enable GitHub's native
 `delete_branch_on_merge` setting as a low-cost second guard; protected
 integration and production branches are not eligible for that deletion.
 
+All shared-workflow checkout steps use one verified immutable Node.js 24 action
+revision and disable credential persistence. Jobs that mutate Git refs must
+configure their scoped App token (or documented `GITHUB_TOKEN` fallback)
+explicitly, so an action-runtime upgrade cannot silently change write identity.
+
 **Anyone - a human, or another agent - can start this by opening an issue,** not just by dispatching
 `plan.yml` by hand. The calling project's `pipeline.yml` routes any newly-opened issue with no
 `karsift:*` label into `plan.yml` with that issue's number; the planner drafts from the issue's full
