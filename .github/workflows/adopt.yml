@@ -59,6 +59,12 @@ on:
       KARSIFT_BOT_PRIVATE_KEY:
         required: false
 
+# An automatic plan-merge wake-up and a manual reconciliation for the same
+# adopted plan must not race on its deterministic roster branch.
+concurrency:
+  group: adopt-${{ github.repository }}-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
 jobs:
   adopt:
     runs-on: ubuntu-latest
@@ -652,16 +658,58 @@ jobs:
           done
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Merge checked roster PR
+      - name: Merge checked roster PR and clean its exact head
         if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
           CHECKED_HEAD_SHA: ${{ steps.roster-checks.outputs.head_sha }}
+          CHECKED_HEAD_REF: ${{ steps.commit.outputs.branch }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" --merge --delete-branch \
-            --match-head-commit "$CHECKED_HEAD_SHA"
+          if ! [[ "$CHECKED_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]] ||
+             ! [[ "$CHECKED_HEAD_REF" =~ ^karsift/roster-[a-z0-9-]+$ ]]; then
+            echo "Checked roster branch identity is malformed; refusing merge or cleanup." >&2
+            exit 1
+          fi
+
+          # Do not couple deletion to `gh pr merge`: merge-queued repositories
+          # reject that flag (and older clients could delete before the queue
+          # actually merged). Confirm the exact PR merge first.
+          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
+          deadline=$((SECONDS + 300))
+          while true; do
+            live=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER")
+            if [ "$(jq -r '.merged == true' <<<"$live")" = "true" ]; then
+              if [ "$(jq -r '.head.sha // ""' <<<"$live")" != "$CHECKED_HEAD_SHA" ] ||
+                 [ "$(jq -r '.head.ref // ""' <<<"$live")" != "$CHECKED_HEAD_REF" ]; then
+                echo "Merged roster PR identity differs from the checked branch revision; refusing cleanup." >&2
+                exit 1
+              fi
+              break
+            fi
+            if [ "$(jq -r '.state // ""' <<<"$live")" = "closed" ]; then
+              echo "Roster PR closed without merging; refusing cleanup." >&2
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "Roster PR did not reach merged state within 5 minutes; reconciliation is required." >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          remote_sha=$(git ls-remote --heads origin "refs/heads/$CHECKED_HEAD_REF" | awk '{print $1}')
+          if [ -z "$remote_sha" ]; then
+            echo "Checked roster branch is already absent."
+          elif [ "$remote_sha" != "$CHECKED_HEAD_SHA" ]; then
+            echo "Roster branch advanced after the checked merge; refusing to delete the newer revision." >&2
+            exit 1
+          else
+            git push \
+              --force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA" \
+              origin --delete "refs/heads/$CHECKED_HEAD_REF"
+          fi
 
       - name: Close the loop back to the originating issue, if any
         if: steps.commit.outputs.changed == 'true' && steps.verify.outputs.source_issue != ''

@@ -396,8 +396,10 @@ Those come from `adopt.yml`, which fires after a `plan/`-branch PR merges and re
 independent PASS verdict is bound to the exact merged head. It writes adoption metadata and the task
 roster together through a checked bookkeeping PR. A caller can dispatch the same merged plan PR to
 reconcile a missed event; task issue lookup and the roster commit are idempotent.
-The checked roster merge explicitly deletes its ephemeral `karsift/roster-*`
-head after merging. Caller repositories should also enable GitHub's native
+Adoption is serialized per plan authority. After the checked roster PR is
+confirmed merged, its ephemeral `karsift/roster-*` head is deleted only through
+an exact-SHA lease; a queued-but-not-merged PR or concurrently advanced ref is
+never deleted. Caller repositories should also enable GitHub's native
 `delete_branch_on_merge` setting as a low-cost second guard; protected
 integration and production branches are not eligible for that deletion.
 

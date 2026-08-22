@@ -42,7 +42,8 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
             'gh pr merge "$PR_NUMBER" --squash --delete-branch', self.merge
         )
         self.assertIn(
-            'gh pr merge "$PR_NUMBER" --merge --delete-branch', self.adopt
+            '--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA"',
+            self.adopt,
         )
 
     def test_post_merge_task_marker_is_task_branch_scoped(self):
