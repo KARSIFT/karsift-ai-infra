@@ -10,6 +10,10 @@ from typing import Any
 
 HEADER = "**KARSIFT task completion v1**"
 BOT_LOGIN = "karsift-ai-infra-bot[bot]"
+PACKAGE_RE = re.compile(
+    r"^specs/changes/([A-Z][A-Z0-9]*-[0-9]+)-[a-z0-9][a-z0-9-]*$"
+)
+TASK_RE = re.compile(r"^([A-Z][A-Z0-9]*-[0-9]+)-T[0-9]+[a-z]?$")
 FIELDS = (
     "repository",
     "authority_issue",
@@ -24,6 +28,28 @@ FIELDS = (
 
 class CompletionError(ValueError):
     """Completion evidence is missing, ambiguous, forged, or stale."""
+
+
+def parse_pr_authority(body: str) -> dict[str, str]:
+    """Extract one canonical task identity from the current caller PR body."""
+    tasks = re.findall(r"Implements task `([^`\r\n]+)`", body)
+    packages = re.findall(r"Package path: `([^`\r\n]+)`", body)
+    issues = re.findall(r"Closes #([0-9]+)\b", body)
+    if len(tasks) != 1 or len(packages) != 1 or len(issues) != 1:
+        raise CompletionError("caller pull request has ambiguous completion identity")
+
+    task_match = TASK_RE.fullmatch(tasks[0])
+    package_match = PACKAGE_RE.fullmatch(packages[0])
+    issue_number = int(issues[0])
+    if task_match is None or package_match is None or issue_number <= 0:
+        raise CompletionError("caller pull request has invalid completion identity")
+    if task_match.group(1) != package_match.group(1):
+        raise CompletionError("caller pull request task and package do not match")
+    return {
+        "authority_issue": str(issue_number),
+        "package_path": packages[0],
+        "task_id": tasks[0],
+    }
 
 
 def marker_body(record: dict[str, Any]) -> str:

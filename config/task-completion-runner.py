@@ -9,7 +9,14 @@ import os
 import subprocess
 from typing import Any
 
-from task_completion import BOT_LOGIN, CompletionError, HEADER, marker_body, validate_comments
+from task_completion import (
+    BOT_LOGIN,
+    CompletionError,
+    HEADER,
+    marker_body,
+    parse_pr_authority,
+    validate_comments,
+)
 
 
 def gh(*args: str, input_data: str | None = None) -> Any:
@@ -82,6 +89,86 @@ def validate_entry(repository: str, package_path: str, entry: dict[str, Any]) ->
     )
 
 
+def publish_completion(
+    *, repository: str, pr_number: int, reviewed_head_sha: str
+) -> None:
+    """Publish completion from live, merged caller-PR authority metadata."""
+    pr = pull(repository, pr_number)
+    if pr.get("state") != "closed" or not pr.get("merged_at"):
+        raise CompletionError("caller pull request is not merged")
+    if (pr.get("head") or {}).get("sha") != reviewed_head_sha:
+        raise CompletionError("caller pull request head changed before completion")
+    if not isinstance(pr.get("merge_commit_sha"), str):
+        raise CompletionError("caller pull request lacks merge identity")
+
+    # The REST response above is the authority source. In particular, do not
+    # accept identity fields copied from the workflow event: a rerun after an
+    # authorized PR-body correction must observe the corrected live body.
+    identity = parse_pr_authority(str(pr.get("body") or ""))
+    issue_number = int(identity["authority_issue"])
+    body = marker_body(
+        {
+            "repository": repository,
+            **identity,
+            "pr_number": pr_number,
+            "reviewed_head_sha": reviewed_head_sha,
+            "merge_commit_sha": pr["merge_commit_sha"],
+            "merged_at": pr["merged_at"],
+        }
+    )
+    prior = comments(repository, issue_number)
+    markers = [
+        comment for comment in prior if str(comment.get("body", "")).startswith(HEADER)
+    ]
+    marker_created = False
+    if not markers:
+        gh(
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/issues/{issue_number}/comments",
+            "--input",
+            "-",
+            input_data=json.dumps({"body": body}),
+        )
+        marker_created = True
+    elif len(markers) != 1 or markers[0].get("body") != body or (
+        (markers[0].get("user") or {}).get("login") != BOT_LOGIN
+        or (markers[0].get("user") or {}).get("type") != "Bot"
+    ):
+        raise CompletionError("completion marker is conflicting or ambiguous")
+
+    current_issue = issue(repository, issue_number)
+    issue_state = current_issue.get("state")
+    if issue_state not in {"open", "closed"}:
+        raise CompletionError("task issue state is invalid")
+    if not marker_created and issue_state == "closed":
+        return
+    # GitHub may have applied the local `Closes #N` reference as part of the
+    # merge before a newly created marker existed. Reopen then close only in
+    # that first-publication case so the issues:closed wake-up follows its
+    # authority evidence. An already-complete retry is a mutation-free no-op.
+    if issue_state == "closed":
+        gh(
+            "api",
+            "--method",
+            "PATCH",
+            f"repos/{repository}/issues/{issue_number}",
+            "--input",
+            "-",
+            input_data=json.dumps({"state": "open"}),
+        )
+    gh(
+        "api",
+        "--method",
+        "PATCH",
+        f"repos/{repository}/issues/{issue_number}",
+        "--input",
+        "-",
+        input_data=json.dumps({"state": "closed"}),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -90,78 +177,20 @@ def main() -> int:
     validate_roster = sub.add_parser("validate-roster")
     for command in (publish, validate_task, validate_roster):
         command.add_argument("--repository", required=True)
-        command.add_argument("--package-path", required=True)
-    publish.add_argument("--issue-number", required=True, type=int)
-    publish.add_argument("--task-id", required=True)
     publish.add_argument("--pr-number", required=True, type=int)
     publish.add_argument("--reviewed-head-sha", required=True)
+    for command in (validate_task, validate_roster):
+        command.add_argument("--package-path", required=True)
     validate_task.add_argument("--roster", required=True)
     validate_task.add_argument("--issue-number", required=True, type=int)
     validate_roster.add_argument("--roster", required=True)
     args = parser.parse_args()
 
     if args.command == "publish":
-        pr = pull(args.repository, args.pr_number)
-        if pr.get("state") != "closed" or not pr.get("merged_at"):
-            raise CompletionError("caller pull request is not merged")
-        if (pr.get("head") or {}).get("sha") != args.reviewed_head_sha:
-            raise CompletionError("caller pull request head changed before completion")
-        if not isinstance(pr.get("merge_commit_sha"), str):
-            raise CompletionError("caller pull request lacks merge identity")
-        body = marker_body(
-            {
-                "repository": args.repository,
-                "authority_issue": args.issue_number,
-                "package_path": args.package_path,
-                "task_id": args.task_id,
-                "pr_number": args.pr_number,
-                "reviewed_head_sha": args.reviewed_head_sha,
-                "merge_commit_sha": pr["merge_commit_sha"],
-                "merged_at": pr["merged_at"],
-            }
-        )
-        prior = comments(args.repository, args.issue_number)
-        markers = [
-            comment for comment in prior if str(comment.get("body", "")).startswith(HEADER)
-        ]
-        if not markers:
-            gh(
-                "api",
-                "--method",
-                "POST",
-                f"repos/{args.repository}/issues/{args.issue_number}/comments",
-                "--input",
-                "-",
-                input_data=json.dumps({"body": body}),
-            )
-        elif len(markers) != 1 or markers[0].get("body") != body or (
-            (markers[0].get("user") or {}).get("login") != BOT_LOGIN
-            or (markers[0].get("user") or {}).get("type") != "Bot"
-        ):
-            raise CompletionError("completion marker is conflicting or ambiguous")
-        # GitHub may have applied the local `Closes #N` reference as part of
-        # the merge before this post-merge step ran. Reopen then close only
-        # after the marker exists so the resulting issues:closed wake-up can
-        # never race ahead of its authority evidence. Retrying is idempotent.
-        current_issue = issue(args.repository, args.issue_number)
-        if current_issue.get("state") == "closed":
-            gh(
-                "api",
-                "--method",
-                "PATCH",
-                f"repos/{args.repository}/issues/{args.issue_number}",
-                "--input",
-                "-",
-                input_data=json.dumps({"state": "open"}),
-            )
-        gh(
-            "api",
-            "--method",
-            "PATCH",
-            f"repos/{args.repository}/issues/{args.issue_number}",
-            "--input",
-            "-",
-            input_data=json.dumps({"state": "closed"}),
+        publish_completion(
+            repository=args.repository,
+            pr_number=args.pr_number,
+            reviewed_head_sha=args.reviewed_head_sha,
         )
         return 0
 
