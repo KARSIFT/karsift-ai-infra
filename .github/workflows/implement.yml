@@ -1137,7 +1137,8 @@ jobs:
           EOF
           )"
           if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            gh pr edit --repo "$GH_REPO" "$existing" --body "$body"
+            jq -n --arg body "$body" '{body: $body}' |
+              gh api --method PATCH "repos/$GH_REPO/pulls/$existing" --input - >/dev/null
             gh pr comment --repo "$GH_REPO" "$existing" --body "Pushed attempt ${{ inputs.attempt }} of 2 - see the commit above for the reviewed changes."
           else
             gh pr create \

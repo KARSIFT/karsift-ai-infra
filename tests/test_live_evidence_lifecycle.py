@@ -1,4 +1,5 @@
 from importlib.util import module_from_spec, spec_from_file_location
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -136,6 +137,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             bin_path = scratch_path / "bin"
             bin_path.mkdir()
             invocation_log = scratch_path / "gh-invocations"
+            update_payload = scratch_path / "update-payload.json"
             gh_stub = bin_path / "gh"
             gh_stub.write_text(
                 textwrap.dedent(
@@ -143,12 +145,18 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
                     #!/usr/bin/env bash
                     set -euo pipefail
                     printf '%s %s\\n' "$1" "$2" >> {invocation_log}
-                    if [[ " $* " != *" --repo KARSIFT/fixture "* ]]; then
-                      exit 81
-                    fi
                     case "$1 $2" in
-                      "pr list") printf '%s\\n' "${{EXISTING_PR:-}}" ;;
-                      "pr create"|"pr edit"|"pr comment") exit 0 ;;
+                      "pr list")
+                        [[ " $* " == *" --repo KARSIFT/fixture "* ]] || exit 81
+                        printf '%s\\n' "${{EXISTING_PR:-}}"
+                        ;;
+                      "pr create"|"pr comment")
+                        [[ " $* " == *" --repo KARSIFT/fixture "* ]] || exit 81
+                        ;;
+                      "api --method")
+                        [[ " $* " == *" PATCH repos/KARSIFT/fixture/pulls/42 --input - "* ]] || exit 83
+                        cat > {update_payload}
+                        ;;
                       *) exit 82 ;;
                     esac
                     """
@@ -166,7 +174,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             )
             cases = [
                 ("", ["pr list", "pr create"]),
-                ("42", ["pr list", "pr edit", "pr comment"]),
+                ("42", ["pr list", "api --method", "pr comment"]),
             ]
             for existing_pr, expected in cases:
                 with self.subTest(existing_pr=existing_pr):
@@ -185,6 +193,11 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
                     self.assertEqual(
                         invocation_log.read_text().splitlines(), expected
                     )
+                    if existing_pr:
+                        payload = json.loads(update_payload.read_text())
+                        self.assertIn("Implements task `VOC-TEST-T00`", payload["body"])
+
+        self.assertNotIn("gh pr edit", script)
 
     def test_verdict_fixture_matrix_is_fail_dominant(self):
         waiting = "VERDICT: WAITING FOR OPERATOR LIVE EVIDENCE"
