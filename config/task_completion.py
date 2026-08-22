@@ -52,6 +52,82 @@ def parse_pr_authority(body: str) -> dict[str, str]:
     }
 
 
+def validate_review_authority(
+    comments: list[dict[str, Any]],
+    *,
+    reviewed_head_sha: str,
+    identity: dict[str, str],
+) -> None:
+    """Bind live PR identity to the newest App-signed exact-head PASS review."""
+    header = f"**Independent verification - bound to commit `{reviewed_head_sha}`**"
+    required = (
+        f"task_id: `{identity['task_id']}`",
+        f"package_path: `{identity['package_path']}`",
+        f"authority_issue: `{identity['authority_issue']}`",
+    )
+    candidates: list[dict[str, Any]] = []
+    for comment in comments:
+        body = comment.get("body")
+        user = comment.get("user") or {}
+        if (
+            not isinstance(body, str)
+            or not body.startswith(header)
+            or user.get("login") != BOT_LOGIN
+            or user.get("type") != "Bot"
+        ):
+            continue
+        lines = body.splitlines()
+        if all(lines.count(line) == 1 for line in (header, *required)):
+            candidates.append(comment)
+    if not candidates:
+        raise CompletionError("live completion identity lacks an App-signed exact-head review")
+
+    selected = max(
+        candidates,
+        key=lambda comment: (str(comment.get("created_at") or ""), int(comment.get("id") or 0)),
+    )
+    final_line = next(
+        (line.strip() for line in reversed(str(selected["body"]).splitlines()) if line.strip()),
+        "",
+    )
+    if final_line not in {
+        "VERDICT: PASS",
+        "VERDICT: PASS WITH NON-BLOCKING FINDINGS",
+    }:
+        raise CompletionError("newest live-identity review is not a PASS verdict")
+
+
+def validate_roster_authority(roster: Any, identity: dict[str, str]) -> None:
+    """Require the live identity to name one adopted task-roster entry."""
+    if not isinstance(roster, list) or not roster:
+        raise CompletionError("adopted task roster is empty or malformed")
+    entries: list[tuple[str, int]] = []
+    for entry in roster:
+        if not isinstance(entry, dict):
+            raise CompletionError("adopted task roster is malformed")
+        task_id = entry.get("task_id")
+        issue_number = entry.get("issue")
+        if (
+            not isinstance(task_id, str)
+            or TASK_RE.fullmatch(task_id) is None
+            or not isinstance(issue_number, int)
+            or isinstance(issue_number, bool)
+            or issue_number <= 0
+        ):
+            raise CompletionError("adopted task roster is malformed")
+        entries.append((task_id, issue_number))
+    task_ids = [task_id for task_id, _ in entries]
+    issue_numbers = [issue_number for _, issue_number in entries]
+    if (
+        len(task_ids) != len(set(task_ids))
+        or len(issue_numbers) != len(set(issue_numbers))
+    ):
+        raise CompletionError("adopted task roster contains duplicate entries")
+    expected = (identity["task_id"], int(identity["authority_issue"]))
+    if entries.count(expected) != 1:
+        raise CompletionError("live completion identity does not match the adopted task roster")
+
+
 def marker_body(record: dict[str, Any]) -> str:
     missing = [field for field in FIELDS if field not in record]
     if missing:

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import subprocess
@@ -15,6 +17,8 @@ from task_completion import (
     HEADER,
     marker_body,
     parse_pr_authority,
+    validate_review_authority,
+    validate_roster_authority,
     validate_comments,
 )
 
@@ -46,6 +50,37 @@ def comments(repository: str, issue: int) -> list[dict[str, Any]]:
     return [comment for page in pages for comment in page]
 
 
+def timeline(repository: str, issue: int) -> list[dict[str, Any]]:
+    pages = gh(
+        "api",
+        "--header",
+        "Accept: application/vnd.github+json",
+        "--paginate",
+        "--slurp",
+        f"repos/{repository}/issues/{issue}/timeline?per_page=100",
+    )
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise CompletionError("invalid issue timeline pagination")
+    return [event for page in pages for event in page]
+
+
+def has_post_marker_close(events: list[dict[str, Any]], marker: str) -> bool:
+    positions = [
+        index
+        for index, event in enumerate(events)
+        if event.get("event") == "commented"
+        and event.get("body") == marker
+        and (event.get("actor") or {}).get("login") == BOT_LOGIN
+        and (event.get("actor") or {}).get("type") == "Bot"
+    ]
+    if len(positions) != 1:
+        return False
+    return any(
+        index > positions[0] and event.get("event") == "closed"
+        for index, event in enumerate(events)
+    )
+
+
 def issue(repository: str, number: int) -> dict[str, Any]:
     value = gh("api", f"repos/{repository}/issues/{number}")
     if not isinstance(value, dict):
@@ -58,6 +93,25 @@ def pull(repository: str, number: int) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CompletionError("invalid pull request metadata")
     return value
+
+
+def roster(repository: str, package_path: str, ref: str) -> Any:
+    value = gh(
+        "api",
+        f"repos/{repository}/contents/{package_path}/.karsift/tasks.json?ref={ref}",
+    )
+    if (
+        not isinstance(value, dict)
+        or value.get("encoding") != "base64"
+        or not isinstance(value.get("content"), str)
+    ):
+        raise CompletionError("invalid adopted task roster metadata")
+    try:
+        encoded = "".join(value["content"].split())
+        raw = base64.b64decode(encoded, validate=True)
+        return json.loads(raw.decode("utf-8"))
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CompletionError("invalid adopted task roster content") from exc
 
 
 def expected_for(entry: dict[str, Any], package_path: str, repository: str) -> dict[str, str]:
@@ -105,6 +159,15 @@ def publish_completion(
     # accept identity fields copied from the workflow event: a rerun after an
     # authorized PR-body correction must observe the corrected live body.
     identity = parse_pr_authority(str(pr.get("body") or ""))
+    validate_review_authority(
+        comments(repository, pr_number),
+        reviewed_head_sha=reviewed_head_sha,
+        identity=identity,
+    )
+    validate_roster_authority(
+        roster(repository, identity["package_path"], reviewed_head_sha),
+        identity,
+    )
     issue_number = int(identity["authority_issue"])
     body = marker_body(
         {
@@ -143,11 +206,13 @@ def publish_completion(
     if issue_state not in {"open", "closed"}:
         raise CompletionError("task issue state is invalid")
     if not marker_created and issue_state == "closed":
-        return
-    # GitHub may have applied the local `Closes #N` reference as part of the
-    # merge before a newly created marker existed. Reopen then close only in
-    # that first-publication case so the issues:closed wake-up follows its
-    # authority evidence. An already-complete retry is a mutation-free no-op.
+        if has_post_marker_close(timeline(repository, issue_number), body):
+            return
+    # GitHub may have applied the local `Closes #N` reference before a newly
+    # created marker existed, or a prior attempt may have stopped between the
+    # marker POST and its close wake-up. Reopen then close in either case so
+    # issues:closed follows the authority evidence. A timeline-proven complete
+    # retry is a mutation-free no-op.
     if issue_state == "closed":
         gh(
             "api",

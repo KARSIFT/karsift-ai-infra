@@ -4,9 +4,11 @@
 
 - Made post-merge task completion fetch its authority identity from the live
   merged caller PR instead of the triggering event's stale body snapshot.
-  Corrected-body failed-job retries now converge safely, mismatched or
-  ambiguous task/package/issue bindings remain fail-closed, and an
-  already-complete retry is mutation-free.
+  Corrected-body failed-job retries now converge safely; the live identity must
+  match both the adopted roster and newest App-signed exact-head PASS review.
+  Mismatched or ambiguous bindings remain fail-closed, partial publication
+  restores a missing post-marker close wake-up, and a timeline-proven complete
+  retry is mutation-free.
 
 - Allowed the live-evidence carrier publisher to normalize small, task-bound
   adopted-plan stubs that are explicitly pending but do not use the canonical

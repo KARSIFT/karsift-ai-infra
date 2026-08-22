@@ -435,9 +435,12 @@ Completion identity is parsed from a fresh REST read of the merged caller PR,
 not from the workflow event's original body snapshot. If an authorized body
 correction happens after the run starts, rerunning the failed completion job
 therefore sees the correction. The adapter still requires exactly one matching
-task, package, and local issue binding; conflicting evidence fails closed, and
-a retry after the exact App marker and closed issue already exist makes no
-further mutation.
+task, package, and local issue binding, then binds that identity to both the
+adopted roster and newest App-signed exact-head PASS review before any issue
+mutation. Conflicting evidence fails closed. A retry after the exact App marker
+and a timeline-proven later issue-close wake-up makes no further mutation; if the
+marker was published after an earlier automatic close, the retry safely emits
+the missing post-marker close wake-up.
 
 When every roster marker validates, `release.yml` opens a `Release: <change_id>`
 audit issue and automatically opens (or reuses) and merges a real
