@@ -6,7 +6,9 @@
   only after confirmed merge and through an exact-SHA lease. Adoption is
   serialized per plan authority; queued-but-unmerged and concurrently advanced
   refs remain fail-closed, while a ref removed concurrently by native cleanup
-  is accepted only after an authoritative absence recheck. Deterministic policy tests keep roster and ordinary
+  is accepted only after an authoritative absence recheck. No-change
+  reconciliation recovers interrupted post-merge cleanup only when the current
+  ref exactly matches a uniquely proven merged roster PR. Deterministic policy tests keep roster and ordinary
   task/plan cleanup aligned while protected long-lived branches remain untouched.
 
 - Made post-merge task completion fetch its authority identity from the live

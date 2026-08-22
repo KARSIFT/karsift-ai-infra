@@ -109,6 +109,23 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn('if [ -z "$remaining_sha" ]', merge)
         self.assertIn("Leased roster branch deletion failed and the ref still exists", merge)
 
+    def test_no_change_reconciliation_recovers_only_exact_merged_head_cleanup(self):
+        commit = self.adopt.split("- name: Commit task roster to a branch", 1)[1].split(
+            "- name: Push roster branch", 1
+        )[0]
+        recovery = self.adopt.split("- name: Recover cleanup for an already-merged roster", 1)[1].split(
+            "- name:", 1
+        )[0]
+        self.assertLess(commit.index("echo \"branch=$branch\""), commit.index("git diff --cached --quiet"))
+        self.assertIn("if: steps.commit.outputs.changed == 'false'", self.adopt)
+        self.assertIn(".merged_at != null", recovery)
+        self.assertIn(".head.repo.full_name == $repository", recovery)
+        self.assertIn(".head.ref == $ref and .head.sha == $sha", recovery)
+        self.assertIn(".base.ref == $base", recovery)
+        self.assertIn('if [ "$matching_merges" != "1" ]', recovery)
+        self.assertIn('--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$remote_sha"', recovery)
+        self.assertIn("Leased reconciliation cleanup failed and the ref still exists", recovery)
+
     def test_adoption_is_serialized_for_the_same_plan_authority(self):
         self.assertIn(
             "group: adopt-${{ github.repository }}-${{ inputs.pr_number }}", self.adopt

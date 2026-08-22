@@ -47,6 +47,8 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         )
         self.assertIn("remaining_sha=$(git ls-remote --heads origin", self.adopt)
         self.assertIn("Leased roster branch deletion failed and the ref still exists", self.adopt)
+        self.assertIn("Recover cleanup for an already-merged roster", self.adopt)
+        self.assertIn("Current roster ref is not uniquely proven as an already-merged exact head", self.adopt)
 
     def test_post_merge_task_marker_is_task_branch_scoped(self):
         marker = "- name: Publish task completion marker and close linked task issue"

@@ -324,6 +324,9 @@ therefore survives instead of being overwritten by the stale retry.
 Adoption similarly removes its merged roster ref through an exact-SHA lease;
 if native merged-branch cleanup wins the deletion race, an authoritative
 absence recheck is accepted, while any surviving ref still stops dispatch.
+An unchanged reconciliation also checks for a retained roster ref and removes
+it only when GitHub proves its current SHA is the unique head of a merged roster
+PR for the expected integration branch.
 The implementer records the pre-model task tip and the fetched integration tip
 as separate boundaries. It soft-resets only to the former, but its recovery
 bundle spans from the integration anchor through the complete task lineage.
