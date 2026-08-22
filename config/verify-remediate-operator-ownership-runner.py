@@ -108,18 +108,9 @@ def associated_base_sha(run: dict) -> str:
     return str(base.get("sha") or "")
 
 
-def associated_head_sha(run: dict) -> str:
-    """Return the single Actions PR association's head SHA, or fail closed."""
-    pull_requests = run.get("pull_requests")
-    if not isinstance(pull_requests, list) or len(pull_requests) != 1:
-        return ""
-    source_pr = pull_requests[0]
-    if not isinstance(source_pr, dict):
-        return ""
-    head = source_pr.get("head")
-    if not isinstance(head, dict):
-        return ""
-    return str(head.get("sha") or "")
+def immutable_run_head_sha(run: dict) -> str:
+    """Return the immutable source SHA recorded directly on the Actions run."""
+    return str(run.get("head_sha") or "")
 
 
 def evidence_path_for_task(package_root: Path, task_id: str) -> Path:
@@ -178,28 +169,13 @@ def main() -> int:
                     "view",
                     str(args.pr_number),
                     "--json",
-                    "number,title,body,state,headRefOid,baseRefName,comments",
+                    "number,title,body,state,headRefOid,baseRefName,baseRefOid,comments",
                 ]
             )
         )
         carrier_head_sha = str(pr.get("headRefOid") or "")
-        source_head_sha = associated_head_sha(run)
-        expected_base_sha = associated_base_sha(run)
-        if not expected_base_sha:
-            expected_base_sha = str(
-                json.loads(
-                    api.gh(
-                        [
-                            "pr",
-                            "view",
-                            str(args.pr_number),
-                            "--json",
-                            "baseRefOid",
-                        ]
-                    )
-                ).get("baseRefOid")
-                or ""
-            )
+        source_head_sha = immutable_run_head_sha(run)
+        expected_base_sha = str(pr.get("baseRefOid") or "")
         require(
             verify_source_run(
                 run=run,
@@ -254,14 +230,11 @@ def main() -> int:
             raise VerificationError("source_job_set_incomplete")
         require(verify_source_jobs(jobs))
 
-        issue_number = None
         body = str(pr.get("body") or "")
-        for line in body.splitlines():
-            if line.startswith("Closes #"):
-                issue_number = int(line.removeprefix("Closes #").strip())
-                break
-        if issue_number is None:
+        authority_matches = re.findall(r"^Closes #([1-9][0-9]*)\.?$", body, re.MULTILINE)
+        if len(authority_matches) != 1:
             raise VerificationError("authority_issue_missing")
+        issue_number = int(authority_matches[0])
 
         require(
             verify_carrier_state(

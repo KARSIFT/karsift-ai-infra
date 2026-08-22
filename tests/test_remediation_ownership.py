@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -160,11 +161,41 @@ class RemediationOwnershipTests(unittest.TestCase):
         ):
             self.assertEqual(verifier_runner.associated_base_sha(malformed), "")
 
+    def test_authority_issue_line_accepts_carrier_punctuation_without_ambiguity(self):
+        pattern = r"^Closes #([1-9][0-9]*)\.?$"
+        self.assertEqual(re.findall(pattern, "Closes #885.", re.MULTILINE), ["885"])
+        self.assertEqual(re.findall(pattern, "Closes #885", re.MULTILINE), ["885"])
+        self.assertEqual(re.findall(pattern, "Closes #0.", re.MULTILINE), [])
+        self.assertEqual(re.findall(pattern, "Closes #885 extra", re.MULTILINE), [])
+
     def test_hosted_verifier_binds_source_to_later_carrier_head(self):
         source = "a" * 40
         carrier = "c" * 40
-        run = {"pull_requests": [{"head": {"sha": source}}]}
-        self.assertEqual(verifier_runner.associated_head_sha(run), source)
+        run = {
+            "head_sha": source,
+            "repository": {"full_name": "KARSIFT/example"},
+            "name": "pipeline",
+            "path": ".github/workflows/pipeline.yml",
+            "event": "pull_request",
+            "status": "completed",
+            "pull_requests": [
+                {
+                    "number": 7,
+                    "head": {"sha": carrier},
+                    "base": {"sha": "b" * 40},
+                }
+            ],
+        }
+        self.assertEqual(verifier_runner.immutable_run_head_sha(run), source)
+        self.assertTrue(
+            verifier.verify_source_run(
+                run=run,
+                repository="KARSIFT/example",
+                pr_number=7,
+                expected_head_sha=source,
+                expected_base_sha="b" * 40,
+            ).ok
+        )
         self.assertEqual(
             verifier_runner.evidence_path_for_task(Path("/tmp/pkg"), "VOC-106-T01"),
             Path("/tmp/pkg/t01-evidence.md"),
@@ -218,7 +249,7 @@ class RemediationOwnershipTests(unittest.TestCase):
         )
 
         marker = {
-            "author": {"login": "github-actions[bot]"},
+            "author": {"login": "github-actions"},
             "body": "\n".join(
                 [
                     f"{verifier.OPERATOR_ESCALATION_MARKER_PREFIX} `VOC-106-T01`",
@@ -234,6 +265,16 @@ class RemediationOwnershipTests(unittest.TestCase):
         self.assertTrue(
             verifier.verify_escalation_marker(
                 [marker],
+                task_id="VOC-106-T01",
+                package_path="specs/changes/VOC-106-example",
+                pr_number=7,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_escalation_marker(
+                [{**marker, "author": {"login": "untrusted-user"}}],
                 task_id="VOC-106-T01",
                 package_path="specs/changes/VOC-106-example",
                 pr_number=7,
@@ -285,6 +326,7 @@ class RemediationOwnershipTests(unittest.TestCase):
             "path": ".github/workflows/pipeline.yml",
             "event": "pull_request",
             "status": "completed",
+            "head_sha": "a" * 40,
         }
         for source_pr in (None, {"number": 7, "head": None, "base": None}):
             result = verifier.verify_source_run(

@@ -13,6 +13,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TRUSTED_BOT_LOGINS = {
     "app/karsift-ai-infra-bot",
     "karsift-ai-infra-bot",
+    "github-actions",
     "github-actions[bot]",
 }
 
@@ -49,8 +50,13 @@ def verify_source_run(
         return VerificationResult(False, "source_pr_mismatch")
     head = source_pr.get("head")
     base = source_pr.get("base")
-    if not isinstance(head, dict) or head.get("sha") != expected_head_sha:
+    if run.get("head_sha") != expected_head_sha:
         return VerificationResult(False, "source_head_mismatch")
+    # GitHub updates the PR association's head SHA when the PR advances, even
+    # for an older workflow run. Treat it only as a structurally valid PR
+    # association; run.head_sha is the immutable source identity.
+    if not isinstance(head, dict) or not SHA_RE.fullmatch(str(head.get("sha") or "")):
+        return VerificationResult(False, "source_pr_mismatch")
     if not isinstance(base, dict) or base.get("sha") != expected_base_sha:
         return VerificationResult(False, "source_base_mismatch")
     return VerificationResult(True)
