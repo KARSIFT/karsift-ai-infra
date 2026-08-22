@@ -241,10 +241,35 @@ class RemediationOwnershipTests(unittest.TestCase):
                 source_head_sha=source,
             ).ok
         )
-        marker["body"] = marker["body"].replace(source, carrier)
+        later_marker = {
+            **marker,
+            "body": marker["body"]
+            .replace("run_id: `123`", "run_id: `124`")
+            .replace(source, carrier),
+        }
+        self.assertTrue(
+            verifier.verify_escalation_marker(
+                [marker, later_marker],
+                task_id="VOC-106-T01",
+                package_path="specs/changes/VOC-106-example",
+                pr_number=7,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
         self.assertFalse(
             verifier.verify_escalation_marker(
-                [marker],
+                [marker, dict(marker)],
+                task_id="VOC-106-T01",
+                package_path="specs/changes/VOC-106-example",
+                pr_number=7,
+                source_run_id=123,
+                source_head_sha=source,
+            ).ok
+        )
+        self.assertFalse(
+            verifier.verify_escalation_marker(
+                [later_marker],
                 task_id="VOC-106-T01",
                 package_path="specs/changes/VOC-106-example",
                 pr_number=7,
