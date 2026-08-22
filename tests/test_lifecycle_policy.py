@@ -45,6 +45,8 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
             '--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA"',
             self.adopt,
         )
+        self.assertIn("remaining_sha=$(git ls-remote --heads origin", self.adopt)
+        self.assertIn("Leased roster branch deletion failed and the ref still exists", self.adopt)
 
     def test_post_merge_task_marker_is_task_branch_scoped(self):
         marker = "- name: Publish task completion marker and close linked task issue"

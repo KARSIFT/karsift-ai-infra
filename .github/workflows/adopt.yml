@@ -706,9 +706,20 @@ jobs:
             echo "Roster branch advanced after the checked merge; refusing to delete the newer revision." >&2
             exit 1
           else
-            git push \
+            if ! git push \
               --force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA" \
-              origin --delete "refs/heads/$CHECKED_HEAD_REF"
+              origin --delete "refs/heads/$CHECKED_HEAD_REF"; then
+              # Native delete_branch_on_merge or another exact cleanup can
+              # win after the read above. Only an absent ref is a harmless
+              # concurrent success; any surviving ref still fails closed.
+              remaining_sha=$(git ls-remote --heads origin "refs/heads/$CHECKED_HEAD_REF" | awk '{print $1}')
+              if [ -z "$remaining_sha" ]; then
+                echo "Checked roster branch was deleted concurrently."
+              else
+                echo "Leased roster branch deletion failed and the ref still exists; refusing to continue." >&2
+                exit 1
+              fi
+            fi
           fi
 
       - name: Close the loop back to the originating issue, if any

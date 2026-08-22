@@ -321,6 +321,9 @@ A remediation retry carries the failed head into `implement.yml`, validates it
 before model work, revalidates it immediately before publishing, and uses an
 explicit SHA-valued force-with-lease. A commit arriving in either timing window
 therefore survives instead of being overwritten by the stale retry.
+Adoption similarly removes its merged roster ref through an exact-SHA lease;
+if native merged-branch cleanup wins the deletion race, an authoritative
+absence recheck is accepted, while any surviving ref still stops dispatch.
 The implementer records the pre-model task tip and the fetched integration tip
 as separate boundaries. It soft-resets only to the former, but its recovery
 bundle spans from the integration anchor through the complete task lineage.

@@ -104,6 +104,10 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         self.assertIn(".merged == true", merge)
         self.assertIn("$remote_sha", merge)
         self.assertIn('--force-with-lease="refs/heads/$CHECKED_HEAD_REF:$CHECKED_HEAD_SHA"', merge)
+        self.assertIn("if ! git push", merge)
+        self.assertIn("remaining_sha=$(git ls-remote --heads origin", merge)
+        self.assertIn('if [ -z "$remaining_sha" ]', merge)
+        self.assertIn("Leased roster branch deletion failed and the ref still exists", merge)
 
     def test_adoption_is_serialized_for_the_same_plan_authority(self):
         self.assertIn(
