@@ -341,6 +341,7 @@ jobs:
             exit 0
           fi
           base_sha=$(jq -r .baseRefOid <<<"$live")
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/release-pr.json
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > /tmp/release-check-runs.json
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
@@ -348,7 +349,8 @@ jobs:
           python3 karsift-ai-infra/config/authoritative-checks-runner.py \
             --check-runs-file /tmp/release-check-runs.json --statuses-file /tmp/release-statuses.json \
             --repository "${{ github.repository }}" --pr-number "$PR_NUMBER" --base-sha "$base_sha" \
-            --head-sha "$HEAD_SHA" --workflow-event "pull_request" --workflow-event "push" \
+            --head-sha "$HEAD_SHA" --pull-request-file /tmp/release-pr.json \
+            --workflow-event "pull_request" --workflow-event "push" \
             --workflow-event "workflow_dispatch" --workflow-event "schedule" \
             --exclude-prefix "release /" --output /tmp/release-authoritative.json
           total=$(jq -r .total_count /tmp/release-authoritative.json)

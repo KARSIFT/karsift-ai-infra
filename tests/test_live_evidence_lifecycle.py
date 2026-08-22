@@ -71,6 +71,9 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
 
     def _execute_missing_sha_path(self, workflow, step_name):
         script = self._run_block(workflow, step_name)
+        script = script.replace(
+            "PYTHONPATH=karsift-ai-infra/config", f"PYTHONPATH={ROOT / 'config'}"
+        )
         script = script.replace("${{ inputs.pr_number }}", "1")
         script = script.replace("${{ github.event.pull_request.number }}", "1")
         script = script.replace("${{ inputs.expected_head_sha }}", "")
@@ -96,6 +99,7 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
                 env["GITHUB_OUTPUT"] = output.name
                 env["EXPECTED_HEAD_SHA"] = ""
                 env["EXPECTED_BASE_SHA"] = ""
+                env["GITHUB_REPOSITORY"] = "KARSIFT/fixture"
                 completed = subprocess.run(
                     ["bash", "-c", textwrap.dedent(gh_stub) + script],
                     cwd=ROOT,

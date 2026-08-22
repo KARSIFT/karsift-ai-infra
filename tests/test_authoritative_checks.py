@@ -12,6 +12,7 @@ from authoritative_checks import (  # noqa: E402
     flatten_check_runs,
     flatten_statuses,
     select_authoritative,
+    validate_pull_request_binding,
 )
 
 
@@ -21,6 +22,22 @@ IDENTITY = {
     "base_sha": "b" * 40,
     "pr_number": 42,
 }
+
+
+def pull_request(**overrides):
+    payload = {
+        "number": IDENTITY["pr_number"],
+        "head": {
+            "sha": IDENTITY["head_sha"],
+            "repo": {"full_name": IDENTITY["repository"]},
+        },
+        "base": {
+            "sha": IDENTITY["base_sha"],
+            "repo": {"full_name": IDENTITY["repository"]},
+        },
+    }
+    payload.update(overrides)
+    return payload
 
 
 def check(identifier, status, conclusion, second, name="ci / test", **overrides):
@@ -59,6 +76,34 @@ class AuthoritativeCheckTests(unittest.TestCase):
             [check(1, "completed", "failure", 1), check(2, "completed", "success", 2)]
         )
         self.assertEqual((result["failed"], result["successful"]), (0, 1))
+
+    def test_authenticated_pull_request_binds_full_identity(self):
+        validate_pull_request_binding(pull_request(), IDENTITY)
+        mismatches = (
+            {"number": 99},
+            {"head": {"sha": "c" * 40, "repo": {"full_name": IDENTITY["repository"]}}},
+            {"base": {"sha": "d" * 40, "repo": {"full_name": IDENTITY["repository"]}}},
+            {
+                "head": {
+                    "sha": IDENTITY["head_sha"],
+                    "repo": {"full_name": "foreign/repo"},
+                }
+            },
+            {
+                "base": {
+                    "sha": IDENTITY["base_sha"],
+                    "repo": {"full_name": "foreign/repo"},
+                }
+            },
+        )
+        for mismatch in mismatches:
+            with self.subTest(mismatch=mismatch):
+                with self.assertRaises(EvidenceError):
+                    validate_pull_request_binding(pull_request(**mismatch), IDENTITY)
+        for malformed in (None, {}, {"head": None, "base": None}):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(EvidenceError):
+                    validate_pull_request_binding(malformed, IDENTITY)
 
     def test_later_failure_or_pending_supersedes_pass(self):
         for terminal, conclusion, expected in (

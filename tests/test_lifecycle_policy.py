@@ -24,16 +24,31 @@ class LifecycleWorkflowPolicyTests(unittest.TestCase):
         for workflow in (self.adopt, self.merge, release):
             self.assertIn("authoritative-checks-runner.py", workflow)
             self.assertIn("--paginate --slurp", workflow)
+            self.assertIn("--pull-request-file", workflow)
 
     def test_marker_is_published_after_merge_and_shared_by_consumers(self):
         merge_command = self.merge.index('gh pr merge "$PR_NUMBER"')
         publish_command = self.merge.index("task-completion-runner.py publish")
         self.assertLess(merge_command, publish_command)
         self.assertIn("task-completion-runner.py validate-task", self.advance)
+        self.assertIn(
+            "if ! python3 karsift-ai-infra/config/task-completion-runner.py validate-task",
+            self.advance,
+        )
+        self.assertIn("safe no-op", self.advance)
+
+    def test_post_merge_task_marker_is_task_branch_scoped(self):
+        marker = "- name: Publish task completion marker and close linked task issue"
+        marker_block = self.merge.split(marker, 1)[1].split("- name:", 1)[0]
+        self.assertIn(
+            "if: startsWith(github.event.pull_request.head.ref, 'agent/')",
+            marker_block,
+        )
 
     def test_local_closing_binding_and_cross_repo_policy_both_remain(self):
         self.assertIn("Closes #${{ inputs.issue_number }}", self.implement)
         self.assertIn("Relates to OWNER/CALLER#N", self.prompt)
+        self.assertIn("reject_foreign_repository_closing_text", self.merge)
         for keyword in ("close", "fix", "resolve"):
             self.assertIn(keyword, self.prompt)
 

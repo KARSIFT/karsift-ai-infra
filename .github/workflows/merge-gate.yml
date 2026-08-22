@@ -135,6 +135,15 @@ jobs:
           # is never auto-mergeable, at any value of auto_merge_enabled.
           pr_json=$(gh pr view "$pr_number" --json body,author,headRefName,headRefOid,baseRefOid,isDraft)
           body=$(echo "$pr_json" | jq -r '.body')
+          export PR_BODY="$body"
+          PYTHONPATH=karsift-ai-infra/config python3 - <<'PYEOF'
+          import os
+          from cross_repo_reference import reject_foreign_repository_closing_text
+
+          reject_foreign_repository_closing_text(
+              os.environ["PR_BODY"], target_repository=os.environ["GITHUB_REPOSITORY"]
+          )
+          PYEOF
           pr_author=$(echo "$pr_json" | jq -r '.author.login')
           head_ref=$(echo "$pr_json" | jq -r '.headRefName')
           head_sha=$(echo "$pr_json" | jq -r '.headRefOid')
@@ -184,7 +193,9 @@ jobs:
           # count. The single-job "approved"-comment path mostly avoided
           # this by luck (fewer concurrent jobs, less chance of catching one
           # mid-flight), not by design - it has the identical bug below.
-          if ! gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
+          if ! gh api "repos/${{ github.repository }}/pulls/$pr_number" \
+               > /tmp/merge-pr.json ||
+             ! gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
                "repos/${{ github.repository }}/commits/$head_sha/check-runs?per_page=100" \
                > /tmp/merge-check-runs.json ||
              ! gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
@@ -197,6 +208,7 @@ jobs:
                --pr-number "$pr_number" \
                --base-sha "$base_sha" \
                --head-sha "$head_sha" \
+               --pull-request-file /tmp/merge-pr.json \
                --workflow-event "pull_request" \
                --output /tmp/merge-authoritative.json; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
@@ -544,6 +556,7 @@ jobs:
       # signal" step above (a PR body is attacker-controlled text, this job
       # has contents:write).
       - name: Publish task completion marker and close linked task issue
+        if: startsWith(github.event.pull_request.head.ref, 'agent/')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BODY: ${{ github.event.pull_request.body }}

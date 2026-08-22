@@ -181,6 +181,8 @@ jobs:
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/commits/$head_sha/status?per_page=100" \
             > /tmp/adopt-statuses.json
+          gh api "repos/${{ github.repository }}/pulls/${{ inputs.pr_number }}" \
+            > /tmp/adopt-pr.json
           # The pull_request closed event attaches this adoption workflow to
           # the plan head itself. Counting `adopt / adopt` would make the gate
           # reject its own in-progress run; after that first failure, reconcile
@@ -194,6 +196,7 @@ jobs:
             --pr-number "${{ inputs.pr_number }}" \
             --base-sha "$reviewed_base_sha" \
             --head-sha "$head_sha" \
+            --pull-request-file /tmp/adopt-pr.json \
             --workflow-event "pull_request" \
             --exclude-prefix "adopt /" \
             --output /tmp/adopt-authoritative.json
