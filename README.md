@@ -425,6 +425,14 @@ planning with the updated thread - no manual re-dispatch needed either way. The 
 does is skip adoption: however planning started, the resulting package is still only ever a draft
 until a human reviews and merges it.
 
+Issue-driven planning is serialized per source issue and reconciled twice: once before model work,
+then again as the clean publisher's first step, before either a needs-info comment or branch/PR
+publication. A unique `plan/` PR from the configured publisher identity (the App when configured,
+otherwise the documented workflow-token bot), bound to that exact issue, makes a retry a
+mutation-free no-op. Ambiguous linkage or a bare `karsift:planned` label fails closed. This prevents
+an already-running needs-info retry from spending another model run, changing a closed/planned
+source issue, or publishing a duplicate package.
+
 ## Release gate: checked automatic promotion per completed change package
 
 `merge-gate.yml` gates each *task*; `release.yml` gates the layer above it - promoting a project's
