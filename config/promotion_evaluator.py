@@ -28,4 +28,3 @@ def promotion_decision(
     if gates.get("failed", 0) > 0:
         return "blocked"
     return "merge"
-

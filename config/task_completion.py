@@ -99,4 +99,3 @@ def validate_comments(
     if not isinstance(created_at, str) or _iso(created_at) < _iso(marker["merged_at"]):
         raise CompletionError("completion marker predates merge proof")
     return marker
-
