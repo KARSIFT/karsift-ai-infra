@@ -23,8 +23,13 @@ implementation authority here, only the approved package is.
 
 ## Scope discipline
 
-- Implement only the named task. Record anything else you notice as a follow-up
-  note in the PR description - do not fix it inline.
+- Implement the whole named task as one largest safe coherent unit. Include code,
+  tests, docs, configuration, contracts, and rollback evidence needed to complete
+  its outcome, even when they span components or coordinated repository carriers.
+  A defect discovered while implementing may be fixed in this same task when it is
+  causally in scope and does not add unrelated authority or risk. Record genuinely
+  unrelated work or a real new authority/release/rollback boundary as a follow-up;
+  do not create extra work merely because the change is large.
 - Stay inside the package's declared scope and protected areas. If the task
   genuinely requires touching a protected area not already disclosed in the
   package's `impact-analysis.md`, stop and flag it rather than proceeding - that's
