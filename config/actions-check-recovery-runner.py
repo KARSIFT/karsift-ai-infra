@@ -326,6 +326,7 @@ def main() -> int:
                 ),
                 initial_workflow_runs,
                 head_sha=target_sha,
+                gate_summary=initial_gate_summary,
             )
             for plan in plans:
                 dispatch_workflow(
