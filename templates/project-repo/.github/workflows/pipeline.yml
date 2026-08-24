@@ -169,10 +169,6 @@ on:
         description: "verify-ready-for-review-reuse only: exact source reviewed base SHA"
         required: false
         type: string
-      verify_reuse_proof_head_sha:
-        description: "verify-ready-for-review-reuse only: exact evidence-carrier head SHA"
-        required: false
-        type: string
 
 # A synchronize event supersedes every older pipeline for the same PR. This
 # prevents duplicate reviewer/model runs and stale remediation/merge decisions,
@@ -479,7 +475,7 @@ jobs:
       source_pr_number: ${{ inputs.verify_reuse_source_pr_number }}
       expected_source_head_sha: ${{ inputs.verify_reuse_source_head_sha }}
       expected_source_base_sha: ${{ inputs.verify_reuse_source_base_sha }}
-      expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}
+      expected_proof_head_sha: ${{ github.sha }}
 
   # Read-only post-carrier verifier for operator-owned remediation proof.
   verify-remediate-operator-ownership:
