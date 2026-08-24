@@ -391,8 +391,12 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             self.pipeline.count(
                 "expected_head_sha: ${{ github.event.pull_request.head.sha }}"
             ),
-            5,
+            4,
         )
+        reuse_block = self.pipeline.split("  ready-for-review-reuse:", 1)[1].split(
+            "\n  ci:", 1
+        )[0]
+        self.assertIn("github.event.pull_request.head.sha || github.sha", reuse_block)
 
     def test_live_evidence_mutations_require_the_discovered_base_head_pair(self):
         task = SimpleNamespace(
