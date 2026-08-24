@@ -59,7 +59,13 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text(encoding="utf-8")
         ci_block = template.split("  ci:", 1)[1].split("\n  plan-review:", 1)[0]
+        reuse_block = template.split("  ready-for-review-reuse:", 1)[1].split(
+            "\n  ci:", 1
+        )[0]
         self.assertIn("inputs.action == 'recover-promotion-pr-checks'", ci_block)
+        self.assertIn("inputs.action == 'recover-promotion-pr-checks'", reuse_block)
+        self.assertIn("event_action:", reuse_block)
+        self.assertIn("'recovery'", reuse_block)
         self.assertNotIn("\n  recover-promotion-pr-checks:", template)
         dispatch_inputs = template.split("  workflow_dispatch:", 1)[1].split(
             "\n# A synchronize event", 1
