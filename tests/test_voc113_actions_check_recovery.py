@@ -18,6 +18,7 @@ from actions_check_recovery import (  # noqa: E402
     recovery_complete,
     required_contexts,
     select_gate_evidence,
+    suppress_active_or_successful_dispatches,
     validate_mode,
 )
 from verify_post_promotion_workflow import (  # noqa: E402
@@ -138,6 +139,36 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             }
             for workflow in ("repository-governance.yml", "deploy-staging.yml")
         ]
+        self.assertFalse(
+            recovery_complete(
+                mode="integration_push",
+                gate_summary=evaluate_summary([]),
+                workflow_runs=runs,
+                head_sha=HEAD_SHA,
+            )
+        )
+
+    def test_second_wake_waits_without_redispatching_active_exact_sha_runs(self):
+        plans = plan_recovery_dispatches(
+            mode="integration_push",
+            target_sha=HEAD_SHA,
+            branch_ref="develop",
+        )
+        runs = [
+            {
+                "head_sha": HEAD_SHA,
+                "path": f".github/workflows/{plan.workflow_file}",
+                "status": "in_progress",
+                "conclusion": None,
+            }
+            for plan in plans
+        ]
+        self.assertEqual(
+            suppress_active_or_successful_dispatches(
+                plans, runs, head_sha=HEAD_SHA
+            ),
+            [],
+        )
         self.assertFalse(
             recovery_complete(
                 mode="integration_push",
