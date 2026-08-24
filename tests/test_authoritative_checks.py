@@ -173,6 +173,7 @@ class AuthoritativeCheckTests(unittest.TestCase):
                 "id": 2,
                 "workflow": "github-actions",
                 "run_id": 0,
+                "conclusion": "success",
             }],
         )
 

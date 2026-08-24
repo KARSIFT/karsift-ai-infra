@@ -27,6 +27,7 @@ from actions_check_recovery import (
     suppress_active_or_successful_dispatches,
     validate_mode,
     validate_sha,
+    staging_deploy_required,
 )
 
 
@@ -94,6 +95,33 @@ def load_workflow_runs(token: str, repository: str, head_sha: str) -> list[dict]
     return runs
 
 
+def load_changed_paths(token: str, repository: str, head_sha: str) -> list[str]:
+    payload = json.loads(
+        gh(
+            [
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{repository}/commits/{head_sha}?per_page=100",
+            ],
+            token=token,
+            repository=repository,
+        )
+    )
+    if not isinstance(payload, list) or not payload:
+        raise RunnerError("invalid_commit_payload")
+    paths: list[str] = []
+    for page in payload:
+        if not isinstance(page, dict) or not isinstance(page.get("files"), list):
+            raise RunnerError("invalid_commit_payload")
+        for item in page["files"]:
+            path = item.get("filename") if isinstance(item, dict) else None
+            if not isinstance(path, str) or not path:
+                raise RunnerError("invalid_commit_path")
+            paths.append(path)
+    return paths
+
+
 def dispatch_workflow(
     token: str,
     repository: str,
@@ -133,12 +161,15 @@ def collect_missing(
     gate_summary: dict,
     workflow_runs: list[dict],
     head_sha: str,
+    integration_deploy_required: bool = True,
 ) -> list[str]:
     missing: list[str] = []
     contexts = required_contexts(mode)
     if contexts:
         missing.extend(missing_contexts(gate_summary, contexts))
-    push_workflows = required_push_workflows(mode)
+    push_workflows = required_push_workflows(
+        mode, integration_deploy_required=integration_deploy_required
+    )
     if push_workflows:
         missing.extend(
             missing_push_workflow_runs(
@@ -181,6 +212,11 @@ def main() -> int:
 
     dispatched: list[str] = []
     try:
+        integration_deploy_required = True
+        if mode == "integration_push":
+            integration_deploy_required = staging_deploy_required(
+                load_changed_paths(token, args.repository, target_sha)
+            )
         initial_gate_summary = load_gate_summary(token, args.repository, target_sha)
         initial_workflow_runs = load_workflow_runs(
             token, args.repository, target_sha
@@ -190,6 +226,7 @@ def main() -> int:
             gate_summary=initial_gate_summary,
             workflow_runs=initial_workflow_runs,
             head_sha=target_sha,
+            integration_deploy_required=integration_deploy_required,
         ):
             plans = suppress_active_or_successful_dispatches(
                 plan_recovery_dispatches(
@@ -197,6 +234,7 @@ def main() -> int:
                     target_sha=target_sha,
                     branch_ref=args.branch_ref,
                     pr_number=pr_number,
+                    integration_deploy_required=integration_deploy_required,
                 ),
                 initial_workflow_runs,
                 head_sha=target_sha,
@@ -223,6 +261,7 @@ def main() -> int:
             gate_summary=gate_summary,
             workflow_runs=workflow_runs,
             head_sha=target_sha,
+            integration_deploy_required=integration_deploy_required,
         ):
             print(
                 "actions-check-recovery: complete "
@@ -233,7 +272,13 @@ def main() -> int:
 
     gate_summary = load_gate_summary(token, args.repository, target_sha)
     workflow_runs = load_workflow_runs(token, args.repository, target_sha)
-    missing = collect_missing(mode, gate_summary, workflow_runs, target_sha)
+    missing = collect_missing(
+        mode,
+        gate_summary,
+        workflow_runs,
+        target_sha,
+        integration_deploy_required=integration_deploy_required,
+    )
     print(
         format_timeout_diagnostics(
             mode=mode,

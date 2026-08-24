@@ -106,23 +106,27 @@ def main() -> int:
             args.repository,
             f"repos/{args.repository}/commits/{head_sha}/check-runs?per_page=100",
         )
-        statuses = json.loads(
-            subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "--paginate",
-                    "--slurp",
-                    f"repos/{args.repository}/commits/{head_sha}/status?per_page=100",
-                    "--repo",
-                    args.repository,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                env={**os.environ, "GH_TOKEN": args.github_token, "GH_REPO": args.repository},
-            ).stdout
+        status_request = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{args.repository}/commits/{head_sha}/status?per_page=100",
+                "--repo",
+                args.repository,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "GH_TOKEN": args.github_token, "GH_REPO": args.repository},
         )
+        if status_request.returncode != 0:
+            raise VerificationError("github_metadata_read_failed")
+        try:
+            statuses = json.loads(status_request.stdout)
+        except json.JSONDecodeError as exc:
+            raise VerificationError("invalid_github_payload") from exc
         gate_summary = select_gate_evidence(
             [{"check_runs": check_runs, "total_count": len(check_runs)}],
             statuses,

@@ -216,6 +216,7 @@ def select_authoritative(
                 "id": newest["id"],
                 "workflow": newest["workflow"],
                 "run_id": newest["run_id"],
+                "conclusion": (newest.get("raw") or {}).get("conclusion"),
             }
         )
     return sorted(selected, key=lambda item: (item["name"], item["kind"]))
