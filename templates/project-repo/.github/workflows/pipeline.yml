@@ -186,9 +186,11 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
     outputs:
       target_sha: ${{ steps.target.outputs.target_sha }}
+      recovery_needed: ${{ steps.target.outputs.recovery_needed }}
     steps:
       - name: Resolve current integration head
         id: target
@@ -203,9 +205,40 @@ jobs:
           fi
           echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
 
+          changed_paths=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/commits/$target_sha?per_page=100" \
+            --jq '[.[] | .files[]?.filename]')
+          deploy_required=false
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              */*) ;;
+              *) deploy_required=true ;;
+            esac
+            case "$changed_path" in
+              apps/*|packages/*|infra/*|tests/staging-e2e/*|.github/workflows/deploy-staging.yml|scripts/foundation/voc111-deploy-staging-paths.test.mjs)
+                deploy_required=true
+                ;;
+            esac
+          done < <(jq -r '.[]' <<<"$changed_paths")
+
+          workflow_runs=$(gh api --paginate --slurp \
+            "repos/${{ github.repository }}/actions/runs?head_sha=$target_sha&per_page=100")
+          has_successful_run() {
+            local workflow_path=".github/workflows/$1"
+            jq -e --arg path "$workflow_path" \
+              'any(.[] | .workflow_runs[]?; .path == $path and .status == "completed" and .conclusion == "success")' \
+              >/dev/null <<<"$workflow_runs"
+          }
+          recovery_needed=false
+          if ! has_successful_run repository-governance.yml ||
+             { [ "$deploy_required" = true ] && ! has_successful_run deploy-staging.yml; }; then
+            recovery_needed=true
+          fi
+          echo "recovery_needed=$recovery_needed" >> "$GITHUB_OUTPUT"
+
   recover-integration-push:
     needs: resolve-integration-recovery-target
-    if: github.event_name == 'schedule' && needs.resolve-integration-recovery-target.outputs.target_sha != ''
+    if: github.event_name == 'schedule' && needs.resolve-integration-recovery-target.outputs.target_sha != '' && needs.resolve-integration-recovery-target.outputs.recovery_needed == 'true'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/recover-actions-checks.yml@main
     permissions:
       actions: write

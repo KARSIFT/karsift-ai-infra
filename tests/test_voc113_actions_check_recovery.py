@@ -19,6 +19,7 @@ from actions_check_recovery import (  # noqa: E402
     required_contexts,
     select_gate_evidence,
     suppress_active_or_successful_dispatches,
+    staging_deploy_required,
     validate_mode,
 )
 from verify_post_promotion_workflow import (  # noqa: E402
@@ -91,6 +92,10 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertIn("if: github.event_name == 'schedule'", resolver)
         self.assertIn("git/ref/heads/develop", resolver)
         self.assertIn('[[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]', resolver)
+        self.assertIn("recovery_needed:", resolver)
+        self.assertIn("has_successful_run", resolver)
+        self.assertIn("deploy_required", resolver)
+        self.assertIn("outputs.recovery_needed == 'true'", recovery)
         self.assertIn("recovery_mode: integration_push", recovery)
         self.assertIn(
             "target_sha: ${{ needs.resolve-integration-recovery-target.outputs.target_sha }}",
@@ -141,6 +146,42 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertNotIn(
             "recover-actions-checks.yml",
             [plan.workflow_file for plan in plans],
+        )
+
+    def test_docs_only_integration_recovery_does_not_force_staging_deploy(self):
+        self.assertFalse(staging_deploy_required(["docs/operations/example.md"]))
+        plans = plan_recovery_dispatches(
+            mode="integration_push",
+            target_sha=HEAD_SHA,
+            branch_ref="develop",
+            integration_deploy_required=False,
+        )
+        self.assertEqual(
+            [plan.workflow_file for plan in plans],
+            ["repository-governance.yml"],
+        )
+        self.assertTrue(
+            recovery_complete(
+                mode="integration_push",
+                gate_summary=evaluate_summary([]),
+                workflow_runs=[
+                    {
+                        "head_sha": HEAD_SHA,
+                        "path": ".github/workflows/repository-governance.yml",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ],
+                head_sha=HEAD_SHA,
+                integration_deploy_required=False,
+            )
+        )
+
+    def test_runtime_and_root_paths_still_require_staging_deploy(self):
+        self.assertTrue(staging_deploy_required(["apps/api/app/api.go"]))
+        self.assertTrue(staging_deploy_required(["package.json"]))
+        self.assertTrue(
+            staging_deploy_required([".github/workflows/deploy-staging.yml"])
         )
 
     def test_integration_recovery_is_noop_after_exact_sha_runs_succeed(self):
@@ -269,6 +310,33 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         missing = missing_contexts(summary, required_contexts("promotion_pr"))
         self.assertIn("validate", missing)
         self.assertIn("ci / ci", missing)
+
+    def test_neutral_required_check_runs_remain_missing(self):
+        summary = evaluate_summary(
+            [
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": index,
+                    "name": name,
+                    "status": "completed",
+                    "conclusion": "neutral",
+                    "app": {"slug": "github-actions"},
+                    "started_at": f"2026-08-24T00:00:0{index}Z",
+                }
+                for index, name in enumerate(required_contexts("promotion_pr"), 1)
+            ]
+        )
+        self.assertEqual(
+            missing_contexts(summary, required_contexts("promotion_pr")),
+            list(required_contexts("promotion_pr")),
+        )
+
+    def test_promotion_verifier_sanitizes_status_api_failures(self):
+        runner = (
+            ROOT / "config/verify-promotion-check-recovery-runner.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("if status_request.returncode != 0:", runner)
+        self.assertIn('VerificationError("github_metadata_read_failed")', runner)
 
     def test_wrong_sha_workflow_runs_remain_missing(self):
         runs = [

@@ -25,6 +25,19 @@ INTEGRATION_PUSH_WORKFLOWS: tuple[str, ...] = (
     "deploy-staging.yml",
 )
 
+STAGING_DEPLOY_PREFIXES: tuple[str, ...] = (
+    "apps/",
+    "packages/",
+    "infra/",
+    "tests/staging-e2e/",
+)
+STAGING_DEPLOY_EXACT_PATHS: frozenset[str] = frozenset(
+    {
+        ".github/workflows/deploy-staging.yml",
+        "scripts/foundation/voc111-deploy-staging-paths.test.mjs",
+    }
+)
+
 DEFAULT_TIMEOUT_SECONDS = 1800
 POLL_INTERVAL_SECONDS = 30
 
@@ -82,10 +95,30 @@ def required_contexts(mode: str) -> tuple[str, ...]:
     return tuple()
 
 
-def required_push_workflows(mode: str) -> tuple[str, ...]:
+def staging_deploy_required(changed_paths: Iterable[str]) -> bool:
+    """Mirror the caller's VOC-111 staging push-path allowlist."""
+
+    paths = list(changed_paths)
+    if any(not isinstance(path, str) or not path for path in paths):
+        raise RecoveryError("invalid_changed_path")
+    return any(
+        "/" not in path
+        or path in STAGING_DEPLOY_EXACT_PATHS
+        or path.startswith(STAGING_DEPLOY_PREFIXES)
+        for path in paths
+    )
+
+
+def required_push_workflows(
+    mode: str, *, integration_deploy_required: bool = True
+) -> tuple[str, ...]:
     validate_mode(mode)
     if mode == "integration_push":
-        return INTEGRATION_PUSH_WORKFLOWS
+        return (
+            INTEGRATION_PUSH_WORKFLOWS
+            if integration_deploy_required
+            else ("repository-governance.yml",)
+        )
     return tuple()
 
 
@@ -117,6 +150,7 @@ def missing_contexts(
         if item.get("state") == "SUCCESS"
         and item.get("kind") == "check_run"
         and item.get("workflow") == "github-actions"
+        and item.get("conclusion") == "success"
     }
     return [name for name in required if name not in present]
 
@@ -144,6 +178,7 @@ def plan_recovery_dispatches(
     target_sha: str,
     branch_ref: str,
     pr_number: int | None = None,
+    integration_deploy_required: bool = True,
 ) -> list[DispatchPlan]:
     validate_mode(mode)
     validate_sha(target_sha, "target_sha")
@@ -174,18 +209,22 @@ def plan_recovery_dispatches(
                 },
             ),
         ]
-    return [
+    plans = [
         DispatchPlan(
             workflow_file="repository-governance.yml",
             ref=branch_ref,
             inputs={"recovery_target_sha": target_sha},
         ),
-        DispatchPlan(
-            workflow_file="deploy-staging.yml",
-            ref=branch_ref,
-            inputs={"recovery_target_sha": target_sha},
-        ),
     ]
+    if integration_deploy_required:
+        plans.append(
+            DispatchPlan(
+                workflow_file="deploy-staging.yml",
+                ref=branch_ref,
+                inputs={"recovery_target_sha": target_sha},
+            )
+        )
+    return plans
 
 
 def suppress_active_or_successful_dispatches(
@@ -218,12 +257,15 @@ def recovery_complete(
     gate_summary: dict[str, Any],
     workflow_runs: Iterable[dict[str, Any]],
     head_sha: str,
+    integration_deploy_required: bool = True,
 ) -> bool:
     validate_mode(mode)
     contexts = required_contexts(mode)
     if contexts and missing_contexts(gate_summary, contexts):
         return False
-    push_workflows = required_push_workflows(mode)
+    push_workflows = required_push_workflows(
+        mode, integration_deploy_required=integration_deploy_required
+    )
     if push_workflows and missing_push_workflow_runs(
         workflow_runs, head_sha=head_sha, required_workflows=push_workflows
     ):
