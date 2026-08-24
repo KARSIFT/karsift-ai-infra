@@ -67,6 +67,11 @@ jobs:
         with:
           app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
           private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          permission-actions: write
+          permission-checks: read
+          permission-statuses: read
+          permission-contents: read
+          permission-pull-requests: read
 
       - name: Recover missing exact-SHA checks
         env:
