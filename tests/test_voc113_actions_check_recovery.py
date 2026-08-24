@@ -128,6 +128,25 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             )
         )
 
+    def test_integration_recovery_waits_for_runs_to_succeed(self):
+        runs = [
+            {
+                "head_sha": HEAD_SHA,
+                "path": f".github/workflows/{workflow}",
+                "status": "in_progress",
+                "conclusion": None,
+            }
+            for workflow in ("repository-governance.yml", "deploy-staging.yml")
+        ]
+        self.assertFalse(
+            recovery_complete(
+                mode="integration_push",
+                gate_summary=evaluate_summary([]),
+                workflow_runs=runs,
+                head_sha=HEAD_SHA,
+            )
+        )
+
     def test_missing_contexts_fail_closed(self):
         summary = evaluate_summary(
             [
@@ -209,6 +228,25 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertEqual(
             missing_contexts(summary, required_contexts("promotion_pr")),
             list(required_contexts("promotion_pr")),
+        )
+
+    def test_skipped_check_run_cannot_satisfy_required_context(self):
+        summary = evaluate_summary(
+            [
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": 1,
+                    "name": "governance-policy",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "app": {"slug": "github-actions"},
+                    "started_at": "2026-08-24T00:00:00Z",
+                }
+            ]
+        )
+        self.assertIn(
+            "governance-policy",
+            missing_contexts(summary, required_contexts("promotion_pr")),
         )
 
     def test_timeout_diagnostics_are_bounded_and_sanitized(self):
