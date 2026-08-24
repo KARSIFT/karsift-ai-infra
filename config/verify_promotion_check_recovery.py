@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Read-only proof that a promotion PR has genuine exact-head required checks."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+
+from actions_check_recovery import (
+    PROMOTION_REQUIRED_CONTEXTS,
+    missing_contexts,
+    select_gate_evidence,
+    validate_sha,
+)
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    ok: bool
+    reason: str = ""
+
+
+def verify_promotion_pr_identity(
+    pr: dict,
+    *,
+    repository: str,
+    pr_number: int,
+    expected_head_sha: str | None = None,
+) -> VerificationResult:
+    state = pr.get("state")
+    if state not in {"open", "closed"}:
+        return VerificationResult(False, "promotion_pr_not_terminal_or_open")
+    if state == "closed" and pr.get("merged") is not True:
+        return VerificationResult(False, "promotion_pr_closed_without_merge")
+    head = pr.get("head") or {}
+    base = pr.get("base") or {}
+    head_repo = (head.get("repo") or {}).get("full_name")
+    if head_repo != repository:
+        return VerificationResult(False, "wrong_head_repository")
+    if pr.get("number") != pr_number:
+        return VerificationResult(False, "wrong_pr_number")
+    head_sha = head.get("sha")
+    if not isinstance(head_sha, str) or not SHA_RE.fullmatch(head_sha):
+        return VerificationResult(False, "invalid_head_sha")
+    if expected_head_sha is not None:
+        try:
+            validate_sha(expected_head_sha, "expected_head_sha")
+        except ValueError:
+            return VerificationResult(False, "invalid_expected_head_sha")
+        if head_sha != expected_head_sha:
+            return VerificationResult(False, "head_sha_mismatch")
+    if base.get("ref") != "main" or head.get("ref") != "develop":
+        return VerificationResult(False, "not_promotion_pair")
+    return VerificationResult(True)
+
+
+def verify_required_checks(
+    gate_summary: dict,
+    *,
+    head_sha: str,
+) -> VerificationResult:
+    try:
+        validate_sha(head_sha, "head_sha")
+    except ValueError:
+        return VerificationResult(False, "invalid_head_sha")
+    missing = missing_contexts(gate_summary, PROMOTION_REQUIRED_CONTEXTS)
+    if missing:
+        return VerificationResult(False, f"missing_required_contexts:{','.join(missing)}")
+    if gate_summary.get("pending", 0) > 0:
+        return VerificationResult(False, "pending_gate_evidence")
+    if gate_summary.get("failed", 0) > 0:
+        return VerificationResult(False, "failed_gate_evidence")
+    if gate_summary.get("successful", 0) < len(PROMOTION_REQUIRED_CONTEXTS):
+        return VerificationResult(False, "insufficient_successful_contexts")
+    return VerificationResult(True)
+
+
+def verify_current_ref(current_ref: str, expected_head_sha: str) -> VerificationResult:
+    if not SHA_RE.fullmatch(current_ref):
+        return VerificationResult(False, "invalid_current_ref")
+    if current_ref != expected_head_sha:
+        return VerificationResult(False, "current_ref_mismatch")
+    return VerificationResult(True)

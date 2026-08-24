@@ -572,3 +572,25 @@ jobs:
             --pr-number "${{ github.event.pull_request.number }}" \
             --reviewed-head-sha "${{ needs.report-status.outputs.head_sha }}" \
             --reviewed-base-sha "${{ needs.report-status.outputs.base_sha }}"
+
+      - name: Recover missing integration push workflows for merged SHA
+        if: startsWith(github.event.pull_request.head.ref, 'agent/')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONPATH: karsift-ai-infra/config
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          merged_sha=$(gh pr view "$PR_NUMBER" --json mergeCommit -q .mergeCommit.oid)
+          base_ref=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
+          if ! [[ "$merged_sha" =~ ^[0-9a-f]{40}$ ]] || [ -z "$base_ref" ]; then
+            echo "Merged integration SHA or base ref is unavailable; refusing recovery." >&2
+            exit 1
+          fi
+          python3 karsift-ai-infra/config/actions-check-recovery-runner.py \
+            --repository "${{ github.repository }}" \
+            --mode integration_push \
+            --target-sha "$merged_sha" \
+            --branch-ref "$base_ref" \
+            --timeout-seconds 1800 \
+            --github-token "$GH_TOKEN"

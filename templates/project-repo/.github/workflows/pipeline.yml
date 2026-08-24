@@ -68,7 +68,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse, verify-remediate-operator-ownership]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse, recover-promotion-pr-checks, verify-promotion-check-recovery, verify-post-promotion-workflow, verify-remediate-operator-ownership]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -113,7 +113,7 @@ on:
         required: false
         type: string
       live_evidence_pr_number:
-        description: "reconcile-live-evidence only: optional target PR; required for declared dispatch"
+        description: "reconcile-live-evidence dispatch, verify-remediate-operator-ownership, and VOC-113 verify/recovery: target PR number"
         required: false
         type: string
       live_evidence_run_id:
@@ -254,7 +254,10 @@ jobs:
     needs: [ready-for-review-reuse]
     if: |
       always() &&
-      github.event_name == 'pull_request' && github.event.action != 'closed'
+      (
+        (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks')
+      )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
     with:
       # GitHub rulesets evaluate the newest required `ci / ci` context. Keep
@@ -490,6 +493,26 @@ jobs:
       task_id: ${{ inputs.task_id }}
       package_path: ${{ inputs.package_path }}
       integration_branch: "develop"
+
+  verify-promotion-check-recovery:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-promotion-check-recovery'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-promotion-check-recovery.yml@main
+    with:
+      promotion_pr_number: ${{ inputs.live_evidence_pr_number }}
+
+  verify-post-promotion-workflow:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-post-promotion-workflow'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-post-promotion-workflow.yml@main
+    with:
+      promotion_pr_number: ${{ inputs.live_evidence_pr_number }}
 
   # Separate operator path: hourly polling reads Actions metadata for waiting
   # contracts. Manual mode can validate one run immediately or dispatch only a

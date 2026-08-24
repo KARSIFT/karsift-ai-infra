@@ -326,6 +326,23 @@ jobs:
           echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(jq -r .headRefOid <<<"$live")" >> "$GITHUB_OUTPUT"
 
+      - name: Recover missing exact-head promotion checks
+        id: recovery
+        if: steps.promotion.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/actions-check-recovery-runner.py \
+            --repository "${{ github.repository }}" \
+            --mode promotion_pr \
+            --target-sha "${{ steps.promotion.outputs.head_sha }}" \
+            --branch-ref "${{ inputs.integration_branch }}" \
+            --pr-number "${{ steps.promotion.outputs.pr_number }}" \
+            --timeout-seconds 1800 \
+            --github-token "$GH_TOKEN"
+
       - name: Select newest authoritative promotion checks
         id: gates
         if: steps.promotion.outputs.needed == 'true'

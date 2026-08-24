@@ -505,6 +505,10 @@ planner-authored) aren't covered - the release gate only applies going forward.
 - Any deploy trigger after a `release.yml` promotion merges - `main` gets updated, nothing hosted
   does
 
+Close/reopen or draft/ready transitions on a promotion pull request do not
+recover missing required checks. VOC-113 recovery dispatches genuine allowlisted
+workflows for the exact SHA with a bounded 1800-second fail-closed wait.
+
 ## Layout
 
 ```

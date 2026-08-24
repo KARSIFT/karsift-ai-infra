@@ -1,0 +1,85 @@
+name: recover-actions-checks (reusable)
+
+# VOC-113 durable recovery for missing downstream Actions runs after App-driven
+# mutations. Dispatches genuine allowlisted workflows for the exact target SHA,
+# waits with a bounded timeout, and fails closed without fabricating statuses.
+
+on:
+  workflow_call:
+    inputs:
+      recovery_mode:
+        description: "integration_push or promotion_pr"
+        required: true
+        type: string
+      target_sha:
+        description: "Exact commit SHA that must receive validation"
+        required: true
+        type: string
+      branch_ref:
+        description: "Protected branch ref used for workflow_dispatch recovery"
+        required: true
+        type: string
+      pr_number:
+        description: "Promotion pull request number when recovery_mode is promotion_pr"
+        required: false
+        type: string
+        default: ""
+      timeout_seconds:
+        description: "Bounded wait for genuine checks to appear and succeed"
+        required: false
+        type: string
+        default: "1800"
+    secrets:
+      KARSIFT_BOT_APP_ID:
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  recover:
+    name: recover
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Checkout shared recovery policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Mint App installation token for recovery dispatch
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
+      - name: Recover missing exact-SHA checks
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          pr_number="${{ inputs.pr_number }}"
+          args=(
+            --repository "${{ github.repository }}"
+            --mode "${{ inputs.recovery_mode }}"
+            --target-sha "${{ inputs.target_sha }}"
+            --branch-ref "${{ inputs.branch_ref }}"
+            --timeout-seconds "${{ inputs.timeout_seconds }}"
+            --github-token "${{ steps.app-token.outputs.token }}"
+          )
+          if [ -n "$pr_number" ]; then
+            args+=(--pr-number "$pr_number")
+          fi
+          python3 karsift-ai-infra/config/actions-check-recovery-runner.py "${args[@]}"
