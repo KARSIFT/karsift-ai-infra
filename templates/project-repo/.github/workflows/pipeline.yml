@@ -68,7 +68,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse, recover-promotion-pr-checks, verify-promotion-check-recovery, verify-post-promotion-workflow, verify-remediate-operator-ownership]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, verify-auto-advance-live-evidence, verify-ready-for-review-reuse, recover-integration-push, recover-promotion-pr-checks, verify-promotion-check-recovery, verify-post-promotion-workflow, verify-remediate-operator-ownership]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -184,7 +184,7 @@ jobs:
   # no-op once every workflow selected by the integration tip's path policy has
   # completed successfully.
   resolve-integration-recovery-target:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.action == 'recover-integration-push')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -239,7 +239,11 @@ jobs:
 
   recover-integration-push:
     needs: resolve-integration-recovery-target
-    if: github.event_name == 'schedule' && needs.resolve-integration-recovery-target.outputs.target_sha != '' && needs.resolve-integration-recovery-target.outputs.recovery_needed == 'true'
+    if: >-
+      needs.resolve-integration-recovery-target.result == 'success' &&
+      needs.resolve-integration-recovery-target.outputs.target_sha != '' &&
+      ((github.event_name == 'schedule' && needs.resolve-integration-recovery-target.outputs.recovery_needed == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.action == 'recover-integration-push'))
     uses: KARSIFT/karsift-ai-infra/.github/workflows/recover-actions-checks.yml@main
     permissions:
       actions: write
