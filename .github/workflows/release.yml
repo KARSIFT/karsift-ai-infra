@@ -436,4 +436,22 @@ jobs:
             fi
             sleep 5
           done
+          # Promotion heads are long-lived integration branches, not disposable
+          # feature branches. Repositories commonly enable automatic deletion of
+          # merged PR heads; if their branch ruleset does not also block deletion,
+          # GitHub can remove the integration branch as part of this merge. Restore
+          # only a missing ref, and only to the exact head whose gates were checked.
+          # Never rewind a branch that advanced concurrently.
+          integration_ref="repos/${{ github.repository }}/git/ref/heads/${{ inputs.integration_branch }}"
+          if current_ref=$(gh api "$integration_ref" 2>/dev/null); then
+            current_sha=$(jq -r .object.sha <<<"$current_ref")
+            if [ "$current_sha" != "$CHECKED_HEAD_SHA" ]; then
+              echo "Integration branch advanced after promotion; preserving $current_sha."
+            fi
+          else
+            echo "Restoring auto-deleted integration branch at reviewed head $CHECKED_HEAD_SHA."
+            gh api --method POST "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/heads/${{ inputs.integration_branch }}" \
+              -f sha="$CHECKED_HEAD_SHA"
+          fi
           gh issue close "$RELEASE_ISSUE" --comment "Promoted via PR #$PR_NUMBER after newest exact-head checks passed."
