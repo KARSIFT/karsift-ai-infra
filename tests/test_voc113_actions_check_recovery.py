@@ -526,7 +526,8 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             "Recover missing integration push workflows for merged SHA", 1
         )[1]
         self.assertIn("steps.merge.outcome == 'success'", recovery_block)
-        self.assertIn("steps.app-token.outputs.token", recovery_block)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", recovery_block)
+        self.assertNotIn("steps.app-token.outputs.token", recovery_block)
 
     def test_promotion_recovery_requires_exact_open_pr_head(self):
         valid = {

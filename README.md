@@ -524,14 +524,14 @@ integration workflows have completed successfully.
 Immediate post-merge recovery is limited to governed `agent/` task branches;
 other integration advances rely on that hourly exact-tip wake.
 
-Recovery App tokens declare the complete metadata contract before the runner can
-plan a dispatch: Checks read for check runs, Commit statuses read for combined
-status, Actions write for workflow-run discovery plus the already-authorized
-dispatch, and Contents/Pull requests read or write according to the carrier's
-existing mutation role. A requested permission must also be granted to the App
-installation; otherwise token minting fails closed. Metadata request failures are
-reported only as `check_runs_read_failed`, `workflow_runs_read_failed`, or
-`commit_metadata_read_failed`, and recovery stops before dispatch planning.
+Recovery metadata reads and allowlisted dispatches use the workflow job's
+short-lived `GITHUB_TOKEN`, with explicit Checks read, Commit statuses read,
+Contents/Pull requests read, and Actions write permissions. App tokens remain
+limited to the release and merge mutations that require the App identity; recovery
+therefore does not depend on installation-level Actions permission. Metadata
+request failures are reported only as `check_runs_read_failed`,
+`workflow_runs_read_failed`, or `commit_metadata_read_failed`, and recovery stops
+before dispatch planning.
 
 ## Layout
 

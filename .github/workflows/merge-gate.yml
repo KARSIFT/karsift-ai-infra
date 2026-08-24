@@ -422,9 +422,12 @@ jobs:
       needs.report-status.outputs.verdict != 'PENDING'
     runs-on: ubuntu-latest
     permissions:
+      actions: write
+      checks: read
       pull-requests: write
       contents: write
       issues: write
+      statuses: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -458,9 +461,6 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
-          permission-actions: write
-          permission-checks: read
-          permission-statuses: read
 
       - name: Publish immutable reuse transition attestation
         if: inputs.reuse_outcome == 'reuse-evidence'
@@ -583,7 +583,10 @@ jobs:
       - name: Recover missing integration push workflows for merged SHA
         if: always() && steps.merge.outcome == 'success' && startsWith(github.event.pull_request.head.ref, 'agent/')
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Workflow dispatch belongs to the job-scoped Actions token. Keep the
+          # App token limited to PR/issue/content mutations so recovery does not
+          # depend on installation-level Actions permission.
+          GH_TOKEN: ${{ github.token }}
           PYTHONPATH: karsift-ai-infra/config
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |

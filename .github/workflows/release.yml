@@ -194,7 +194,7 @@ jobs:
       group: release-converge-${{ github.repository }}-${{ needs.identify.outputs.change_id }}
       cancel-in-progress: false
     permissions:
-      actions: read
+      actions: write
       checks: read
       contents: write
       issues: write
@@ -221,9 +221,6 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
-          permission-actions: write
-          permission-checks: read
-          permission-statuses: read
 
       - name: Validate the full roster from caller-merge markers
         id: roster
@@ -336,7 +333,9 @@ jobs:
         id: recovery
         if: steps.promotion.outputs.needed == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # Dispatch genuine workflows with the narrowly scoped job token;
+          # release mutations remain bound to the App identity below.
+          GH_TOKEN: ${{ github.token }}
           PYTHONPATH: karsift-ai-infra/config
         run: |
           set -euo pipefail
