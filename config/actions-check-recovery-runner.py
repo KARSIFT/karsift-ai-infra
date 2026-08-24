@@ -24,6 +24,7 @@ from actions_check_recovery import (
     required_contexts,
     required_push_workflows,
     select_gate_evidence,
+    suppress_active_or_successful_dispatches,
     validate_mode,
     validate_sha,
 )
@@ -180,18 +181,27 @@ def main() -> int:
 
     dispatched: list[str] = []
     try:
+        initial_gate_summary = load_gate_summary(token, args.repository, target_sha)
+        initial_workflow_runs = load_workflow_runs(
+            token, args.repository, target_sha
+        )
         if not recovery_complete(
             mode=mode,
-            gate_summary=load_gate_summary(token, args.repository, target_sha),
-            workflow_runs=load_workflow_runs(token, args.repository, target_sha),
+            gate_summary=initial_gate_summary,
+            workflow_runs=initial_workflow_runs,
             head_sha=target_sha,
         ):
-            for plan in plan_recovery_dispatches(
-                mode=mode,
-                target_sha=target_sha,
-                branch_ref=args.branch_ref,
-                pr_number=pr_number,
-            ):
+            plans = suppress_active_or_successful_dispatches(
+                plan_recovery_dispatches(
+                    mode=mode,
+                    target_sha=target_sha,
+                    branch_ref=args.branch_ref,
+                    pr_number=pr_number,
+                ),
+                initial_workflow_runs,
+                head_sha=target_sha,
+            )
+            for plan in plans:
                 dispatch_workflow(
                     token,
                     args.repository,

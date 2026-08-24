@@ -188,6 +188,30 @@ def plan_recovery_dispatches(
     ]
 
 
+def suppress_active_or_successful_dispatches(
+    plans: Sequence[DispatchPlan],
+    workflow_runs: Iterable[dict[str, Any]],
+    *,
+    head_sha: str,
+) -> list[DispatchPlan]:
+    """Avoid duplicate dispatches while an exact-SHA recovery is already active."""
+
+    validated_sha = validate_sha(head_sha, "head_sha")
+    already_running = {
+        run.get("path", "").replace(".github/workflows/", "")
+        for run in workflow_runs
+        if run.get("head_sha") == validated_sha
+        and (
+            run.get("status") in {"queued", "in_progress", "pending"}
+            or (
+                run.get("status") == "completed"
+                and run.get("conclusion") in {"success", "neutral"}
+            )
+        )
+    }
+    return [plan for plan in plans if plan.workflow_file not in already_running]
+
+
 def recovery_complete(
     *,
     mode: str,
