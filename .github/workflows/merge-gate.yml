@@ -574,7 +574,7 @@ jobs:
             --reviewed-base-sha "${{ needs.report-status.outputs.base_sha }}"
 
       - name: Recover missing integration push workflows for merged SHA
-        if: startsWith(github.event.pull_request.head.ref, 'agent/')
+        if: always() && startsWith(github.event.pull_request.head.ref, 'agent/')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PYTHONPATH: karsift-ai-infra/config

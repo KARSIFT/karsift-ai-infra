@@ -60,9 +60,8 @@ def verify_post_promotion_run(
     return VerificationResult(True)
 
 
-def verify_current_ref(current_ref: str, expected_head_sha: str) -> VerificationResult:
+def verify_carrier_ref(current_ref: str) -> VerificationResult:
+    """Validate the evidence-carrier SHA; it is distinct from the promotion merge SHA."""
     if not SHA_RE.fullmatch(current_ref):
         return VerificationResult(False, "invalid_current_ref")
-    if current_ref != expected_head_sha:
-        return VerificationResult(False, "current_ref_mismatch")
     return VerificationResult(True)

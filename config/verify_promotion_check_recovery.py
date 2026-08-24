@@ -77,9 +77,12 @@ def verify_required_checks(
     return VerificationResult(True)
 
 
-def verify_current_ref(current_ref: str, expected_head_sha: str) -> VerificationResult:
+def verify_carrier_ref(current_ref: str) -> VerificationResult:
+    """Validate this verifier's carrier SHA without conflating it with the promotion head.
+
+    The live-evidence observer binds the workflow run's head SHA to the carrier PR.
+    Promotion identity and exact-head check evidence are validated independently.
+    """
     if not SHA_RE.fullmatch(current_ref):
         return VerificationResult(False, "invalid_current_ref")
-    if current_ref != expected_head_sha:
-        return VerificationResult(False, "current_ref_mismatch")
     return VerificationResult(True)

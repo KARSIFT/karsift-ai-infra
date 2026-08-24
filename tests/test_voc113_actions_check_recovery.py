@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 import unittest
 from pathlib import Path
@@ -11,6 +10,7 @@ sys.path.insert(0, str(ROOT / "config"))
 
 from actions_check_recovery import (  # noqa: E402
     RecoveryError,
+    format_timeout_diagnostics,
     missing_contexts,
     missing_push_workflow_runs,
     plan_recovery_dispatches,
@@ -20,10 +20,12 @@ from actions_check_recovery import (  # noqa: E402
     validate_mode,
 )
 from verify_post_promotion_workflow import (  # noqa: E402
+    verify_carrier_ref as verify_post_promotion_carrier_ref,
     verify_post_promotion_run,
     verify_promotion_merged,
 )
 from verify_promotion_check_recovery import (  # noqa: E402
+    verify_carrier_ref as verify_promotion_carrier_ref,
     verify_promotion_pr_identity,
     verify_required_checks,
 )
@@ -81,6 +83,7 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             ],
         )
         self.assertEqual(plans[-1].inputs["action"], "recover-promotion-pr-checks")
+        self.assertEqual(plans[-1].inputs["promotion_pr_number"], "947")
 
     def test_integration_push_plan_dispatches_push_workflows(self):
         plans = plan_recovery_dispatches(
@@ -91,6 +94,30 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertEqual(
             [plan.workflow_file for plan in plans],
             ["repository-governance.yml", "deploy-staging.yml"],
+        )
+        self.assertEqual(plans[-1].inputs, {})
+        self.assertNotIn(
+            "recover-actions-checks.yml",
+            [plan.workflow_file for plan in plans],
+        )
+
+    def test_integration_recovery_is_noop_after_exact_sha_runs_succeed(self):
+        runs = [
+            {
+                "head_sha": HEAD_SHA,
+                "path": f".github/workflows/{workflow}",
+                "status": "completed",
+                "conclusion": "success",
+            }
+            for workflow in ("repository-governance.yml", "deploy-staging.yml")
+        ]
+        self.assertTrue(
+            recovery_complete(
+                mode="integration_push",
+                gate_summary=evaluate_summary([]),
+                workflow_runs=runs,
+                head_sha=HEAD_SHA,
+            )
         )
 
     def test_missing_contexts_fail_closed(self):
@@ -154,6 +181,60 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         with self.assertRaises(RecoveryError):
             validate_mode("fabricate")
 
+    def test_fabricated_commit_status_cannot_satisfy_required_context(self):
+        from authoritative_checks import evaluate, select_authoritative
+
+        statuses = [
+            {
+                "head_sha": HEAD_SHA,
+                "id": index,
+                "context": name,
+                "state": "success",
+                "creator": {"login": "fixture"},
+                "created_at": f"2026-08-24T00:00:{index:02d}Z",
+            }
+            for index, name in enumerate(required_contexts("promotion_pr"), start=1)
+        ]
+        summary = evaluate(
+            select_authoritative([], statuses, expected={"head_sha": HEAD_SHA})
+        )
+        self.assertEqual(
+            missing_contexts(summary, required_contexts("promotion_pr")),
+            list(required_contexts("promotion_pr")),
+        )
+
+    def test_timeout_diagnostics_are_bounded_and_sanitized(self):
+        diagnostic = format_timeout_diagnostics(
+            mode="promotion_pr",
+            target_sha=HEAD_SHA,
+            pr_number=947,
+            missing=("validate",),
+            gate_summary={"pending": 1, "failed": 0, "successful": 2},
+            timeout_seconds=1800,
+        )
+        self.assertIn("timeout_seconds: 1800", diagnostic)
+        self.assertIn("missing_checks: validate", diagnostic)
+        self.assertNotIn("token", diagnostic.lower())
+        self.assertNotIn("log", diagnostic.lower())
+
+    def test_release_duplicate_and_app_token_guards_remain_fail_closed(self):
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("duplicate release audits", release)
+        self.assertIn("duplicate promotion PRs", release)
+        self.assertIn("steps.app-token.outputs.token", release)
+        self.assertIn(
+            "GitHub App credentials are required for workflow-triggering merges",
+            merge_gate,
+        )
+        recovery_block = merge_gate.split(
+            "Recover missing integration push workflows for merged SHA", 1
+        )[1]
+        self.assertIn("if: always()", recovery_block)
+        self.assertIn("steps.app-token.outputs.token", recovery_block)
+
     def test_verify_promotion_pr_identity_rejects_non_promotion_pair(self):
         pr = {
             "number": 947,
@@ -209,6 +290,12 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         summary = evaluate_summary(checks)
         result = verify_required_checks(summary, head_sha=HEAD_SHA)
         self.assertTrue(result.ok)
+
+    def test_carrier_sha_is_valid_but_distinct_from_promotion_sha(self):
+        carrier_sha = "c" * 40
+        self.assertNotEqual(carrier_sha, HEAD_SHA)
+        self.assertTrue(verify_promotion_carrier_ref(carrier_sha).ok)
+        self.assertTrue(verify_post_promotion_carrier_ref(carrier_sha).ok)
 
     def test_verify_post_promotion_run_requires_single_success(self):
         runs = [
