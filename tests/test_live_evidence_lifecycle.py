@@ -413,7 +413,8 @@ class LiveEvidenceLifecycleTests(unittest.TestCase):
             "  ready-for-review-reuse:", 1
         )[1].split("\n  ci:", 1)[0]
         self.assertIn("github.event.pull_request.head.sha || github.sha", reuse_block)
-        self.assertIn("github.event.pull_request.base.sha || github.sha", reuse_block)
+        self.assertIn("github.event.pull_request.base.sha || ''", reuse_block)
+        self.assertNotIn("github.event.pull_request.base.sha || github.sha", reuse_block)
 
 
 if __name__ == "__main__":
