@@ -196,6 +196,15 @@ plus the full validation step to be skipped. Merge-gate also requires exactly on
 context in `SUCCESS`; prior evidence can never replace a skipped or ambiguous
 current compatibility context.
 
+Promotion recovery keeps GitHub's branch ruleset authoritative. A manual
+recovery run is not attached to the promotion PR by GitHub, so a successful
+exact-head run alone cannot satisfy the PR's required contexts. After the
+release selector validates the open PR identity and genuine successful runs
+from the three expected workflows, the release job publishes same-SHA success
+statuses for only `governance-policy`, `validate`, and `ci / ci`, linked to the
+release run. The caller grants `statuses: write` only to that release job; the
+GitHub App token remains limited to contents/issues/pull-request mutation.
+
 The unrestricted implementer also never shares a runner with the GitHub App
 token. It produces and uploads a Git bundle with persisted checkout credentials
 disabled; a separate clean `publish` job downloads that artifact, mints a

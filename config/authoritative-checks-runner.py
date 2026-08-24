@@ -75,12 +75,17 @@ def main() -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--pr-number", type=int, required=True)
     parser.add_argument("--exclude-prefix", action="append", default=[])
+    parser.add_argument("--exclude-status-context", action="append", default=[])
     parser.add_argument("--workflow-event", action="append", default=[])
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     check_runs = flatten_check_runs(_read(args.check_runs_file))
     statuses = flatten_statuses(_read(args.statuses_file))
+    excluded_status_contexts = set(args.exclude_status_context)
+    statuses = [
+        item for item in statuses if item.get("context") not in excluded_status_contexts
+    ]
     if args.workflow_event:
         check_runs = _workflow_runs(check_runs, args.repository, set(args.workflow_event))
     identity = {

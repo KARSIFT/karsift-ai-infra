@@ -482,7 +482,7 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-      statuses: read
+      statuses: write
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop

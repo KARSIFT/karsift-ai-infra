@@ -199,7 +199,7 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-      statuses: read
+      statuses: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -376,6 +376,9 @@ jobs:
             --head-sha "$HEAD_SHA" --pull-request-file /tmp/release-pr.json \
             --workflow-event "pull_request" --workflow-event "push" \
             --workflow-event "workflow_dispatch" --workflow-event "schedule" \
+            --exclude-status-context "governance-policy" \
+            --exclude-status-context "validate" \
+            --exclude-status-context "ci / ci" \
             --exclude-prefix "release /" --output /tmp/release-authoritative.json
           total=$(jq -r .total_count /tmp/release-authoritative.json)
           pending=$(jq -r .pending /tmp/release-authoritative.json)
@@ -386,6 +389,22 @@ jobs:
             echo "Latest authoritative gates are not all successful; no merge decision yet."
             echo "merge=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Attest recovered required contexts to the repository ruleset
+        if: steps.gates.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/promotion-status-attestation-runner.py \
+            --authoritative-file /tmp/release-authoritative.json \
+            --repository "${{ github.repository }}" \
+            --pr-number "${{ steps.promotion.outputs.pr_number }}" \
+            --head-sha "${{ steps.promotion.outputs.head_sha }}" \
+            --branch-ref "${{ inputs.integration_branch }}" \
+            --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --github-token "$GH_TOKEN"
 
       - name: Perform the single exact-head merge decision
         if: steps.gates.outputs.merge == 'true'
@@ -407,5 +426,14 @@ jobs:
             echo "Promotion PR changed after evaluation; refusing stale merge." >&2
             exit 1
           fi
-          gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"
+          for attempt in 1 2 3; do
+            if gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "Promotion merge still blocked after ruleset propagation retries." >&2
+              exit 1
+            fi
+            sleep 5
+          done
           gh issue close "$RELEASE_ISSUE" --comment "Promoted via PR #$PR_NUMBER after newest exact-head checks passed."

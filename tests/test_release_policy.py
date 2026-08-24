@@ -52,6 +52,17 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("statusCheckRollup", self.release)
         self.assertNotIn("gh pr checks", self.release)
 
+    def test_ruleset_attestation_is_narrow_and_precedes_merge(self):
+        self.assertIn("statuses: write", self.release)
+        self.assertIn("promotion-status-attestation-runner.py", self.release)
+        for context in ("governance-policy", "validate", "ci / ci"):
+            self.assertIn(f'--exclude-status-context "{context}"', self.release)
+        attest = self.release.index("Attest recovered required contexts")
+        merge = self.release.index("Perform the single exact-head merge decision")
+        self.assertLess(attest, merge)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", self.release[attest:merge])
+        self.assertIn("steps.app-token.outputs.token", self.release[merge:])
+
 
 if __name__ == "__main__":
     unittest.main()

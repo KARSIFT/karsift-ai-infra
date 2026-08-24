@@ -135,10 +135,18 @@ def select_gate_evidence(
     head_sha: str,
 ) -> dict[str, Any]:
     expected = {"head_sha": validate_sha(head_sha, "head_sha")}
+    # Promotion recovery publishes same-SHA status attestations only after the
+    # genuine required workflow checks pass. Those bridge GitHub's ruleset,
+    # but must never replace the underlying Actions evidence used here.
+    statuses = [
+        item
+        for item in flatten_statuses(statuses_payload)
+        if item.get("context") not in PROMOTION_REQUIRED_CONTEXTS
+    ]
     try:
         selected = select_authoritative(
             flatten_check_runs(check_runs_payload),
-            flatten_statuses(statuses_payload),
+            statuses,
             expected=expected,
         )
     except EvidenceError as exc:
