@@ -133,7 +133,7 @@ def missing_push_workflow_runs(
         for run in workflow_runs
         if run.get("head_sha") == validated_sha
         and run.get("status") == "completed"
-        and run.get("conclusion") in {"success", "neutral"}
+        and run.get("conclusion") == "success"
     }
     return [name for name in required_workflows if name not in bound]
 
@@ -178,12 +178,12 @@ def plan_recovery_dispatches(
         DispatchPlan(
             workflow_file="repository-governance.yml",
             ref=branch_ref,
-            inputs={},
+            inputs={"recovery_target_sha": target_sha},
         ),
         DispatchPlan(
             workflow_file="deploy-staging.yml",
             ref=branch_ref,
-            inputs={},
+            inputs={"recovery_target_sha": target_sha},
         ),
     ]
 

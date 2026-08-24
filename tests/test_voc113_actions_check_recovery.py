@@ -129,7 +129,9 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             [plan.workflow_file for plan in plans],
             ["repository-governance.yml", "deploy-staging.yml"],
         )
-        self.assertEqual(plans[-1].inputs, {})
+        self.assertTrue(
+            all(plan.inputs == {"recovery_target_sha": HEAD_SHA} for plan in plans)
+        )
         self.assertNotIn(
             "recover-actions-checks.yml",
             [plan.workflow_file for plan in plans],
@@ -161,6 +163,25 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
                 "path": f".github/workflows/{workflow}",
                 "status": "in_progress",
                 "conclusion": None,
+            }
+            for workflow in ("repository-governance.yml", "deploy-staging.yml")
+        ]
+        self.assertFalse(
+            recovery_complete(
+                mode="integration_push",
+                gate_summary=evaluate_summary([]),
+                workflow_runs=runs,
+                head_sha=HEAD_SHA,
+            )
+        )
+
+    def test_integration_recovery_rejects_neutral_runs(self):
+        runs = [
+            {
+                "head_sha": HEAD_SHA,
+                "path": f".github/workflows/{workflow}",
+                "status": "completed",
+                "conclusion": "neutral",
             }
             for workflow in ("repository-governance.yml", "deploy-staging.yml")
         ]
