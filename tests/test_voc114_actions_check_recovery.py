@@ -93,6 +93,97 @@ def promotion_pull_payload() -> str:
 
 
 class Voc114RecoveryMetadataTests(unittest.TestCase):
+    def test_promotion_dispatch_suppression_binds_required_context_not_workflow_path(self):
+        plans = runner.plan_recovery_dispatches(
+            mode="promotion_pr",
+            target_sha=HEAD_SHA,
+            branch_ref="develop",
+            pr_number=947,
+        )
+        gate_summary = {
+            "checks": [
+                {
+                    "name": "governance-policy",
+                    "state": "SUCCESS",
+                    "kind": "check_run",
+                    "workflow": "github-actions",
+                },
+                {
+                    "name": "validate",
+                    "state": "SUCCESS",
+                    "kind": "check_run",
+                    "workflow": "github-actions",
+                },
+                {
+                    "name": "ci / ci",
+                    "state": "FAILURE",
+                    "kind": "check_run",
+                    "workflow": "github-actions",
+                },
+            ]
+        }
+        current_reconcile_run = [
+            {
+                "id": 32713089936,
+                "head_sha": HEAD_SHA,
+                "path": ".github/workflows/pipeline.yml",
+                "status": "in_progress",
+                "conclusion": None,
+            }
+        ]
+        remaining = runner.suppress_active_or_successful_dispatches(
+            plans,
+            current_reconcile_run,
+            head_sha=HEAD_SHA,
+            gate_summary=gate_summary,
+        )
+        self.assertEqual(
+            [plan.workflow_file for plan in remaining],
+            ["pipeline.yml"],
+        )
+
+    def test_unrelated_failed_or_pending_checks_do_not_block_required_contexts(self):
+        required = [
+            {
+                "name": name,
+                "state": "SUCCESS",
+                "kind": "check_run",
+                "workflow": "github-actions",
+                "conclusion": "success",
+            }
+            for name in ("governance-policy", "validate", "ci / ci")
+        ]
+        gate_summary = {
+            "checks": [
+                *required,
+                {
+                    "name": "release / converge",
+                    "state": "PENDING",
+                    "kind": "check_run",
+                    "workflow": "github-actions",
+                    "conclusion": None,
+                },
+                {
+                    "name": "historical optional check",
+                    "state": "FAILURE",
+                    "kind": "check_run",
+                    "workflow": "github-actions",
+                    "conclusion": "failure",
+                },
+            ],
+            "pending": 1,
+            "failed": 1,
+            "successful": 3,
+        }
+        self.assertTrue(
+            runner.recovery_complete(
+                mode="promotion_pr",
+                gate_summary=gate_summary,
+                workflow_runs=[],
+                head_sha=HEAD_SHA,
+            )
+        )
+
     def test_gh_api_uses_environment_context_without_invalid_repo_flag(self):
         with mock.patch(
             "subprocess.run",
