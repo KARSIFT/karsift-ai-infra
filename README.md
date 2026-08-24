@@ -24,22 +24,14 @@ dependency, environment, post-merge evidence, or demonstrated reviewability
 boundary. Line, file, component, skill, repository, and layer counts are not split
 reasons by themselves.
 
-**This README deliberately never names which model or vendor currently fills any role** - that
-information changes often (this repo's git history includes moves across at least four different
-CLIs/vendors so far) and a hardcoded table here has gone stale every single time it changed. **The
-only file that names a specific model or vendor is `config/roles.yml`** - read that file directly for
-the current occupant of each role, why it's there, and the full history of what it replaced. Swapping
-any role to a different model/provider means editing that one file plus the relevant workflow's
-execution step (`implement.yml`'s "Run implementer" step, `review.yml`'s/`plan.yml`'s "Run
-independent verification"/"Run planner" step) - nothing else in this repo, and nothing in a calling
-project's own workflow, should need to change. `CHANGELOG.md` covers the parallel history of *which
-CLI/execution mechanism* each role's workflow step invokes, independent of which model sits behind it.
+`config/roles.yml` is the sole authoritative role-to-model mapping. Workflow comments may describe
+the current invocation contract, but they do not override that file. `CHANGELOG.md` and Git history
+preserve earlier provider and CLI transitions as history rather than active fallback behavior.
 
-**Reviewer and implementer are supposed to stay different vendors** - independent review that shares
-a vendor with the implementer isn't independent, it's self-review. Check `config/roles.yml`'s actual
-current values before assuming that holds at any given moment; it has been temporarily violated more
-than once when a vendor outage or quota exhaustion left no better option, always documented there
-when it happens.
+Independent verification requires a distinct reviewer role and exact-revision, read-only controls;
+it is not defined solely by whether role occupants use different API vendors. The current governed
+lineup deliberately uses separate model families for implementation and verification through Cursor.
+Check `config/roles.yml` rather than inferring active routing from historical discussion.
 
 ## What this is not
 

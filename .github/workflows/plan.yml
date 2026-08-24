@@ -8,11 +8,10 @@ name: plan (reusable)
 # resolved from THIS repo's own config/roles.yml, same convention as
 # implement.yml/review.yml.
 #
-# Current state (as of 2026-07-31): runs via the Cursor CLI, same
-# consolidation move as implement.yml/review.yml. Full execution-mechanism
-# history (Claude Code -> openai/codex-action -> OpenCode -> Claude Code ->
-# Cursor, and why each move happened) lives in CHANGELOG.md's "plan.yml"
-# section, not here.
+# Current state (VOC-117, 2026-08-24): runs through Cursor on Grok 4.6
+# Standard. The provider-qualified stored binding is validated and only its
+# `cursor/` prefix is removed; bracket parameters remain part of the quoted
+# `--model` value. Execution-mechanism history lives in CHANGELOG.md.
 #
 # The request can come from three places, mutually exclusive per run:
 #   - `request`: free text, written directly for this dispatch.
@@ -441,7 +440,9 @@ jobs:
       - name: Resolve planner model
         id: model
         run: |
+          set -euo pipefail
           MODEL=$(bash karsift-ai-infra/config/resolve-model.sh planner karsift-ai-infra/config/roles.yml)
+          python3 karsift-ai-infra/config/prepare_cursor_model.py "$MODEL" >/dev/null
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
@@ -605,8 +606,11 @@ jobs:
           prompt_file=/tmp/plan-prompt.txt
           max_attempts=2
           attempt=1
-          MODEL="${{ steps.model.outputs.model }}"
-          MODEL="${MODEL#cursor/}"
+          if ! MODEL=$(python3 karsift-ai-infra/config/prepare_cursor_model.py \
+            --require-api-key "${{ steps.model.outputs.model }}"); then
+            echo "::error::Planner Cursor model preparation failed closed." >&2
+            exit 1
+          fi
           run_planner() {
             agent -p --trust --force --model "$MODEL" --output-format json \
               < "$prompt_file" > /tmp/planner-raw.json 2> /tmp/cursor-stderr.log
