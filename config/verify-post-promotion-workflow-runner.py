@@ -11,7 +11,7 @@ import sys
 
 from verify_post_promotion_workflow import (
     VerificationResult,
-    verify_current_ref,
+    verify_carrier_ref,
     verify_post_promotion_run,
     verify_promotion_merged,
 )
@@ -99,7 +99,7 @@ def main() -> int:
         merge_sha = pr.get("merge_commit_sha")
         if not isinstance(merge_sha, str):
             raise VerificationError("missing_merge_commit")
-        require(verify_current_ref(args.current_ref, merge_sha))
+        require(verify_carrier_ref(args.current_ref))
         runs = gh_api_list(
             args.github_token,
             args.repository,

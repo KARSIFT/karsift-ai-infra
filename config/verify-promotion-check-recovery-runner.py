@@ -11,7 +11,7 @@ import sys
 
 from verify_promotion_check_recovery import (
     VerificationResult,
-    verify_current_ref,
+    verify_carrier_ref,
     verify_promotion_pr_identity,
     verify_required_checks,
 )
@@ -100,7 +100,7 @@ def main() -> int:
         head_sha = (pr.get("head") or {}).get("sha")
         if not isinstance(head_sha, str):
             raise VerificationError("invalid_head_sha")
-        require(verify_current_ref(args.current_ref, head_sha))
+        require(verify_carrier_ref(args.current_ref))
         check_runs = gh_api_paginate(
             args.github_token,
             args.repository,

@@ -132,6 +132,8 @@ def missing_contexts(
         item["name"]
         for item in gate_summary.get("checks", [])
         if item.get("state") in {"SUCCESS", "SKIPPED"}
+        and item.get("kind") == "check_run"
+        and item.get("workflow") == "github-actions"
     }
     return [name for name in required if name not in present]
 
@@ -185,7 +187,7 @@ def plan_recovery_dispatches(
                 ref=branch_ref,
                 inputs={
                     "action": "recover-promotion-pr-checks",
-                    "live_evidence_pr_number": pr_value,
+                    "promotion_pr_number": pr_value,
                 },
             ),
         ]
@@ -198,7 +200,7 @@ def plan_recovery_dispatches(
         DispatchPlan(
             workflow_file="deploy-staging.yml",
             ref=branch_ref,
-            inputs={"skip_ssh_deploy": True},
+            inputs={},
         ),
     ]
 
