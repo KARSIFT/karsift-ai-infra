@@ -12,6 +12,7 @@ class WorkConsolidationPolicyTests(unittest.TestCase):
         cls.plan_review = (ROOT / "prompts/plan-review.md").read_text()
         cls.implement = (ROOT / "prompts/implement.md").read_text()
         cls.review = (ROOT / "prompts/review.md").read_text()
+        cls.plan_workflow = (ROOT / ".github/workflows/plan.yml").read_text()
 
     def test_planner_uses_largest_safe_coherent_units(self):
         self.assertIn("largest safe, coherent change unit", self.plan)
@@ -47,6 +48,10 @@ class WorkConsolidationPolicyTests(unittest.TestCase):
         self.assertIn("whole named task", self.implement)
         self.assertIn("causally in scope", self.implement)
         self.assertIn("do not create extra work merely because", self.implement)
+
+    def test_planner_output_is_deterministically_validated(self):
+        self.assertIn("package-task-policy-runner.py validate", self.plan_workflow)
+        self.assertIn("minimum sufficient number of maximal tasks", self.plan_workflow)
 
 
 if __name__ == "__main__":
