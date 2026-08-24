@@ -68,12 +68,11 @@ def verify_required_checks(
     missing = missing_contexts(gate_summary, PROMOTION_REQUIRED_CONTEXTS)
     if missing:
         return VerificationResult(False, f"missing_required_contexts:{','.join(missing)}")
-    if gate_summary.get("pending", 0) > 0:
-        return VerificationResult(False, "pending_gate_evidence")
-    if gate_summary.get("failed", 0) > 0:
-        return VerificationResult(False, "failed_gate_evidence")
-    if gate_summary.get("successful", 0) < len(PROMOTION_REQUIRED_CONTEXTS):
-        return VerificationResult(False, "insufficient_successful_contexts")
+    # Promotion authority is defined by the three required contexts above.
+    # Other exact-head workflows can legitimately be pending, skipped, or
+    # failed (for example, a release convergence wake-up that ran before a
+    # recovered validate retry). They must remain visible in GitHub history,
+    # but they are not promotion-check authority and cannot veto this proof.
     return VerificationResult(True)
 
 

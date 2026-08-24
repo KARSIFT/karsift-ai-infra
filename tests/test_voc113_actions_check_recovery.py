@@ -616,6 +616,48 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         result = verify_required_checks(summary, head_sha=HEAD_SHA)
         self.assertTrue(result.ok)
 
+    def test_verify_required_checks_ignores_unrelated_non_green_contexts(self):
+        checks = []
+        for index, name in enumerate(required_contexts("promotion_pr"), start=1):
+            checks.append(
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": index,
+                    "name": name,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "app": {"slug": "github-actions"},
+                    "started_at": f"2026-08-24T00:00:{index:02d}Z",
+                }
+            )
+        checks.extend(
+            [
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": 10,
+                    "name": "release / converge",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "app": {"slug": "github-actions"},
+                    "started_at": "2026-08-24T00:01:00Z",
+                },
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": 11,
+                    "name": "optional observation",
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "app": {"slug": "github-actions"},
+                    "started_at": "2026-08-24T00:01:01Z",
+                },
+            ]
+        )
+        summary = evaluate_summary(checks)
+        self.assertEqual(summary["failed"], 1)
+        self.assertEqual(summary["pending"], 1)
+        result = verify_required_checks(summary, head_sha=HEAD_SHA)
+        self.assertTrue(result.ok)
+
     def test_carrier_sha_is_valid_but_distinct_from_promotion_sha(self):
         carrier_sha = "c" * 40
         self.assertNotEqual(carrier_sha, HEAD_SHA)
