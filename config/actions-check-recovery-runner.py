@@ -50,7 +50,9 @@ def gh(
     env = os.environ.copy()
     env["GH_TOKEN"] = token
     env["GH_REPO"] = repository
-    command = ["gh", *args, "--repo", repository]
+    # `gh api` has no `--repo` flag. Endpoints already contain the explicit
+    # repository and GH_REPO keeps the CLI context deterministic.
+    command = ["gh", *args]
     completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
     if completed.returncode != 0:
         raise RunnerError(read_failure)

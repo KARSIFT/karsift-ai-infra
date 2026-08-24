@@ -93,6 +93,25 @@ def promotion_pull_payload() -> str:
 
 
 class Voc114RecoveryMetadataTests(unittest.TestCase):
+    def test_gh_api_uses_environment_context_without_invalid_repo_flag(self):
+        with mock.patch(
+            "subprocess.run",
+            return_value=completed_process(stdout="{}"),
+        ) as run_mock:
+            self.assertEqual(
+                runner.gh_api(
+                    TOKEN,
+                    REPOSITORY,
+                    f"repos/{REPOSITORY}/pulls/947",
+                    read_failure=runner.COMMIT_METADATA_READ_FAILED,
+                ),
+                {},
+            )
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:2], ["gh", "api"])
+        self.assertNotIn("--repo", command)
+        self.assertEqual(run_mock.call_args.kwargs["env"]["GH_REPO"], REPOSITORY)
+
     def test_runner_declares_endpoint_classes(self):
         source = (CONFIG / "actions-check-recovery-runner.py").read_text(encoding="utf-8")
         self.assertIn('CHECK_RUNS_READ_FAILED = "check_runs_read_failed"', source)
