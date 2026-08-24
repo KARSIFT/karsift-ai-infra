@@ -14,9 +14,6 @@ from authoritative_checks import (
     select_authoritative,
 )
 
-RECOVERY_WORKFLOW_FILE = "recover-actions-checks.yml"
-RECOVERY_WORKFLOW_PATH = f".github/workflows/{RECOVERY_WORKFLOW_FILE}"
-
 PROMOTION_REQUIRED_CONTEXTS: tuple[str, ...] = (
     "governance-policy",
     "validate",
@@ -78,20 +75,6 @@ def validate_mode(mode: str) -> str:
     return mode
 
 
-def is_recovery_invocation(
-    workflow_path: str,
-    event_name: str,
-    recovery_mode: str | None = None,
-) -> bool:
-    if workflow_path != RECOVERY_WORKFLOW_PATH:
-        return False
-    if event_name == "workflow_call":
-        return True
-    if event_name == "workflow_dispatch" and recovery_mode:
-        return True
-    return False
-
-
 def required_contexts(mode: str) -> tuple[str, ...]:
     validate_mode(mode)
     if mode == "promotion_pr":
@@ -131,7 +114,7 @@ def missing_contexts(
     present = {
         item["name"]
         for item in gate_summary.get("checks", [])
-        if item.get("state") in {"SUCCESS", "SKIPPED"}
+        if item.get("state") == "SUCCESS"
         and item.get("kind") == "check_run"
         and item.get("workflow") == "github-actions"
     }
@@ -149,8 +132,8 @@ def missing_push_workflow_runs(
         run.get("path", "").replace(".github/workflows/", "")
         for run in workflow_runs
         if run.get("head_sha") == validated_sha
-        and run.get("status") in {"completed", "in_progress", "queued", "pending"}
-        and run.get("conclusion") in {None, "success", "neutral", "skipped"}
+        and run.get("status") == "completed"
+        and run.get("conclusion") in {"success", "neutral"}
     }
     return [name for name in required_workflows if name not in bound]
 
