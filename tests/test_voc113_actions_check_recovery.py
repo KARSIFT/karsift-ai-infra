@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 import unittest
 import re
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,17 @@ from verify_promotion_check_recovery import (  # noqa: E402
 HEAD_SHA = "a" * 40
 BASE_SHA = "b" * 40
 REPOSITORY = "KARSIFT/example"
+
+
+def load_hosted_runner(filename: str, module_name: str):
+    path = ROOT / "config" / filename
+    spec = spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"unable to load runner module from {path}")
+    module = module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def gate_payload(checks: list[dict]) -> dict:
@@ -346,6 +359,39 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("if status_request.returncode != 0:", runner)
         self.assertIn('VerificationError("github_metadata_read_failed")', runner)
+
+    def test_hosted_verifiers_use_environment_repo_context_for_gh_api(self):
+        runner_files = (
+            "verify-promotion-check-recovery-runner.py",
+            "verify-post-promotion-workflow-runner.py",
+        )
+        for filename in runner_files:
+            runner = load_hosted_runner(
+                filename,
+                filename.removesuffix(".py").replace("-", "_") + "_test",
+            )
+            with self.subTest(runner=runner.__name__), mock.patch(
+                "subprocess.run",
+                return_value=mock.Mock(returncode=0, stdout="{}"),
+            ) as run_mock:
+                self.assertEqual(
+                    runner.gh_api(
+                        "test-token",
+                        REPOSITORY,
+                        f"repos/{REPOSITORY}/pulls/947",
+                    ),
+                    {},
+                )
+                command = run_mock.call_args.args[0]
+                self.assertEqual(command[:2], ["gh", "api"])
+                self.assertNotIn("--repo", command)
+                self.assertEqual(
+                    run_mock.call_args.kwargs["env"]["GH_REPO"], REPOSITORY
+                )
+                self.assertNotIn(
+                    '"--repo"',
+                    (ROOT / "config" / filename).read_text(encoding="utf-8"),
+                )
 
     def test_wrong_sha_workflow_runs_remain_missing(self):
         runs = [

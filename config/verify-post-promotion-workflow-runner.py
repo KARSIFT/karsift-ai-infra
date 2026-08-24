@@ -31,7 +31,7 @@ def gh_api(token: str, repository: str, path: str) -> dict:
     env["GH_TOKEN"] = token
     env["GH_REPO"] = repository
     completed = subprocess.run(
-        ["gh", "api", path, "--repo", repository],
+        ["gh", "api", path],
         capture_output=True,
         text=True,
         check=False,
@@ -50,7 +50,7 @@ def gh_api_list(token: str, repository: str, path: str) -> list[dict]:
     env["GH_TOKEN"] = token
     env["GH_REPO"] = repository
     completed = subprocess.run(
-        ["gh", "api", "--paginate", "--slurp", path, "--repo", repository],
+        ["gh", "api", "--paginate", "--slurp", path],
         capture_output=True,
         text=True,
         check=False,
