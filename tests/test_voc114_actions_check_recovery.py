@@ -219,6 +219,12 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
         template = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text(encoding="utf-8")
+        template_merge_gate = template.split("\n  merge-gate:\n", 1)[1].split(
+            "\n  release:\n", 1
+        )[0]
+        template_release = template.split("\n  release:\n", 1)[1].split(
+            "\n  auto-advance:\n", 1
+        )[0]
         mutation_contract = {
             "permission-contents": "write",
             "permission-issues": "write",
@@ -248,10 +254,13 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
             self.assertIn("actions: write", workflow)
             self.assertIn("checks: read", workflow)
             self.assertIn("statuses: read", workflow)
-        for workflow in (release, template):
+        for workflow in (release, template_release):
             self.assertIn("actions: write", workflow)
             self.assertIn("checks: read", workflow)
             self.assertIn("statuses: write", workflow)
+        self.assertIn("statuses: read", template_merge_gate)
+        self.assertNotIn("statuses: write", template_merge_gate)
+        self.assertNotIn("statuses: read", template_release)
 
     def test_ruleset_statuses_never_replace_genuine_recovery_checks(self):
         summary = runner.select_gate_evidence(
