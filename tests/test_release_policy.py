@@ -63,6 +63,15 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("GH_TOKEN: ${{ github.token }}", self.release[attest:merge])
         self.assertIn("steps.app-token.outputs.token", self.release[merge:])
 
+    def test_promotion_preserves_long_lived_integration_branch(self):
+        merge = self.release.index("Perform the single exact-head merge decision")
+        close = self.release.index('gh issue close "$RELEASE_ISSUE"', merge)
+        preservation = self.release[merge:close]
+        self.assertIn("git/ref/heads/${{ inputs.integration_branch }}", preservation)
+        self.assertIn('ref="refs/heads/${{ inputs.integration_branch }}"', preservation)
+        self.assertIn('-f sha="$CHECKED_HEAD_SHA"', preservation)
+        self.assertIn("Never rewind a branch that advanced concurrently", preservation)
+
 
 if __name__ == "__main__":
     unittest.main()
