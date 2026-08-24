@@ -21,6 +21,7 @@ from actions_check_recovery import (  # noqa: E402
     suppress_active_or_successful_dispatches,
     staging_deploy_required,
     validate_mode,
+    validate_promotion_target,
 )
 from verify_post_promotion_workflow import (  # noqa: E402
     verify_carrier_ref as verify_post_promotion_carrier_ref,
@@ -459,8 +460,40 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         recovery_block = merge_gate.split(
             "Recover missing integration push workflows for merged SHA", 1
         )[1]
-        self.assertIn("if: always()", recovery_block)
+        self.assertIn("steps.merge.outcome == 'success'", recovery_block)
         self.assertIn("steps.app-token.outputs.token", recovery_block)
+
+    def test_promotion_recovery_requires_exact_open_pr_head(self):
+        valid = {
+            "number": 947,
+            "state": "open",
+            "head": {"sha": HEAD_SHA, "ref": "develop"},
+        }
+        validate_promotion_target(
+            valid,
+            target_sha=HEAD_SHA,
+            branch_ref="develop",
+            pr_number=947,
+        )
+        for changed in (
+            {**valid, "number": 948},
+            {**valid, "state": "closed"},
+            {**valid, "head": {"sha": "c" * 40, "ref": "develop"}},
+            {**valid, "head": {"sha": HEAD_SHA, "ref": "feature"}},
+        ):
+            with self.assertRaisesRegex(RecoveryError, "promotion_target_mismatch"):
+                validate_promotion_target(
+                    changed,
+                    target_sha=HEAD_SHA,
+                    branch_ref="develop",
+                    pr_number=947,
+                )
+
+        runner = (ROOT / "config/actions-check-recovery-runner.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("validate_promotion_target(", runner)
+        self.assertIn("pulls/{pr_number}", runner)
 
     def test_verify_promotion_pr_identity_rejects_non_promotion_pair(self):
         pr = {

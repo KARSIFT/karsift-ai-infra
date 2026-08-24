@@ -227,6 +227,27 @@ def plan_recovery_dispatches(
     return plans
 
 
+def validate_promotion_target(
+    pull_request: dict[str, Any],
+    *,
+    target_sha: str,
+    branch_ref: str,
+    pr_number: int,
+) -> None:
+    """Refuse recovery unless the requested PR owns the exact target branch tip."""
+    validated_sha = validate_sha(target_sha, "target_sha")
+    validated_pr = _positive_int(pr_number, "pr_number")
+    head = pull_request.get("head") if isinstance(pull_request, dict) else None
+    if (
+        not isinstance(head, dict)
+        or pull_request.get("number") != validated_pr
+        or str(pull_request.get("state") or "").lower() != "open"
+        or head.get("sha") != validated_sha
+        or head.get("ref") != branch_ref
+    ):
+        raise RecoveryError("promotion_target_mismatch")
+
+
 def suppress_active_or_successful_dispatches(
     plans: Sequence[DispatchPlan],
     workflow_runs: Iterable[dict[str, Any]],
