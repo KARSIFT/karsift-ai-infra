@@ -512,6 +512,8 @@ calls are serialized by mode and target SHA. The caller template's hourly
 schedule also resolves the current integration head and performs a secondary
 integration recovery wake; it is a mutation-free no-op after both required
 integration workflows have completed successfully.
+Immediate post-merge recovery is limited to governed `agent/` task branches;
+other integration advances rely on that hourly exact-tip wake.
 
 ## Layout
 

@@ -26,6 +26,7 @@ from actions_check_recovery import (
     select_gate_evidence,
     suppress_active_or_successful_dispatches,
     validate_mode,
+    validate_promotion_target,
     validate_sha,
     staging_deploy_required,
 )
@@ -216,6 +217,15 @@ def main() -> int:
         if mode == "integration_push":
             integration_deploy_required = staging_deploy_required(
                 load_changed_paths(token, args.repository, target_sha)
+            )
+        else:
+            if pr_number is None:
+                raise RecoveryError("missing_pr_number")
+            validate_promotion_target(
+                gh_api(token, args.repository, f"repos/{args.repository}/pulls/{pr_number}"),
+                target_sha=target_sha,
+                branch_ref=args.branch_ref,
+                pr_number=pr_number,
             )
         initial_gate_summary = load_gate_summary(token, args.repository, target_sha)
         initial_workflow_runs = load_workflow_runs(

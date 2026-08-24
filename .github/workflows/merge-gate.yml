@@ -527,6 +527,7 @@ jobs:
       # The App token is essential: a merge made with github.token does not
       # emit the pull_request:closed event that starts adopt.yml.
       - name: Merge automatically
+        id: merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REVIEWED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
@@ -574,7 +575,7 @@ jobs:
             --reviewed-base-sha "${{ needs.report-status.outputs.base_sha }}"
 
       - name: Recover missing integration push workflows for merged SHA
-        if: always() && startsWith(github.event.pull_request.head.ref, 'agent/')
+        if: always() && steps.merge.outcome == 'success' && startsWith(github.event.pull_request.head.ref, 'agent/')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PYTHONPATH: karsift-ai-infra/config
