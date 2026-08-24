@@ -29,7 +29,9 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         mint = self.merge_gate.index("- name: Mint App installation token")
         merge = self.merge_gate.index("- name: Merge automatically")
         self.assertLess(mint, merge)
-        merge_block = self.merge_gate[merge:]
+        merge_block = self.merge_gate[merge:].split(
+            "- name: Publish task completion marker", 1
+        )[0]
         self.assertIn("GH_TOKEN: ${{ steps.app-token.outputs.token }}", merge_block)
         self.assertNotIn("GH_TOKEN: ${{ github.token }}", merge_block)
 

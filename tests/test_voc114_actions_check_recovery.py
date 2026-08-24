@@ -210,65 +210,44 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
         self.assertIn('COMMIT_METADATA_READ_FAILED = "commit_metadata_read_failed"', source)
         self.assertNotIn('raise RunnerError("github_metadata_read_failed")', source)
 
-    def test_recovery_mint_paths_declare_read_contract(self):
+    def test_recovery_dispatch_uses_job_token_and_app_mints_stay_mutation_only(self):
         merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text(encoding="utf-8")
         release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         reusable = (ROOT / ".github/workflows/recover-actions-checks.yml").read_text(
             encoding="utf-8"
         )
+        template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text(encoding="utf-8")
         mutation_contract = {
-            "permission-actions": "write",
-            "permission-checks": "read",
-            "permission-statuses": "read",
             "permission-contents": "write",
+            "permission-issues": "write",
             "permission-pull-requests": "write",
         }
-        reusable_contract = {
-            "permission-actions": "write",
-            "permission-checks": "read",
-            "permission-statuses": "read",
-            "permission-contents": "read",
-            "permission-pull-requests": "read",
-        }
-        require_permissions(
-            mint_permissions(merge_gate, "Mint App installation token"),
-            mutation_contract,
+        merge_mint = mint_permissions(merge_gate, "Mint App installation token")
+        release_mint = mint_permissions(
+            release,
+            "Mint App installation token for release mutation",
         )
-        require_permissions(
-            mint_permissions(
-                release,
-                "Mint App installation token for release mutation",
-            ),
-            mutation_contract,
-        )
-        require_permissions(
-            mint_permissions(
-                reusable,
-                "Mint App installation token for recovery dispatch",
-            ),
-            reusable_contract,
-        )
+        self.assertEqual(merge_mint, mutation_contract)
+        self.assertEqual(release_mint, mutation_contract)
+        self.assertNotIn("Mint App installation token for recovery dispatch", reusable)
 
-    def test_missing_read_permissions_fail_the_mint_contract_model(self):
-        complete = {
-            "permission-actions": "write",
-            "permission-checks": "read",
-            "permission-statuses": "read",
-            "permission-contents": "read",
-            "permission-pull-requests": "read",
-        }
-        for missing_key in (
-            "permission-actions",
-            "permission-checks",
-            "permission-statuses",
-            "permission-contents",
-            "permission-pull-requests",
-        ):
-            incomplete = dict(complete)
-            del incomplete[missing_key]
-            with self.subTest(missing_key=missing_key):
-                with self.assertRaises(AssertionError):
-                    require_permissions(incomplete, complete)
+        merge_recovery = merge_gate.split(
+            "Recover missing integration push workflows for merged SHA", 1
+        )[1]
+        release_recovery = release.split(
+            "Recover missing exact-head promotion checks", 1
+        )[1].split("Select newest authoritative promotion checks", 1)[0]
+        reusable_recovery = reusable.split("Recover missing exact-SHA checks", 1)[1]
+        for block in (merge_recovery, release_recovery, reusable_recovery):
+            self.assertIn("GH_TOKEN: ${{ github.token }}", block)
+            self.assertNotIn("steps.app-token.outputs.token", block)
+
+        for workflow in (merge_gate, release, reusable, template):
+            self.assertIn("actions: write", workflow)
+            self.assertIn("checks: read", workflow)
+            self.assertIn("statuses: read", workflow)
 
     def test_duplicate_permission_inputs_fail_the_mint_contract_model(self):
         malformed = """- name: Recovery

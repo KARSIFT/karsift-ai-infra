@@ -31,9 +31,11 @@ on:
         default: "1800"
     secrets:
       KARSIFT_BOT_APP_ID:
-        required: true
+        # Backward-compatible only; recovery dispatch uses github.token.
+        required: false
       KARSIFT_BOT_PRIVATE_KEY:
-        required: true
+        # Backward-compatible only; recovery dispatch uses github.token.
+        required: false
 
 concurrency:
   group: actions-check-recovery-${{ inputs.recovery_mode }}-${{ inputs.target_sha }}
@@ -48,6 +50,7 @@ jobs:
       checks: read
       contents: read
       pull-requests: read
+      statuses: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -61,21 +64,9 @@ jobs:
           path: karsift-ai-infra
           persist-credentials: false
 
-      - name: Mint App installation token for recovery dispatch
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-          permission-actions: write
-          permission-checks: read
-          permission-statuses: read
-          permission-contents: read
-          permission-pull-requests: read
-
       - name: Recover missing exact-SHA checks
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           PYTHONPATH: karsift-ai-infra/config
         run: |
           set -euo pipefail
@@ -86,7 +77,7 @@ jobs:
             --target-sha "${{ inputs.target_sha }}"
             --branch-ref "${{ inputs.branch_ref }}"
             --timeout-seconds "${{ inputs.timeout_seconds }}"
-            --github-token "${{ steps.app-token.outputs.token }}"
+            --github-token "${{ github.token }}"
           )
           if [ -n "$pr_number" ]; then
             args+=(--pr-number "$pr_number")
