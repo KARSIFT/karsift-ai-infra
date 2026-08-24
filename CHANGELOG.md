@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Routed all six governed roles through Cursor under VOC-117: Composer 2.5
+  for implementation and its single escalation attempt, Grok 4.6 Standard
+  for planning and implementation review, and Grok 4.6 Standard with explicit
+  high effort for plan review. Added fail-closed validation that preserves
+  quoted bracket parameters after removing only the `cursor/` prefix; missing
+  Cursor credentials, malformed bindings, and unsupported prefixes cannot
+  silently select another provider or model.
+
 - Upgraded every reusable and self-CI checkout to the verified immutable
   `actions/checkout` v7.0.1 commit and its Node.js 24 runtime. Every checkout
   now disables persisted credentials; adoption configures its scoped write

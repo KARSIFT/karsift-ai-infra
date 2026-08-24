@@ -34,10 +34,10 @@ name: plan-review (reusable)
 # substitute for; a merged plan PR is still just a draft in the tree until a
 # human (or founder-delegate) flips its change.yaml to adopted.
 #
-# See review.yml's own header comment for the Cursor CLI execution-mechanism
-# details (--mode plan, --trust, stdin prompt, --output-format json) - this
-# file's execution step is copied from there verbatim; if that mechanism
-# changes, update both files.
+# Current state (VOC-117, 2026-08-24): the plan reviewer runs through Cursor
+# on Grok 4.6 Standard with explicit high effort. See review.yml for the
+# shared read-only CLI mechanism; parameterized model preparation must stay
+# aligned in both files.
 
 on:
   workflow_call:
@@ -158,6 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           MODEL=$(bash karsift-ai-infra/config/resolve-model.sh plan_reviewer karsift-ai-infra/config/roles.yml)
+          python3 karsift-ai-infra/config/prepare_cursor_model.py "$MODEL" >/dev/null
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
@@ -224,8 +225,11 @@ jobs:
         run: |
           set -uo pipefail
           source karsift-ai-infra/config/retry-helpers.sh
-          MODEL="${{ steps.model.outputs.model }}"
-          MODEL="${MODEL#cursor/}"
+          if ! MODEL=$(python3 karsift-ai-infra/config/prepare_cursor_model.py \
+            --require-api-key "${{ steps.model.outputs.model }}"); then
+            echo "::error::Plan-review Cursor model preparation failed closed." >&2
+            exit 1
+          fi
           run_review() {
             if agent -p --trust --mode plan \
               --model "$MODEL" \

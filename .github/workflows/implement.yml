@@ -8,22 +8,12 @@ name: implement (reusable)
 # commit/PR machinery around it is provider-agnostic by design and needs no
 # changes in review.yml/merge-gate.yml either way.
 #
-# Current state (as of 2026-07-31): runs via a raw `cursor-agent` CLI
-# invocation ("Run implementer (cursor-agent)" below). Both the base
-# implementer and the escalation tier (config/roles.yml's `implementer` vs
-# `implementer_escalation`) go through that same step - only the model
-# differs, not the CLI. Earlier openai/codex-action and OpenCode steps are
-# disabled (`if: false`), not deleted, kept as a one-line revert path if
-# either is ever needed again. Every claim about the Cursor CLI's real
-# flags/behavior here was verified against the actually-installed CLI in a
-# disposable sandbox, not assumed from fetched docs - see review.yml's header
-# comment for the specific checks (workspace-trust blocking, --mode plan's
-# real read-only guarantee, stdin prompt input avoiding the execve()
-# argument-length limit, the single-JSON-object --output-format json shape).
-# The one difference here: the implementer role needs real write access, so
-# `--force`/`--yolo` is used instead of `--mode plan` - equivalent to
-# opencode's `--auto` / claude's unrestricted `--allowedTools` for this same
-# role.
+# Current state (VOC-117, 2026-08-24): both implementation attempts run
+# through Cursor on Composer 2.5. The identical escalation binding is
+# intentional; the existing one-retry limit is unchanged. Cursor bindings are
+# validated and only their `cursor/` prefix is removed before the quoted
+# `--model` value is passed to the CLI. Earlier execution paths remain
+# disabled historical recovery code, not active routing or fallback behavior.
 #
 # Full execution-mechanism history (every prior CLI/vendor this role ran
 # through and why each move happened) lives in CHANGELOG.md's "implement.yml"
@@ -359,6 +349,21 @@ jobs:
           fi
           echo "Resolving implementer as: role=$role (attempt=${{ inputs.attempt }})"
           MODEL=$(bash karsift-ai-infra/config/resolve-model.sh "$role" karsift-ai-infra/config/roles.yml)
+          case "$MODEL" in
+            cursor/*)
+              python3 karsift-ai-infra/config/prepare_cursor_model.py "$MODEL" >/dev/null
+              ;;
+            opencode-go/*)
+              if [ "$role" != "implementer" ]; then
+                echo "::error::OpenCode is not a supported escalation route." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Unsupported implementer provider prefix; refusing fallback." >&2
+              exit 1
+              ;;
+          esac
           echo "model=$MODEL" >> "$GITHUB_OUTPUT"
           echo "role=$role" >> "$GITHUB_OUTPUT"
 
@@ -743,8 +748,11 @@ jobs:
         run: |
           set -uo pipefail
           source karsift-ai-infra/config/retry-helpers.sh
-          MODEL="${{ steps.model.outputs.model }}"
-          MODEL="${MODEL#cursor/}"
+          if ! MODEL=$(python3 karsift-ai-infra/config/prepare_cursor_model.py \
+            --require-api-key "${{ steps.model.outputs.model }}"); then
+            echo "::error::Implementer Cursor model preparation failed closed." >&2
+            exit 1
+          fi
           run_implementer() {
             agent -p --trust --force --model "$MODEL" --output-format json \
               < /tmp/implement-prompt.txt \
@@ -887,8 +895,11 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -uo pipefail
-          MODEL="${{ steps.model.outputs.model }}"
-          MODEL="${MODEL#cursor/}"
+          if ! MODEL=$(python3 karsift-ai-infra/config/prepare_cursor_model.py \
+            --require-api-key "${{ steps.model.outputs.model }}"); then
+            echo "::error::Self-correction Cursor model preparation failed closed." >&2
+            exit 1
+          fi
           {
             echo "Your previous changes on this branch failed this project's own CI checks - the same format/lint/typecheck/test/build commands GitHub Actions will run on this exact diff. Fix every failure below without changing scope beyond what's needed to pass. Do not revert or discard unrelated work already committed on this branch."
             echo
