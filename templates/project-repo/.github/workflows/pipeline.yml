@@ -325,7 +325,10 @@ jobs:
     with:
       pr_number: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.promotion_pr_number }}
       expected_head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      expected_base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+      # Recovery always takes the full CI path, so base-SHA reuse metadata is
+      # intentionally absent instead of falsely identifying the integration tip
+      # as both the promotion PR head and base.
+      expected_base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
       event_action: ${{ github.event_name == 'pull_request' && github.event.action || 'recovery' }}
       current_run_id: ${{ github.run_id }}
 
