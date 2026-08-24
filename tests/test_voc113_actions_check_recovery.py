@@ -117,6 +117,10 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertIn("recovery_needed:", resolver)
         self.assertIn("has_successful_run", resolver)
         self.assertIn("deploy_required", resolver)
+        changed_paths_query = resolver.split("changed_paths=", 1)[1].split(
+            "deploy_required", 1
+        )[0]
+        self.assertNotIn("--jq", changed_paths_query)
         self.assertIn("outputs.recovery_needed == 'true'", recovery)
         self.assertIn("inputs.action == 'recover-integration-push'", recovery)
         self.assertIn("recovery_mode: integration_push", recovery)

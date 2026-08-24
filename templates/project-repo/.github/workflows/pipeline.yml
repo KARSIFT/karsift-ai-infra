@@ -207,8 +207,8 @@ jobs:
           echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
 
           changed_paths=$(gh api --paginate --slurp \
-            "repos/${{ github.repository }}/commits/$target_sha?per_page=100" \
-            --jq '[.[] | .files[]?.filename]')
+            "repos/${{ github.repository }}/commits/$target_sha?per_page=100" |
+            jq '[.[] | .files[]?.filename]')
           deploy_required=false
           while IFS= read -r changed_path; do
             case "$changed_path" in
