@@ -1,0 +1,43 @@
+name: verify-promotion-check-recovery (reusable)
+
+# Read-only post-carrier verifier for VOC-113 promotion PR exact-head proof.
+# Validates allowlisted Actions/PR metadata only; never merges or fabricates statuses.
+
+on:
+  workflow_call:
+    inputs:
+      promotion_pr_number:
+        description: "Promotion pull request to verify"
+        required: true
+        type: string
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Checkout shared verifier policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Verify promotion exact-head required checks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PYTHONPATH: karsift-ai-infra/config
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/verify-promotion-check-recovery-runner.py \
+            --promotion-pr-number "${{ inputs.promotion_pr_number }}" \
+            --current-ref "${{ github.sha }}"
