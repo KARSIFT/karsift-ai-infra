@@ -59,15 +59,22 @@ correctness of code that does not exist yet. Judge:
    (e.g. one field claims something is resolved while another still describes it
    as outstanding) is not adoption-ready even if each file is individually
    well-written.
-5. **Task breakdown soundness**: if `tasks.md` declares multiple tasks, check that
-   task dependencies are declared in the correct direction (a task that must run
-   *before* another is the earlier one's dependency, not the reverse) and that
-   the acceptance criteria assigned to each task are actually achievable within
-   that task's stated scope. Also check `.karsift/tasks.json` (if present) agrees
-   with `tasks.md`'s prose - both files must state the same dependency order;
-   drift between the human-readable and machine-readable copies is a real defect,
-   not a wording nitpick, because automation reads the JSON file and will
-   mis-sequence work if it disagrees with the prose.
+5. **Task breakdown soundness and consolidation**: verify that the package is the
+   largest safe coherent unit for the requested user or business outcome and uses
+   the minimum sufficient number of maximal tasks. One end-to-end implementation
+   task and pull request is the default whenever technically possible, including
+   work spanning backend, frontend, contracts, tests, docs, configuration, or
+   several related skills. Line, file, component, skill, repository, or layer
+   counts and implementation convenience are not split reasons. If `tasks.md`
+   declares multiple tasks, require every task after the first to name a concrete
+   authority/owner, independent release or rollback, hard dependency, environment,
+   post-merge evidence, or demonstrated reviewability boundary and explain why a
+   combined task would be unsafe. More than three tasks is exceptional and needs
+   explicit justification for every boundary. Coordinated carriers in multiple
+   repositories may remain one task. Also check that dependencies point in the
+   correct direction, each task's acceptance criteria are achievable within its
+   scope, and `.karsift/tasks.json` (if present) agrees with `tasks.md`; automation
+   reads the JSON, so dependency or task-list drift is a real defect.
 6. **Protected areas and impact analysis**: does `impact-analysis.md` correctly
    name every protected path, migration, secret, or production-infrastructure
    surface the specification actually touches? An impact analysis that misses a
