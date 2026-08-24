@@ -180,8 +180,9 @@ concurrency:
 jobs:
   # Hourly secondary wake for an integration merge whose original post-merge
   # recovery attempt timed out or was interrupted. The reusable recovery is
-  # exact-SHA bound, serialized, and a mutation-free no-op once both genuine
-  # integration workflows have completed successfully.
+  # exact-SHA bound and serialized. Its read-only preflight is a mutation-free
+  # no-op once every workflow selected by the integration tip's path policy has
+  # completed successfully.
   resolve-integration-recovery-target:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
