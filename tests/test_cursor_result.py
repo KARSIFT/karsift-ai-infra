@@ -84,7 +84,39 @@ class CursorResultTests(unittest.TestCase):
                 ).encode()
             )
         self.assertIn("subtype=rate_limit", str(raised.exception))
+        self.assertIn("reason=unspecified", str(raised.exception))
         self.assertNotIn(secret_like, str(raised.exception))
+
+    def test_error_diagnostic_classifies_only_allowlisted_reason_codes(self):
+        fixtures = (
+            ("You've hit your usage limit for this billing cycle", "usage_limit"),
+            ("HTTP 429: too many requests", "rate_limit"),
+            ("Authentication failed: invalid API key", "authentication"),
+            ("Requested model is not available", "model_unavailable_or_invalid"),
+            ("Invalid parameter override", "model_parameter_invalid"),
+        )
+        for provider_text, expected in fixtures:
+            with self.subTest(expected=expected), self.assertRaises(
+                cursor_result.CursorResponseError
+            ) as raised:
+                cursor_result.extract_result(
+                    json.dumps(
+                        {
+                            "is_error": True,
+                            "subtype": "error_during_execution",
+                            "result": provider_text,
+                        }
+                    ).encode()
+                )
+            diagnostic = str(raised.exception)
+            self.assertIn(f"reason={expected}", diagnostic)
+            self.assertNotIn(provider_text, diagnostic)
+
+    def test_review_failure_paths_emit_sanitized_diagnostics_only(self):
+        for workflow in self.review_workflows:
+            with self.subTest(workflow=workflow.splitlines()[0]):
+                self.assertIn("raw provider output is withheld", workflow)
+                self.assertNotIn("cat /tmp/cursor-stderr.log >&2", workflow)
 
     def test_invalid_or_oversized_responses_fail_closed(self):
         fixtures = (
@@ -126,7 +158,7 @@ class CursorResultTests(unittest.TestCase):
                     workflow.index("config/extract-cursor-result.py"),
                     workflow.index("retry_if_transient"),
                 )
-        self.assertEqual(self.review_workflows[0].count("--allow-waiting"), 2)
+        self.assertEqual(self.review_workflows[0].count("--allow-waiting"), 3)
         self.assertNotIn("--allow-waiting", self.review_workflows[1])
 
     def test_tempfail_result_validation_is_always_bounded_retry_eligible(self):

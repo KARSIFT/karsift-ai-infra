@@ -406,7 +406,9 @@ jobs:
           retry_if_transient /tmp/cursor-stderr.log /tmp/verdict-response.json -- run_review
           exit_code=$?
           if [ "$exit_code" -ne 0 ]; then
-            cat /tmp/cursor-stderr.log >&2
+            python3 karsift-ai-infra/config/extract-cursor-result.py \
+              /tmp/verdict-response.json /tmp/verdict.md --allow-waiting || true
+            echo "::error::Reviewer Cursor invocation failed; raw provider output is withheld." >&2
           fi
           exit "$exit_code"
 

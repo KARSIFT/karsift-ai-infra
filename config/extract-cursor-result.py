@@ -22,6 +22,32 @@ class CursorResponseError(ValueError):
     """The CLI response cannot be used as reviewer output."""
 
 
+def classify_error_reason(payload: dict[str, object]) -> str:
+    """Return a bounded reason code without exposing provider response text."""
+
+    fields = " ".join(
+        value.lower()
+        for key in ("result", "error", "message")
+        if isinstance((value := payload.get(key)), str)
+    )
+    if any(marker in fields for marker in ("usage limit", "quota", "spend limit")):
+        return "usage_limit"
+    if any(marker in fields for marker in ("rate limit", "too many requests", "http 429")):
+        return "rate_limit"
+    if any(marker in fields for marker in ("authentication", "unauthorized", "invalid api key")):
+        return "authentication"
+    if "model" in fields and any(
+        marker in fields
+        for marker in ("not available", "not found", "unknown", "unsupported", "invalid")
+    ):
+        return "model_unavailable_or_invalid"
+    if "parameter" in fields and any(
+        marker in fields for marker in ("unsupported", "unknown", "invalid")
+    ):
+        return "model_parameter_invalid"
+    return "unspecified"
+
+
 def extract_result(raw: bytes, *, allow_waiting: bool = False) -> str:
     if not raw:
         raise CursorResponseError("Cursor response is empty.")
@@ -39,8 +65,10 @@ def extract_result(raw: bytes, *, allow_waiting: bool = False) -> str:
     if is_error:
         subtype = payload.get("subtype")
         safe_subtype = subtype if isinstance(subtype, str) and SAFE_SUBTYPE.fullmatch(subtype) else "unspecified"
+        safe_reason = classify_error_reason(payload)
         raise CursorResponseError(
-            f"Cursor reported an application-level error (subtype={safe_subtype})."
+            "Cursor reported an application-level error "
+            f"(subtype={safe_subtype}, reason={safe_reason})."
         )
     result = payload.get("result")
     if not isinstance(result, str) or not result.strip():
