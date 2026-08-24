@@ -111,13 +111,14 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         reusable = (ROOT / ".github/workflows/recover-actions-checks.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("if: github.event_name == 'schedule'", resolver)
+        self.assertIn("inputs.action == 'recover-integration-push'", resolver)
         self.assertIn("git/ref/heads/develop", resolver)
         self.assertIn('[[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]', resolver)
         self.assertIn("recovery_needed:", resolver)
         self.assertIn("has_successful_run", resolver)
         self.assertIn("deploy_required", resolver)
         self.assertIn("outputs.recovery_needed == 'true'", recovery)
+        self.assertIn("inputs.action == 'recover-integration-push'", recovery)
         self.assertIn("recovery_mode: integration_push", recovery)
         self.assertIn(
             "target_sha: ${{ needs.resolve-integration-recovery-target.outputs.target_sha }}",
@@ -126,6 +127,20 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         self.assertIn("actions: write", recovery)
         self.assertIn("actions-check-recovery-${{ inputs.recovery_mode }}-${{ inputs.target_sha }}", reusable)
         self.assertIn("cancel-in-progress: false", reusable)
+
+    def test_operator_can_invoke_integration_recovery_without_free_form_sha(self):
+        template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text(encoding="utf-8")
+        dispatch_inputs = template.split("  workflow_dispatch:", 1)[1].split(
+            "\n# A synchronize event", 1
+        )[0]
+        self.assertIn("recover-integration-push", dispatch_inputs)
+        self.assertNotIn("integration_recovery_target_sha:", dispatch_inputs)
+        resolver = template.split(
+            "  resolve-integration-recovery-target:", 1
+        )[1].split("\n  recover-integration-push:", 1)[0]
+        self.assertIn("git/ref/heads/develop", resolver)
 
     def test_promotion_required_contexts_are_ruleset_equivalents(self):
         self.assertEqual(
