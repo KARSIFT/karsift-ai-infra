@@ -651,12 +651,22 @@ jobs:
             done < <(find "$package_path" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
 
             if [ -z "$yaml_error" ]; then
-              exit 0
+              change_id=$(basename "$package_path" | grep -oP '^[A-Z]+-\d+')
+              set +e
+              task_error=$(python3 karsift-ai-infra/config/package-task-policy-runner.py validate \
+                --package-path "$package_path" \
+                --change-id "$change_id" 2>&1)
+              task_status=$?
+              set -e
+              if [ "$task_status" -eq 0 ]; then
+                exit 0
+              fi
+              yaml_error="tasks.md: $task_error"
             fi
 
-            echo "::warning::Planner wrote invalid YAML on attempt $attempt: $yaml_error"
+            echo "::warning::Planner wrote invalid package output on attempt $attempt: $yaml_error"
             if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "Planner produced invalid YAML after $max_attempts attempts, giving up:" >&2
+              echo "Planner produced invalid package policy after $max_attempts attempts, giving up:" >&2
               echo "$yaml_error" >&2
               exit 1
             fi
@@ -668,9 +678,15 @@ jobs:
               cat "$prompt_file"
               echo
               echo "---"
-              echo "Your previous attempt wrote invalid YAML and failed to parse with this exact error:"
-              echo "$yaml_error"
-              echo "Write the full package again from scratch. Before finishing, re-check every YAML file you write for strictly valid syntax: consistent indentation throughout each block, no unquoted scalar containing \": \" (quote the whole value instead), and proper block-scalar markers (| or >) for any multi-line prose value."
+              if printf '%s' "$yaml_error" | grep -q 'tasks.md:'; then
+                echo "Your previous attempt violated largest-safe-coherent task policy with this exact error:"
+                echo "$yaml_error"
+                echo "Draft the minimum sufficient number of maximal tasks. Use one end-to-end task whenever technically possible. Every later task needs an allowed '- Split reason: <slug> — <concrete explanation>' line, and more than three tasks need package-level justification."
+              else
+                echo "Your previous attempt wrote invalid YAML and failed to parse with this exact error:"
+                echo "$yaml_error"
+                echo "Write the full package again from scratch. Before finishing, re-check every YAML file you write for strictly valid syntax: consistent indentation throughout each block, no unquoted scalar containing \": \" (quote the whole value instead), and proper block-scalar markers (| or >) for any multi-line prose value."
+              fi
             } > "$retry_prompt"
             prompt_file="$retry_prompt"
             attempt=$((attempt + 1))

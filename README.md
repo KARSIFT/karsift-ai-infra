@@ -15,6 +15,15 @@ Every AI step in this pipeline is a **role**, not a vendor commitment:
 | `implementer` | Implements one approved task on a branch. No merge authority, no production access, cannot approve its own work. Escalates to a stronger model (`implementer_escalation`) on its last retry attempt rather than retrying blind. |
 | `reviewer` | Independent, read-only verification. Posts a structured, commit-bound verdict. Never edits, merges, or approves. Routes to a cheaper model (`reviewer_fast_retry`) on a low-risk retry. |
 
+Planning follows a largest-safe-coherent-unit policy: a plan can cover a broad
+initiative and contain several tasks, but it must use the minimum sufficient number
+of maximal tasks. One end-to-end task and implementation PR is the default whenever
+technically possible. The planner workflow rejects later tasks that lack a real,
+concretely explained authority/owner, independent release or rollback, hard
+dependency, environment, post-merge evidence, or demonstrated reviewability
+boundary. Line, file, component, skill, repository, and layer counts are not split
+reasons by themselves.
+
 **This README deliberately never names which model or vendor currently fills any role** - that
 information changes often (this repo's git history includes moves across at least four different
 CLIs/vendors so far) and a hardcoded table here has gone stale every single time it changed. **The
