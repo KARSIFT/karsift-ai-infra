@@ -69,6 +69,31 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             25,
         )
 
+    def test_scheduled_secondary_wake_retries_exact_integration_head(self):
+        template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text(encoding="utf-8")
+        resolver = template.split(
+            "  resolve-integration-recovery-target:", 1
+        )[1].split("\n  recover-integration-push:", 1)[0]
+        recovery = template.split("  recover-integration-push:", 1)[1].split(
+            "\n  implement:", 1
+        )[0]
+        reusable = (ROOT / ".github/workflows/recover-actions-checks.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("if: github.event_name == 'schedule'", resolver)
+        self.assertIn("git/ref/heads/develop", resolver)
+        self.assertIn('[[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]', resolver)
+        self.assertIn("recovery_mode: integration_push", recovery)
+        self.assertIn(
+            "target_sha: ${{ needs.resolve-integration-recovery-target.outputs.target_sha }}",
+            recovery,
+        )
+        self.assertIn("actions: write", recovery)
+        self.assertIn("actions-check-recovery-${{ inputs.recovery_mode }}-${{ inputs.target_sha }}", reusable)
+        self.assertIn("cancel-in-progress: false", reusable)
+
     def test_promotion_required_contexts_are_ruleset_equivalents(self):
         self.assertEqual(
             required_contexts("promotion_pr"),
