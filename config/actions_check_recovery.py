@@ -205,7 +205,7 @@ def suppress_active_or_successful_dispatches(
             run.get("status") in {"queued", "in_progress", "pending"}
             or (
                 run.get("status") == "completed"
-                and run.get("conclusion") in {"success", "neutral"}
+                and run.get("conclusion") == "success"
             )
         )
     }

@@ -230,6 +230,28 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
             )
         )
 
+    def test_neutral_exact_sha_run_is_redispatched(self):
+        plans = plan_recovery_dispatches(
+            mode="integration_push",
+            target_sha=HEAD_SHA,
+            branch_ref="develop",
+        )
+        runs = [
+            {
+                "head_sha": HEAD_SHA,
+                "path": f".github/workflows/{plan.workflow_file}",
+                "status": "completed",
+                "conclusion": "neutral",
+            }
+            for plan in plans
+        ]
+        self.assertEqual(
+            suppress_active_or_successful_dispatches(
+                plans, runs, head_sha=HEAD_SHA
+            ),
+            plans,
+        )
+
     def test_missing_contexts_fail_closed(self):
         summary = evaluate_summary(
             [
