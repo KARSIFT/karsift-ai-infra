@@ -1264,9 +1264,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("if: inputs.event_action != 'ready_for_review'", reuse_workflow)
         self.assertIn("if: inputs.event_action == 'ready_for_review'", reuse_workflow)
         self.assertIn(
-            "expected_proof_head_sha: ${{ inputs.verify_reuse_proof_head_sha }}",
+            "expected_proof_head_sha: ${{ github.sha }}",
             template,
         )
+        self.assertNotIn("verify_reuse_proof_head_sha:", template)
         self.assertIn("source_pr_number:", template)
         self.assertIn("expected_source_head_sha:", template)
         self.assertIn("expected_source_base_sha:", template)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import re
 from pathlib import Path
 
 
@@ -59,6 +60,13 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         ci_block = template.split("  ci:", 1)[1].split("\n  plan-review:", 1)[0]
         self.assertIn("inputs.action == 'recover-promotion-pr-checks'", ci_block)
         self.assertNotIn("\n  recover-promotion-pr-checks:", template)
+        dispatch_inputs = template.split("  workflow_dispatch:", 1)[1].split(
+            "\n# A synchronize event", 1
+        )[0]
+        self.assertLessEqual(
+            len(re.findall(r"^      [a-z0-9_]+:$", dispatch_inputs, re.MULTILINE)),
+            25,
+        )
 
     def test_promotion_required_contexts_are_ruleset_equivalents(self):
         self.assertEqual(
