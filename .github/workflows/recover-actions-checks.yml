@@ -35,6 +35,10 @@ on:
       KARSIFT_BOT_PRIVATE_KEY:
         required: true
 
+concurrency:
+  group: actions-check-recovery-${{ inputs.recovery_mode }}-${{ inputs.target_sha }}
+  cancel-in-progress: false
+
 jobs:
   recover:
     name: recover

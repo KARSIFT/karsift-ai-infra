@@ -178,6 +178,49 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
 
 jobs:
+  # Hourly secondary wake for an integration merge whose original post-merge
+  # recovery attempt timed out or was interrupted. The reusable recovery is
+  # exact-SHA bound, serialized, and a mutation-free no-op once both genuine
+  # integration workflows have completed successfully.
+  resolve-integration-recovery-target:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      target_sha: ${{ steps.target.outputs.target_sha }}
+    steps:
+      - name: Resolve current integration head
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/develop" --jq .object.sha)
+          if ! [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Current integration head is unavailable; refusing recovery." >&2
+            exit 1
+          fi
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+
+  recover-integration-push:
+    needs: resolve-integration-recovery-target
+    if: github.event_name == 'schedule' && needs.resolve-integration-recovery-target.outputs.target_sha != ''
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/recover-actions-checks.yml@main
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: read
+    with:
+      recovery_mode: integration_push
+      target_sha: ${{ needs.resolve-integration-recovery-target.outputs.target_sha }}
+      branch_ref: develop
+      timeout_seconds: "1800"
+    secrets:
+      KARSIFT_BOT_APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+      KARSIFT_BOT_PRIVATE_KEY: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
   implement:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'implement'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main
