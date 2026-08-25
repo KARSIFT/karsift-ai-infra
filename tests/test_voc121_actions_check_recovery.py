@@ -20,6 +20,7 @@ from actions_check_recovery import (  # noqa: E402
     suppress_active_or_successful_dispatches,
 )
 from promotion_status_attestation import AttestationError, attestable_contexts  # noqa: E402
+from required_check_satisfaction import SelectedRequiredCheckRun  # noqa: E402
 
 
 def load_runner():
@@ -44,6 +45,85 @@ def gate_summary_from_check_runs(check_runs: list[dict]) -> dict:
 
 
 class Voc121ActionsCheckRecoveryTests(unittest.TestCase):
+    def test_main_reruns_selected_cancelled_run_without_alternate_dispatch(self):
+        gate_summary = gate_summary_from_check_runs(
+            [
+                {
+                    "head_sha": HEAD_SHA,
+                    "id": index,
+                    "name": name,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "app": {"slug": "github-actions"},
+                    "started_at": f"2026-08-24T00:00:0{index}Z",
+                }
+                for index, name in enumerate(
+                    ("governance-policy", "validate", "ci / ci"), start=1
+                )
+            ]
+        )
+        failed_view = [
+            {
+                "name": "governance-policy",
+                "state": "CANCELLED",
+                "event": "pull_request",
+                "workflow": "Governance policy",
+                "link": "https://github.com/KARSIFT/example/actions/runs/123/job/456",
+            },
+            {"name": "validate", "state": "SUCCESS"},
+            {"name": "ci / ci", "state": "SUCCESS"},
+        ]
+        successful_view = [
+            {"name": name, "state": "SUCCESS"}
+            for name in ("governance-policy", "validate", "ci / ci")
+        ]
+        selected_run = {
+            "id": 123,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "event": "pull_request",
+            "head_sha": HEAD_SHA,
+            "head_branch": "release/voc-121",
+            "name": "Governance policy",
+            "path": ".github/workflows/governance-policy.yml",
+            "pull_requests": [{"number": 993}],
+        }
+        argv = [
+            "actions-check-recovery-runner.py",
+            "--repository",
+            "KARSIFT/example",
+            "--mode",
+            "promotion_pr",
+            "--target-sha",
+            HEAD_SHA,
+            "--branch-ref",
+            "release/voc-121",
+            "--pr-number",
+            "993",
+            "--timeout-seconds",
+            "1",
+            "--github-token",
+            "token",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(
+            runner,
+            "run_metadata_phase",
+            side_effect=[
+                (True, gate_summary, [], failed_view),
+                (True, gate_summary, [], successful_view),
+            ],
+        ), mock.patch.object(
+            runner, "load_selected_workflow_run", return_value=selected_run
+        ), mock.patch.object(
+            runner, "rerun_selected_workflow"
+        ) as rerun, mock.patch.object(
+            runner, "dispatch_workflow"
+        ) as dispatch:
+            self.assertEqual(runner.main(), 0)
+        rerun.assert_called_once_with("token", "KARSIFT/example", 123)
+        dispatch.assert_not_called()
+
     def test_failed_check_exit_still_yields_valid_required_view_for_recovery(self):
         completed = mock.Mock(
             returncode=1,
@@ -63,6 +143,75 @@ class Voc121ActionsCheckRecoveryTests(unittest.TestCase):
         with mock.patch.object(runner.subprocess, "run", return_value=completed):
             with self.assertRaises(runner.RunnerError):
                 runner.load_required_pr_checks("token", "KARSIFT/example", 993)
+
+    def test_selected_run_validation_binds_pr_head_branch_event_and_workflow(self):
+        plan = SelectedRequiredCheckRun(
+            context="governance-policy",
+            run_id=123,
+            workflow="Governance policy",
+            state="CANCELLED",
+        )
+        payload = {
+            "id": 123,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "event": "pull_request",
+            "head_sha": HEAD_SHA,
+            "head_branch": "release/voc-121",
+            "name": "Governance policy",
+            "path": ".github/workflows/governance-policy.yml@refs/heads/develop",
+            "pull_requests": [{"number": 993}],
+        }
+        runner.validate_selected_workflow_run(
+            payload,
+            plan,
+            target_sha=HEAD_SHA,
+            branch_ref="release/voc-121",
+            pr_number=993,
+        )
+        failure_plan = SelectedRequiredCheckRun(
+            context="governance-policy",
+            run_id=123,
+            workflow="Governance policy",
+            state="FAILURE",
+        )
+        runner.validate_selected_workflow_run(
+            payload,
+            failure_plan,
+            target_sha=HEAD_SHA,
+            branch_ref="release/voc-121",
+            pr_number=993,
+        )
+        for field, value in (
+            ("head_sha", "b" * 40),
+            ("head_branch", "other"),
+            ("event", "workflow_dispatch"),
+            ("path", ".github/workflows/foreign.yml"),
+            ("pull_requests", [{"number": 992}]),
+            ("run_attempt", 2),
+        ):
+            changed = dict(payload)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(runner.RunnerError):
+                runner.validate_selected_workflow_run(
+                    changed,
+                    plan,
+                    target_sha=HEAD_SHA,
+                    branch_ref="release/voc-121",
+                    pr_number=993,
+                )
+
+    def test_exact_selected_run_rerun_uses_actions_rerun_endpoint(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
+            runner.rerun_selected_workflow("token", "KARSIFT/example", 123)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["gh", "api", "--method", "POST"])
+        self.assertEqual(
+            command[-1],
+            "repos/KARSIFT/example/actions/runs/123/rerun",
+        )
 
     def test_cancelled_pr_check_stays_missing_with_alternate_successful_run(self):
         gate_summary = gate_summary_from_check_runs(

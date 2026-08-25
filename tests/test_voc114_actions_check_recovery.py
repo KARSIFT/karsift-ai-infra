@@ -389,7 +389,9 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
             if "/actions/runs" in joined:
                 return completed_process(stdout=workflow_runs_payload())
             if joined.startswith("gh pr checks"):
-                return completed_process(stdout=pr_required_checks_payload())
+                # An absent required row uses the legacy workflow-dispatch
+                # bootstrap. VOC-121 separately covers exact failed-run reruns.
+                return completed_process(stdout="[]")
             if "/actions/workflows/" in joined and kwargs.get("input"):
                 return completed_process()
             raise AssertionError(f"unexpected command: {joined}")

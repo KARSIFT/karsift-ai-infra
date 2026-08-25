@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Detect missing exact-SHA Actions checks and plan genuine recovery dispatches."""
+"""Detect missing exact-SHA Actions checks and plan genuine recovery actions."""
 
 from __future__ import annotations
 

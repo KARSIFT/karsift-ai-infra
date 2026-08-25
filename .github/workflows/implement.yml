@@ -1011,7 +1011,10 @@ jobs:
         if: steps.selfcorrect.outcome == 'success'
         run: |
           set -euo pipefail
-          rm -rf karsift-ai-infra
+          if [ -e karsift-ai-infra ]; then
+            echo "Self-correction recreated the removed infrastructure checkout; refusing to discard unbound source edits." >&2
+            exit 1
+          fi
           git add -A
           if git diff --cached --quiet; then
             echo "Self-correction produced no additional changes."

@@ -205,9 +205,16 @@ exact-head run alone cannot satisfy the PR's required contexts. After the
 release selector validates the open PR identity and genuine successful runs
 from the three expected workflows, it also consults GitHub's
 `gh pr checks --required` view. A cancelled or failed ruleset-selected check
-remains unsatisfied even if another same-name run or status succeeded, and a
-failed required-check read stops attestation. Only when both evidence views
-pass may the release job publish same-SHA success statuses for
+remains unsatisfied even if another same-name run or status succeeded.
+Recovery parses that selected row's Actions run URL, re-reads the run through
+GitHub's API, and requires the exact PR, head SHA, branch, `pull_request`
+event, workflow name/path, and failed conclusion before rerunning that same run
+ID. Automatic recovery accepts only the original run attempt, preserving the
+one-rerun ceiling. Only a genuinely absent context uses the allowlisted
+workflow-dispatch bootstrap; pending rows wait, and ambiguous, status-only,
+foreign, or unreadable rows fail closed. Only when both evidence views pass may
+the release job
+publish same-SHA success statuses for
 `governance-policy`, `validate`, and `ci / ci`, linked to the release run. The
 caller grants `statuses: write` only to that release job; the GitHub App token
 remains limited to contents/issues/pull-request mutation.
@@ -541,9 +548,11 @@ planner-authored) aren't covered - the release gate only applies going forward.
   does
 
 Close/reopen or draft/ready transitions on a promotion pull request do not
-recover missing required checks. VOC-113 recovery dispatches genuine allowlisted
-workflows for the exact SHA with a bounded 1800-second fail-closed wait. Recovery
-calls are serialized by mode and target SHA. The caller template's hourly
+recover missing required checks. VOC-121 recovery reruns a ruleset-selected
+failed/cancelled pull-request run in place and retains VOC-113's genuine
+allowlisted dispatch only for a missing required row, with a bounded
+1800-second fail-closed wait. Recovery calls are serialized by mode and target
+SHA. The caller template's hourly
 schedule also resolves the current integration head and performs a secondary
 integration recovery wake; it is a mutation-free no-op after both required
 integration workflows have completed successfully.

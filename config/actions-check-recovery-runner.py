@@ -15,6 +15,7 @@ from urllib.parse import quote
 from actions_check_recovery import (
     DEFAULT_TIMEOUT_SECONDS,
     POLL_INTERVAL_SECONDS,
+    PROMOTION_WORKFLOW_CONTEXTS,
     RecoveryError,
     format_timeout_diagnostics,
     missing_contexts,
@@ -30,11 +31,21 @@ from actions_check_recovery import (
     validate_sha,
     staging_deploy_required,
 )
-from required_check_satisfaction import SatisfactionError, parse_gh_pr_checks_json
+from required_check_satisfaction import (
+    SatisfactionError,
+    SelectedRequiredCheckRun,
+    parse_gh_pr_checks_json,
+    plan_required_check_recovery,
+)
 
 CHECK_RUNS_READ_FAILED = "check_runs_read_failed"
 WORKFLOW_RUNS_READ_FAILED = "workflow_runs_read_failed"
 COMMIT_METADATA_READ_FAILED = "commit_metadata_read_failed"
+REQUIRED_WORKFLOW_PATHS = {
+    "governance-policy": ".github/workflows/governance-policy.yml",
+    "validate": ".github/workflows/repository-governance.yml",
+    "ci / ci": ".github/workflows/pipeline.yml",
+}
 
 
 class RunnerError(RuntimeError):
@@ -169,7 +180,7 @@ def load_required_pr_checks(token: str, repository: str, pr_number: int) -> list
             str(pr_number),
             "--required",
             "--json",
-            "name,state",
+            "bucket,event,link,name,state,workflow",
         ],
         capture_output=True,
         text=True,
@@ -182,6 +193,86 @@ def load_required_pr_checks(token: str, repository: str, pr_number: int) -> list
         return parse_gh_pr_checks_json(json.loads(completed.stdout))
     except (json.JSONDecodeError, SatisfactionError) as exc:
         raise RunnerError(CHECK_RUNS_READ_FAILED) from exc
+
+
+def load_selected_workflow_run(
+    token: str,
+    repository: str,
+    run_id: int,
+) -> dict[str, Any]:
+    payload = gh_api(
+        token,
+        repository,
+        f"repos/{repository}/actions/runs/{run_id}",
+        read_failure=WORKFLOW_RUNS_READ_FAILED,
+    )
+    if not isinstance(payload, dict):
+        raise RunnerError(WORKFLOW_RUNS_READ_FAILED)
+    return payload
+
+
+def validate_selected_workflow_run(
+    payload: dict[str, Any],
+    plan: SelectedRequiredCheckRun,
+    *,
+    target_sha: str,
+    branch_ref: str,
+    pr_number: int,
+) -> None:
+    pull_requests = payload.get("pull_requests")
+    selected_prs = {
+        item.get("number")
+        for item in pull_requests
+        if isinstance(item, dict)
+    } if isinstance(pull_requests, list) else set()
+    path = str(payload.get("path") or "").split("@", 1)[0]
+    conclusion = str(payload.get("conclusion") or "").upper()
+    conclusion_matches = (
+        conclusion == plan.state
+        or (
+            plan.state in {"FAILURE", "ERROR"}
+            and conclusion
+            in {
+                "FAILURE",
+                "CANCELLED",
+                "TIMED_OUT",
+                "ACTION_REQUIRED",
+                "STARTUP_FAILURE",
+                "STALE",
+            }
+        )
+    )
+    if (
+        payload.get("id") != plan.run_id
+        or payload.get("status") != "completed"
+        or payload.get("run_attempt") != 1
+        or not conclusion_matches
+        or payload.get("event") != "pull_request"
+        or payload.get("head_sha") != validate_sha(target_sha, "target_sha")
+        or payload.get("head_branch") != branch_ref
+        or payload.get("name") != plan.workflow
+        or path != REQUIRED_WORKFLOW_PATHS.get(plan.context)
+        or pr_number not in selected_prs
+    ):
+        raise RunnerError("selected_required_run_mismatch")
+
+
+def rerun_selected_workflow(
+    token: str,
+    repository: str,
+    run_id: int,
+) -> None:
+    gh(
+        [
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/actions/runs/{run_id}/rerun",
+        ],
+        token=token,
+        repository=repository,
+        read_failure="workflow_rerun_failed",
+    )
 
 
 def load_promotion_target(
@@ -354,19 +445,64 @@ def main() -> int:
             integration_deploy_required=integration_deploy_required,
             pr_required_checks=pr_required_checks,
         ):
-            plans = suppress_active_or_successful_dispatches(
-                plan_recovery_dispatches(
-                    mode=mode,
-                    target_sha=target_sha,
-                    branch_ref=args.branch_ref,
-                    pr_number=pr_number,
-                    integration_deploy_required=integration_deploy_required,
-                ),
-                initial_workflow_runs,
-                head_sha=target_sha,
-                gate_summary=initial_gate_summary,
-                pr_required_checks=pr_required_checks,
+            rerun_plans: list[SelectedRequiredCheckRun] = []
+            dispatch_contexts: list[str] = []
+            if mode == "promotion_pr":
+                if pr_number is None or pr_required_checks is None:
+                    raise RecoveryError("missing_pr_required_checks")
+                rerun_plans, dispatch_contexts = plan_required_check_recovery(
+                    pr_required_checks,
+                    required_contexts(mode),
+                    repository=args.repository,
+                )
+                rerun_ids: set[int] = set()
+                for rerun_plan in rerun_plans:
+                    if rerun_plan.run_id in rerun_ids:
+                        continue
+                    run_payload = load_selected_workflow_run(
+                        token,
+                        args.repository,
+                        rerun_plan.run_id,
+                    )
+                    validate_selected_workflow_run(
+                        run_payload,
+                        rerun_plan,
+                        target_sha=target_sha,
+                        branch_ref=args.branch_ref,
+                        pr_number=pr_number,
+                    )
+                    rerun_selected_workflow(
+                        token,
+                        args.repository,
+                        rerun_plan.run_id,
+                    )
+                    rerun_ids.add(rerun_plan.run_id)
+                    dispatched.append(f"rerun:{rerun_plan.run_id}")
+            plans = plan_recovery_dispatches(
+                mode=mode,
+                target_sha=target_sha,
+                branch_ref=args.branch_ref,
+                pr_number=pr_number,
+                integration_deploy_required=integration_deploy_required,
             )
+            if mode == "promotion_pr":
+                # These contexts are absent from GitHub's required PR view.
+                # A same-head successful workflow run did not create the
+                # required row, so it must not suppress the bootstrap dispatch.
+                plans = [
+                    plan
+                    for plan in plans
+                    if PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file)
+                    in dispatch_contexts
+                ]
+            else:
+                plans = suppress_active_or_successful_dispatches(
+                    plans,
+                    initial_workflow_runs,
+                    head_sha=target_sha,
+                    gate_summary=initial_gate_summary,
+                    pr_required_checks=pr_required_checks,
+                )
             for plan in plans:
                 dispatch_workflow(
                     token,
@@ -376,7 +512,7 @@ def main() -> int:
                     dict(plan.inputs),
                 )
                 dispatched.append(plan.workflow_file)
-    except (RunnerError, RecoveryError) as exc:
+    except (RunnerError, RecoveryError, SatisfactionError) as exc:
         print(f"actions-check-recovery: {exc}", file=sys.stderr)
         return 1
 

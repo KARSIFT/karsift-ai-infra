@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,10 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
         self.assertIn("/tmp/karsift-implement-helpers/prepare_cursor_model.py", WORKFLOW)
         self.assertNotIn(
             "merge-gate.yml fails closed (requires founder approval)",
+            WORKFLOW,
+        )
+        self.assertIn(
+            "Self-correction recreated the removed infrastructure checkout",
             WORKFLOW,
         )
 
@@ -174,6 +179,57 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
                 publisher, "ls-remote", "--heads", "origin", branch
             ).stdout.split()[0]
             self.assertEqual(live, racing_head)
+
+    def test_committed_nested_edits_bundle_before_caller_staging_without_gitlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            caller = Path(directory) / "caller"
+            nested = caller / "karsift-ai-infra"
+            caller.mkdir()
+            subprocess.run(
+                ["git", "init", str(caller)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.git(caller, "config", "user.name", "test")
+            self.git(caller, "config", "user.email", "test@example.invalid")
+            (caller / "README.md").write_text("caller\n", encoding="utf-8")
+            self.git(caller, "add", "README.md")
+            self.git(caller, "commit", "-m", "caller base")
+
+            subprocess.run(
+                ["git", "init", str(nested)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.git(nested, "config", "user.name", "test")
+            self.git(nested, "config", "user.email", "test@example.invalid")
+            (nested / "config").mkdir()
+            (nested / "config/model.py").write_text("base\n", encoding="utf-8")
+            self.git(nested, "add", "config/model.py")
+            self.git(nested, "commit", "-m", "source base")
+            source_base = self.git(nested, "rev-parse", "HEAD").stdout.strip()
+
+            (nested / "config/model.py").write_text(
+                "authorized model commit\n", encoding="utf-8"
+            )
+            self.git(nested, "commit", "-am", "model-created commit")
+            self.git(nested, "reset", "--soft", source_base)
+            self.assertTrue(self.git(nested, "status", "--porcelain").stdout)
+            self.git(nested, "add", "-A")
+            self.git(nested, "commit", "-m", "coordinated source carrier")
+            source_head = self.git(nested, "rev-parse", "HEAD").stdout.strip()
+            bundle = Path(directory) / "source.bundle"
+            self.git(nested, "bundle", "create", str(bundle), f"{source_base}..HEAD")
+            self.assertTrue(bundle.is_file())
+            self.assertNotEqual(source_head, source_base)
+
+            shutil.rmtree(nested)
+            self.git(caller, "add", "-A")
+            caller_index = self.git(caller, "ls-files", "--stage").stdout
+            self.assertNotIn("karsift-ai-infra", caller_index)
+            self.assertNotIn("160000", caller_index)
 
     def test_nested_gitlink_paths_are_rejected(self):
         with self.assertRaises(CarrierError):
