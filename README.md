@@ -203,10 +203,14 @@ Promotion recovery keeps GitHub's branch ruleset authoritative. A manual
 recovery run is not attached to the promotion PR by GitHub, so a successful
 exact-head run alone cannot satisfy the PR's required contexts. After the
 release selector validates the open PR identity and genuine successful runs
-from the three expected workflows, the release job publishes same-SHA success
-statuses for only `governance-policy`, `validate`, and `ci / ci`, linked to the
-release run. The caller grants `statuses: write` only to that release job; the
-GitHub App token remains limited to contents/issues/pull-request mutation.
+from the three expected workflows, it also consults GitHub's
+`gh pr checks --required` view. A cancelled or failed ruleset-selected check
+remains unsatisfied even if another same-name run or status succeeded, and a
+failed required-check read stops attestation. Only when both evidence views
+pass may the release job publish same-SHA success statuses for
+`governance-policy`, `validate`, and `ci / ci`, linked to the release run. The
+caller grants `statuses: write` only to that release job; the GitHub App token
+remains limited to contents/issues/pull-request mutation.
 
 The unrestricted implementer also never shares a runner with the GitHub App
 token. It produces and uploads a Git bundle with persisted checkout credentials
@@ -218,6 +222,16 @@ therefore cannot observe the App credential or forge its bot identity. The
 publisher rejects every `.github/workflows/**` change before push; those
 security-sensitive edits use a separately supervised review/publication path
 instead of executing from an unreviewed same-repository PR.
+
+When an adopted caller task also authorizes changes to its nested
+`karsift-ai-infra` checkout, `implement.yml` preserves every self-correction
+helper before removing the checkout from caller staging. It commits and bundles
+the authorized source changes separately, then a second clean publisher with an
+infrastructure-scoped App token verifies exact lineage and an explicit branch
+lease before opening a non-closing cross-repository PR. The model runner never
+receives that token, a stale or racing source head fails closed, and caller
+fixtures cannot consume the source carrier until its independently reviewed
+merge SHA is known.
 All PR operations and bounded issue notifications in these clean jobs name the
 calling repository explicitly, because they intentionally have no checked-out
 Git worktree from which GitHub CLI could infer repository context.

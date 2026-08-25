@@ -30,6 +30,7 @@ from actions_check_recovery import (
     validate_sha,
     staging_deploy_required,
 )
+from required_check_satisfaction import SatisfactionError, parse_gh_pr_checks_json
 
 CHECK_RUNS_READ_FAILED = "check_runs_read_failed"
 WORKFLOW_RUNS_READ_FAILED = "workflow_runs_read_failed"
@@ -156,6 +157,33 @@ def load_changed_paths(token: str, repository: str, head_sha: str) -> list[str]:
     return paths
 
 
+def load_required_pr_checks(token: str, repository: str, pr_number: int) -> list[dict[str, Any]]:
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    env["GH_REPO"] = repository
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "checks",
+            str(pr_number),
+            "--required",
+            "--json",
+            "name,state",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    if not completed.stdout.strip():
+        raise RunnerError(CHECK_RUNS_READ_FAILED)
+    try:
+        return parse_gh_pr_checks_json(json.loads(completed.stdout))
+    except (json.JSONDecodeError, SatisfactionError) as exc:
+        raise RunnerError(CHECK_RUNS_READ_FAILED) from exc
+
+
 def load_promotion_target(
     token: str,
     repository: str,
@@ -218,11 +246,18 @@ def collect_missing(
     workflow_runs: list[dict],
     head_sha: str,
     integration_deploy_required: bool = True,
+    pr_required_checks: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     missing: list[str] = []
     contexts = required_contexts(mode)
     if contexts:
-        missing.extend(missing_contexts(gate_summary, contexts))
+        missing.extend(
+            missing_contexts(
+                gate_summary,
+                contexts,
+                pr_required_checks=pr_required_checks,
+            )
+        )
     push_workflows = required_push_workflows(
         mode, integration_deploy_required=integration_deploy_required
     )
@@ -247,9 +282,10 @@ def run_metadata_phase(
     target_sha: str,
     branch_ref: str,
     pr_number: int | None,
-) -> tuple[bool, dict, list[dict]]:
+) -> tuple[bool, dict, list[dict], list[dict[str, Any]] | None]:
     """Read exact-SHA metadata; fail closed before dispatch planning."""
 
+    pr_required_checks: list[dict[str, Any]] | None = None
     integration_deploy_required = True
     if mode == "integration_push":
         integration_deploy_required = staging_deploy_required(
@@ -265,9 +301,10 @@ def run_metadata_phase(
             target_sha=target_sha,
             branch_ref=branch_ref,
         )
+        pr_required_checks = load_required_pr_checks(token, repository, pr_number)
     gate_summary = load_gate_summary(token, repository, target_sha)
     workflow_runs = load_workflow_runs(token, repository, target_sha)
-    return integration_deploy_required, gate_summary, workflow_runs
+    return integration_deploy_required, gate_summary, workflow_runs, pr_required_checks
 
 
 def main() -> int:
@@ -299,7 +336,7 @@ def main() -> int:
 
     dispatched: list[str] = []
     try:
-        integration_deploy_required, initial_gate_summary, initial_workflow_runs = (
+        integration_deploy_required, initial_gate_summary, initial_workflow_runs, pr_required_checks = (
             run_metadata_phase(
                 mode=mode,
                 token=token,
@@ -315,6 +352,7 @@ def main() -> int:
             workflow_runs=initial_workflow_runs,
             head_sha=target_sha,
             integration_deploy_required=integration_deploy_required,
+            pr_required_checks=pr_required_checks,
         ):
             plans = suppress_active_or_successful_dispatches(
                 plan_recovery_dispatches(
@@ -327,6 +365,7 @@ def main() -> int:
                 initial_workflow_runs,
                 head_sha=target_sha,
                 gate_summary=initial_gate_summary,
+                pr_required_checks=pr_required_checks,
             )
             for plan in plans:
                 dispatch_workflow(
@@ -346,7 +385,7 @@ def main() -> int:
     workflow_runs = initial_workflow_runs
     while time.time() < deadline:
         try:
-            _, gate_summary, workflow_runs = run_metadata_phase(
+            integration_deploy_required, gate_summary, workflow_runs, pr_required_checks = run_metadata_phase(
                 mode=mode,
                 token=token,
                 repository=args.repository,
@@ -363,6 +402,7 @@ def main() -> int:
             workflow_runs=workflow_runs,
             head_sha=target_sha,
             integration_deploy_required=integration_deploy_required,
+            pr_required_checks=pr_required_checks,
         ):
             print(
                 "actions-check-recovery: complete "
@@ -377,6 +417,7 @@ def main() -> int:
         workflow_runs,
         target_sha,
         integration_deploy_required=integration_deploy_required,
+        pr_required_checks=pr_required_checks,
     )
     print(
         format_timeout_diagnostics(

@@ -82,6 +82,16 @@ def check_runs_payload() -> str:
     return json.dumps([{"check_runs": [], "total_count": 0}])
 
 
+def pr_required_checks_payload() -> str:
+    return json.dumps(
+        [
+            {"name": "governance-policy", "state": "FAILURE"},
+            {"name": "validate", "state": "FAILURE"},
+            {"name": "ci / ci", "state": "FAILURE"},
+        ]
+    )
+
+
 def promotion_pull_payload() -> str:
     return json.dumps(
         {
@@ -378,6 +388,8 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
                 return completed_process(stdout=payload)
             if "/actions/runs" in joined:
                 return completed_process(stdout=workflow_runs_payload())
+            if joined.startswith("gh pr checks"):
+                return completed_process(stdout=pr_required_checks_payload())
             if "/actions/workflows/" in joined and kwargs.get("input"):
                 return completed_process()
             raise AssertionError(f"unexpected command: {joined}")

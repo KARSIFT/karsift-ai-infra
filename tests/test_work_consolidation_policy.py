@@ -53,6 +53,13 @@ class WorkConsolidationPolicyTests(unittest.TestCase):
         self.assertIn("package-task-policy-runner.py validate", self.plan_workflow)
         self.assertIn("minimum sufficient number of maximal tasks", self.plan_workflow)
 
+    def test_plan_review_uses_active_a004_automatic_merge_rule(self):
+        normalized = " ".join(self.plan_review.split())
+        self.assertIn("active A-004 drafting rule", normalized)
+        self.assertIn("for every risk class, including R4", normalized)
+        self.assertNotIn("except R4", normalized)
+        self.assertNotIn("only R4 may set false", normalized)
+
 
 if __name__ == "__main__":
     unittest.main()

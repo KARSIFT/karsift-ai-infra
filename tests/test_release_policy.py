@@ -50,7 +50,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("--match-head-commit \"$CHECKED_HEAD_SHA\"", self.release)
         self.assertIn('headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA', self.release)
         self.assertNotIn("statusCheckRollup", self.release)
-        self.assertNotIn("gh pr checks", self.release)
+        self.assertIn("gh pr checks \"$PR_NUMBER\" --required", self.release)
 
     def test_ruleset_attestation_is_narrow_and_precedes_merge(self):
         self.assertIn("statuses: write", self.release)

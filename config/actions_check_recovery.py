@@ -13,6 +13,7 @@ from authoritative_checks import (
     flatten_statuses,
     select_authoritative,
 )
+from required_check_satisfaction import missing_required_pr_contexts
 
 PROMOTION_REQUIRED_CONTEXTS: tuple[str, ...] = (
     "governance-policy",
@@ -157,7 +158,11 @@ def select_gate_evidence(
 def missing_contexts(
     gate_summary: dict[str, Any],
     required: Sequence[str],
+    *,
+    pr_required_checks: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[str]:
+    if pr_required_checks is not None:
+        return missing_required_pr_contexts(pr_required_checks, required)
     present = {
         item["name"]
         for item in gate_summary.get("checks", [])
@@ -268,6 +273,7 @@ def suppress_active_or_successful_dispatches(
     *,
     head_sha: str,
     gate_summary: dict[str, Any] | None = None,
+    pr_required_checks: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[DispatchPlan]:
     """Avoid duplicate dispatches bound to the evidence each plan produces."""
 
@@ -290,12 +296,17 @@ def suppress_active_or_successful_dispatches(
         if item.get("kind") == "check_run"
         and item.get("workflow") == "github-actions"
     }
+    pr_missing = (
+        set(missing_required_pr_contexts(pr_required_checks, PROMOTION_REQUIRED_CONTEXTS))
+        if pr_required_checks is not None
+        else set()
+    )
     promotion_dispatch = any(plan.workflow_file == "pipeline.yml" for plan in plans)
     remaining: list[DispatchPlan] = []
     for plan in plans:
         context = PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file)
         if promotion_dispatch and context is not None:
-            if context_states.get(context) not in {"SUCCESS", "PENDING"}:
+            if context in pr_missing or context_states.get(context) not in {"SUCCESS", "PENDING"}:
                 remaining.append(plan)
         elif plan.workflow_file not in already_running:
             remaining.append(plan)
@@ -309,10 +320,15 @@ def recovery_complete(
     workflow_runs: Iterable[dict[str, Any]],
     head_sha: str,
     integration_deploy_required: bool = True,
+    pr_required_checks: Sequence[Mapping[str, Any]] | None = None,
 ) -> bool:
     validate_mode(mode)
     contexts = required_contexts(mode)
-    if contexts and missing_contexts(gate_summary, contexts):
+    if contexts and missing_contexts(
+        gate_summary,
+        contexts,
+        pr_required_checks=pr_required_checks,
+    ):
         return False
     push_workflows = required_push_workflows(
         mode, integration_deploy_required=integration_deploy_required

@@ -84,6 +84,7 @@ class PromotionStatusAttestationTests(unittest.TestCase):
         repository = "KARSIFT/example"
 
         def completed(command, **kwargs):
+            joined = " ".join(command)
             result = mock.Mock(returncode=0, stderr="")
             if command[-1] == f"repos/{repository}/pulls/947":
                 result.stdout = json.dumps(
@@ -92,6 +93,14 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                         "state": "open",
                         "head": {"sha": head_sha, "ref": "develop"},
                     }
+                )
+            elif joined.startswith("gh pr checks"):
+                result.stdout = json.dumps(
+                    [
+                        {"name": "governance-policy", "state": "SUCCESS"},
+                        {"name": "validate", "state": "SUCCESS"},
+                        {"name": "ci / ci", "state": "SUCCESS"},
+                    ]
                 )
             else:
                 result.stdout = "{}"
@@ -136,6 +145,88 @@ class PromotionStatusAttestationTests(unittest.TestCase):
         self.assertTrue(all(payload["state"] == "success" for payload in payloads))
         self.assertTrue(
             all(call.kwargs["env"]["GH_TOKEN"] == "job-token" for call in posts)
+        )
+
+    def test_runner_fails_closed_when_required_pr_view_cannot_be_read(self):
+        head_sha = "a" * 40
+        repository = "KARSIFT/example"
+
+        def completed(command, **kwargs):
+            result = mock.Mock(returncode=0, stdout="{}", stderr="")
+            if command[:3] == ["gh", "pr", "checks"]:
+                result.returncode = 1
+                result.stderr = "untrusted provider detail"
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "authoritative.json"
+            evidence.write_text(json.dumps(summary()), encoding="utf-8")
+            argv = [
+                "promotion-status-attestation-runner.py",
+                "--authoritative-file",
+                str(evidence),
+                "--repository",
+                repository,
+                "--pr-number",
+                "947",
+                "--head-sha",
+                head_sha,
+                "--branch-ref",
+                "develop",
+                "--target-url",
+                f"https://github.com/{repository}/actions/runs/123",
+                "--github-token",
+                "job-token",
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                runner.subprocess, "run", side_effect=completed
+            ) as run_mock:
+                self.assertEqual(runner.main(), 1)
+
+        self.assertFalse(
+            any("--method" in call.args[0] for call in run_mock.call_args_list)
+        )
+
+    def test_runner_parses_nonzero_failed_check_payload_but_never_attests_it(self):
+        head_sha = "a" * 40
+        repository = "KARSIFT/example"
+
+        def completed(command, **kwargs):
+            result = mock.Mock(returncode=0, stdout="{}", stderr="")
+            if command[:3] == ["gh", "pr", "checks"]:
+                result.returncode = 1
+                result.stdout = json.dumps(
+                    [{"name": "governance-policy", "state": "FAILURE"}]
+                )
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "authoritative.json"
+            evidence.write_text(json.dumps(summary()), encoding="utf-8")
+            argv = [
+                "promotion-status-attestation-runner.py",
+                "--authoritative-file",
+                str(evidence),
+                "--repository",
+                repository,
+                "--pr-number",
+                "947",
+                "--head-sha",
+                head_sha,
+                "--branch-ref",
+                "develop",
+                "--target-url",
+                f"https://github.com/{repository}/actions/runs/123",
+                "--github-token",
+                "job-token",
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                runner.subprocess, "run", side_effect=completed
+            ) as run_mock:
+                self.assertEqual(runner.main(), 1)
+
+        self.assertFalse(
+            any("--method" in call.args[0] for call in run_mock.call_args_list)
         )
 
 
