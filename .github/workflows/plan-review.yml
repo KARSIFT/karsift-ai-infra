@@ -248,8 +248,8 @@ jobs:
           exit_code=$?
           if [ "$exit_code" -ne 0 ]; then
             python3 karsift-ai-infra/config/extract-cursor-result.py \
-              /tmp/verdict-response.json /tmp/verdict.md || true
-            echo "::error::Plan-review Cursor invocation failed; raw provider output is withheld." >&2
+              /tmp/verdict-response.json /tmp/verdict.md \
+              --github-annotation || true
           fi
           exit "$exit_code"
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-25 — Publish bounded Cursor failure reasons as check annotations
+
+- `config/extract-cursor-result.py` now supports a fail-closed
+  `--github-annotation` mode that emits only its bounded subtype/reason
+  diagnostic plus an explicit raw-output withholding notice.
+- `review.yml` and `plan-review.yml` use that mode after their bounded Cursor
+  retries fail, so the actionable sanitized reason survives as structured
+  check metadata even though verdict publication correctly remains skipped.
+- Raw Cursor stderr and provider response text remain withheld; role mappings,
+  exact-SHA review binding, risk controls, protected checks, and retry limits
+  are unchanged.
+
 ## Unreleased
 
 - Routed all six governed roles through Cursor under VOC-117: Composer 2.5

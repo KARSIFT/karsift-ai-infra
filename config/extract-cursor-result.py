@@ -88,23 +88,48 @@ def extract_result(raw: bytes, *, allow_waiting: bool = False) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) not in {3, 4} or (len(argv) == 4 and argv[3] != "--allow-waiting"):
+    flags = argv[3:]
+    allowed_flags = {"--allow-waiting", "--github-annotation"}
+    if (
+        len(argv) < 3
+        or len(argv) > 5
+        or len(flags) != len(set(flags))
+        or not set(flags).issubset(allowed_flags)
+    ):
         print(
-            "usage: extract-cursor-result.py INPUT_JSON OUTPUT_TEXT [--allow-waiting]",
+            "usage: extract-cursor-result.py INPUT_JSON OUTPUT_TEXT "
+            "[--allow-waiting] [--github-annotation]",
             file=sys.stderr,
         )
         return 2
     input_path = Path(argv[1])
     output_path = Path(argv[2])
+    allow_waiting = "--allow-waiting" in flags
+    github_annotation = "--github-annotation" in flags
     try:
         output_path.unlink(missing_ok=True)
-        result = extract_result(input_path.read_bytes(), allow_waiting=len(argv) == 4)
+        result = extract_result(input_path.read_bytes(), allow_waiting=allow_waiting)
         output_path.write_text(result, encoding="utf-8")
     except CursorResponseError as exc:
-        print(str(exc), file=sys.stderr)
+        if github_annotation:
+            print(
+                f"::error title=Cursor invocation failed::{exc} "
+                "Raw provider output is withheld.",
+                file=sys.stderr,
+            )
+        else:
+            print(str(exc), file=sys.stderr)
         return 75
     except OSError:
-        print("Cursor response could not be read or written.", file=sys.stderr)
+        message = "Cursor response could not be read or written."
+        if github_annotation:
+            print(
+                f"::error title=Cursor invocation failed::{message} "
+                "Raw provider output is withheld.",
+                file=sys.stderr,
+            )
+        else:
+            print(message, file=sys.stderr)
         return 75
     return 0
 
