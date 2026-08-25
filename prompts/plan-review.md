@@ -39,19 +39,14 @@ correctness of code that does not exist yet. Judge:
    the package's own stated `affected_areas` and any path-based floor named in
    `planned_implementation_risk_floor`? Flag under-classification (declared risk
    lower than the real consequence) as you would in an implementation review. Also
-   flag over-classification without stated reason, since that unnecessarily routes
-   routine work through founder approval this project's active governance model
-   says it should not need.
+   flag over-classification without stated reason, since it imposes evidence and
+   review obligations that the package has not justified.
 3. **`automatic_merge_allowed` correctness**: per this project's `AGENTS.md`
-   drafting rule, `automatic_merge_allowed` must default to `true` for every risk
-   class except R4, where it must be `false`. There is no standing exception for
-   R3, secrets, auth, or production-infrastructure work - only R4 may set `false`.
-   If the package sets `automatic_merge_allowed: false` at any risk class other
-   than R4, that is a blocking finding unless `change.yaml` states a specific,
-   package-local reason tied to an actual R4-adjacent concern the risk
-   classification itself failed to capture (in which case the risk classification
-   is also wrong, and that is the real finding). A bare template-inherited `false`
-   with no reasoning is always a finding.
+   active A-004 drafting rule, `automatic_merge_allowed` must be `true` for every
+   risk class, including R4. Sensitivity, secrets, auth, and production
+   infrastructure strengthen evidence and review obligations; they do not create
+   a founder-comment merge gate. A package that sets the field to `false` is a
+   blocking finding unless a newer canonical amendment has superseded A-004.
 4. **Internal consistency**: do the package's own files agree with each other?
    Check `change.yaml`'s dependency records, `requirement_approval_status`, and
    `blocking_reasons` against what `specification.md`, `tasks.md`, and

@@ -383,10 +383,12 @@ jobs:
           total=$(jq -r .total_count /tmp/release-authoritative.json)
           pending=$(jq -r .pending /tmp/release-authoritative.json)
           failed=$(jq -r .failed /tmp/release-authoritative.json)
-          if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$failed" -eq 0 ]; then
+          required_missing=$(gh pr checks "$PR_NUMBER" --required --json name,state -q \
+            '[.[] | select(.state != "SUCCESS")] | length' 2>/dev/null || echo "1")
+          if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && [ "$failed" -eq 0 ] && [ "$required_missing" -eq 0 ]; then
             echo "merge=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Latest authoritative gates are not all successful; no merge decision yet."
+            echo "Latest authoritative gates or required PR checks are not all successful; no merge decision yet."
             echo "merge=false" >> "$GITHUB_OUTPUT"
           fi
 

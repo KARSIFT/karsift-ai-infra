@@ -60,12 +60,17 @@ def verify_required_checks(
     gate_summary: dict,
     *,
     head_sha: str,
+    pr_required_checks: list[dict],
 ) -> VerificationResult:
     try:
         validate_sha(head_sha, "head_sha")
     except ValueError:
         return VerificationResult(False, "invalid_head_sha")
-    missing = missing_contexts(gate_summary, PROMOTION_REQUIRED_CONTEXTS)
+    missing = missing_contexts(
+        gate_summary,
+        PROMOTION_REQUIRED_CONTEXTS,
+        pr_required_checks=pr_required_checks,
+    )
     if missing:
         return VerificationResult(False, f"missing_required_contexts:{','.join(missing)}")
     # Promotion authority is defined by the three required contexts above.

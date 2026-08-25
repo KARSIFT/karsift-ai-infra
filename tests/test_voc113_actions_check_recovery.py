@@ -614,7 +614,14 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
                 }
             )
         summary = evaluate_summary(checks)
-        result = verify_required_checks(summary, head_sha=HEAD_SHA)
+        result = verify_required_checks(
+            summary,
+            head_sha=HEAD_SHA,
+            pr_required_checks=[
+                {"name": name, "state": "SUCCESS"}
+                for name in required_contexts("promotion_pr")
+            ],
+        )
         self.assertTrue(result.ok)
 
     def test_verify_required_checks_ignores_unrelated_non_green_contexts(self):
@@ -656,8 +663,39 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         summary = evaluate_summary(checks)
         self.assertEqual(summary["failed"], 1)
         self.assertEqual(summary["pending"], 1)
-        result = verify_required_checks(summary, head_sha=HEAD_SHA)
+        result = verify_required_checks(
+            summary,
+            head_sha=HEAD_SHA,
+            pr_required_checks=[
+                {"name": name, "state": "SUCCESS"}
+                for name in required_contexts("promotion_pr")
+            ],
+        )
         self.assertTrue(result.ok)
+
+    def test_promotion_verifier_rejects_cancelled_required_pr_view(self):
+        checks = [
+            {
+                "head_sha": HEAD_SHA,
+                "id": index,
+                "name": name,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+                "started_at": f"2026-08-24T00:00:{index:02d}Z",
+            }
+            for index, name in enumerate(required_contexts("promotion_pr"), 1)
+        ]
+        result = verify_required_checks(
+            evaluate_summary(checks),
+            head_sha=HEAD_SHA,
+            pr_required_checks=[
+                {"name": "governance-policy", "state": "CANCELLED"},
+                {"name": "validate", "state": "SUCCESS"},
+                {"name": "ci / ci", "state": "SUCCESS"},
+            ],
+        )
+        self.assertFalse(result.ok)
 
     def test_carrier_sha_is_valid_but_distinct_from_promotion_sha(self):
         carrier_sha = "c" * 40

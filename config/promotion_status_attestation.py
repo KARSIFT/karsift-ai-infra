@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from actions_check_recovery import PROMOTION_REQUIRED_CONTEXTS
+from required_check_satisfaction import missing_required_pr_contexts
 
 
 EXPECTED_WORKFLOWS: dict[str, str] = {
@@ -19,8 +20,21 @@ class AttestationError(ValueError):
     """Promotion evidence cannot be attested safely."""
 
 
-def attestable_contexts(summary: Any) -> tuple[tuple[str, int], ...]:
+def attestable_contexts(
+    summary: Any,
+    *,
+    pr_required_checks: list[dict[str, Any]] | None = None,
+) -> tuple[tuple[str, int], ...]:
     """Return the required context/run pairs only when all are genuine passes."""
+
+    if pr_required_checks is not None:
+        missing = missing_required_pr_contexts(
+            pr_required_checks, PROMOTION_REQUIRED_CONTEXTS
+        )
+        if missing:
+            raise AttestationError(
+                f"required_pr_contexts_unsatisfied:{','.join(missing)}"
+            )
 
     if not isinstance(summary, dict) or not isinstance(summary.get("checks"), list):
         raise AttestationError("invalid_authoritative_summary")

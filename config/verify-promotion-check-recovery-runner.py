@@ -16,6 +16,7 @@ from verify_promotion_check_recovery import (
     verify_required_checks,
 )
 from actions_check_recovery import select_gate_evidence
+from required_check_satisfaction import SatisfactionError, parse_gh_pr_checks_json
 
 
 class VerificationError(RuntimeError):
@@ -70,6 +71,33 @@ def gh_api_paginate(token: str, repository: str, path: str) -> list[dict]:
         if isinstance(batch, list):
             items.extend(batch)
     return items
+
+
+def load_required_pr_checks(token: str, repository: str, pr_number: int) -> list[dict]:
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    env["GH_REPO"] = repository
+    completed = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "checks",
+            str(pr_number),
+            "--required",
+            "--json",
+            "name,state",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    if not completed.stdout.strip():
+        raise VerificationError("github_metadata_read_failed")
+    try:
+        return parse_gh_pr_checks_json(json.loads(completed.stdout))
+    except (json.JSONDecodeError, SatisfactionError) as exc:
+        raise VerificationError("github_metadata_read_failed") from exc
 
 
 def main() -> int:
@@ -130,7 +158,18 @@ def main() -> int:
             statuses,
             head_sha=head_sha,
         )
-        require(verify_required_checks(gate_summary, head_sha=head_sha))
+        pr_required_checks = load_required_pr_checks(
+            args.github_token,
+            args.repository,
+            args.promotion_pr_number,
+        )
+        require(
+            verify_required_checks(
+                gate_summary,
+                head_sha=head_sha,
+                pr_required_checks=pr_required_checks,
+            )
+        )
     except VerificationError as exc:
         print(f"verify-promotion-check-recovery: {exc}", file=sys.stderr)
         return 1
