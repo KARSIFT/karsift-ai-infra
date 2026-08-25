@@ -65,25 +65,62 @@ class ReviewFailureCommentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             scratch_path = Path(scratch)
             pr_path = scratch_path / "pr.json"
+            failure_path = scratch_path / "failure.json"
             output_path = scratch_path / "comment.md"
             pr_path.write_text(json.dumps(LIVE_PR), encoding="utf-8")
+            failure_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "failure_subtype": "error_during_execution",
+                        "failure_reason": "rate_limit",
+                    }
+                ),
+                encoding="utf-8",
+            )
             rc = failure_comment.main(
                 [
                     "build-review-failure-comment.py",
                     "plan-reviewer",
                     str(pr_path),
+                    str(failure_path),
                     str(output_path),
                     HEAD,
                     BASE,
                     "98765",
-                    "error_during_execution",
-                    "rate_limit",
                 ]
             )
             self.assertEqual(rc, 0)
             comment = output_path.read_text(encoding="utf-8")
             self.assertIn("mode: `plan-reviewer`", comment)
             self.assertIn("failure_reason: `rate_limit`", comment)
+
+    def test_failure_record_rejects_extra_or_unbounded_fields(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            record_path = Path(scratch) / "failure.json"
+            records = (
+                {
+                    "schema_version": 1,
+                    "failure_subtype": "error_during_execution",
+                    "failure_reason": "unspecified",
+                    "raw_provider_output": "must never cross the boundary",
+                },
+                {
+                    "schema_version": 1,
+                    "failure_subtype": "bad\nsubtype",
+                    "failure_reason": "unspecified",
+                },
+                {
+                    "schema_version": 2,
+                    "failure_subtype": "error_during_execution",
+                    "failure_reason": "unspecified",
+                },
+            )
+            for record in records:
+                with self.subTest(record=record):
+                    record_path.write_text(json.dumps(record), encoding="utf-8")
+                    with self.assertRaises(ValueError):
+                        failure_comment.load_failure_record(record_path)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,24 @@ SAFE_REASONS = {
     "usage_limit",
 }
 MODES = {"reviewer", "plan-reviewer"}
+FAILURE_RECORD_KEYS = {"failure_reason", "failure_subtype", "schema_version"}
+
+
+def load_failure_record(path: Path) -> tuple[str, str]:
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(record, dict) or set(record) != FAILURE_RECORD_KEYS:
+        raise ValueError("Review failure record shape is invalid.")
+    subtype = record.get("failure_subtype")
+    reason = record.get("failure_reason")
+    if (
+        record.get("schema_version") != 1
+        or not isinstance(subtype, str)
+        or not isinstance(reason, str)
+        or not SAFE_SUBTYPE.fullmatch(subtype)
+        or reason not in SAFE_REASONS
+    ):
+        raise ValueError("Review failure record is outside the bounded vocabulary.")
+    return subtype, reason
 
 
 def build_comment(
@@ -66,18 +84,19 @@ def build_comment(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 9:
+    if len(argv) != 8:
         print(
-            "usage: build-review-failure-comment.py MODE PR_JSON OUTPUT_COMMENT "
-            "EXPECTED_HEAD EXPECTED_BASE RUN_ID SUBTYPE REASON",
+            "usage: build-review-failure-comment.py MODE PR_JSON FAILURE_JSON "
+            "OUTPUT_COMMENT EXPECTED_HEAD EXPECTED_BASE RUN_ID",
             file=sys.stderr,
         )
         return 2
-    _, mode, pr_path, output_path, head, base, run_id, subtype, reason = argv
+    _, mode, pr_path, failure_path, output_path, head, base, run_id = argv
     try:
         pr = json.loads(Path(pr_path).read_text(encoding="utf-8"))
         if not isinstance(pr, dict):
             raise ValueError("PR metadata must be an object.")
+        subtype, reason = load_failure_record(Path(failure_path))
         comment = build_comment(
             mode=mode,
             pr=pr,
