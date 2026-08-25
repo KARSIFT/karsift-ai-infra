@@ -173,6 +173,10 @@ implementation `FAIL` or CI failure can consume the bounded implementation
 retry. A review-job error stays in the isolated reviewer-infrastructure lane.
 After a terminal Cursor invocation failure, that lane writes only a strict
 schema-v1 reason/subtype record and retains it as a one-day workflow artifact.
+A missing or unusable JSON response may be classified from at most 64 KiB of
+local Cursor stderr inside the failed producer job; only an existing allowlisted
+reason code survives, while oversized, missing, or unrecognized text remains
+`unspecified`.
 A clean publisher downloads and revalidates the bounded record plus the exact
 live PR base/head pair before minting its narrowly scoped App token and posting
 a non-verdict infrastructure comment. Raw provider responses, stderr, prompts,
