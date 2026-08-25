@@ -176,8 +176,8 @@ schema-v1 reason/subtype record and retains it as a one-day workflow artifact.
 A missing or unusable JSON response may be classified from at most 64 KiB of
 local Cursor stderr inside the failed producer job; only an existing allowlisted
 reason code survives, while oversized, missing, or unrecognized text remains
-`unspecified`. Authentication matching covers Cursor's bounded invalid,
-incorrect, expired, and revoked API-key phrasing without retaining the text.
+`unspecified`. Authentication matching covers Cursor's exact bounded invalid
+API-key phrasing without retaining the text or matching unrelated help prose.
 A clean publisher downloads and revalidates the bounded record plus the exact
 live PR base/head pair before minting its narrowly scoped App token and posting
 a non-verdict infrastructure comment. Raw provider responses, stderr, prompts,

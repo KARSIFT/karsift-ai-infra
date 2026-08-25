@@ -113,6 +113,19 @@ class CursorResultTests(unittest.TestCase):
             self.assertIn(f"reason={expected}", diagnostic)
             self.assertNotIn(provider_text, diagnostic)
 
+    def test_api_key_help_text_does_not_false_classify_unrelated_errors(self):
+        fixtures = (
+            "Set your API key with --api-key. Cached model preset is expired.",
+            "See docs for API key setup. TLS certificate revoked for another host.",
+            "Provide an API key via env. This feature is not valid on the free plan.",
+        )
+        for diagnostic in fixtures:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(
+                    cursor_result.classify_error_text(diagnostic),
+                    "unspecified",
+                )
+
     def test_github_annotation_exposes_only_the_bounded_diagnostic(self):
         with tempfile.TemporaryDirectory() as scratch:
             scratch_path = Path(scratch)
