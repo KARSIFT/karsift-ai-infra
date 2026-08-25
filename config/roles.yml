@@ -1,10 +1,12 @@
 # Authoritative current role bindings.
 #
 # VOC-117 (2026-08-24) makes every active role Cursor-backed. Planner and
-# review roles use Grok 4.6 Standard (`fast=false`); plan review additionally
-# requests explicit high effort. Implementation and its single escalation
-# attempt both use Composer 2.5 by requirement. The identical escalation
-# binding is intentional and does not expand the existing retry limit.
+# review roles use Grok 4.6 with explicit high effort on the Standard tier
+# (`fast=false`). Live Cursor CLI model discovery requires the effort-qualified
+# identifier; the effort-omitted `grok-4.6[fast=false]` expression fails closed
+# as unavailable. Implementation and its single escalation attempt both use
+# Composer 2.5 by requirement. The identical escalation binding is intentional
+# and does not expand the existing retry limit.
 #
 # Historical provider/model transitions remain available in CHANGELOG.md and
 # Git history. They are not current routing or fallback behavior. Workflows
@@ -13,7 +15,7 @@
 
 implementer: cursor/composer-2.5
 implementer_escalation: cursor/composer-2.5
-planner: cursor/grok-4.6[fast=false]
-reviewer: cursor/grok-4.6[fast=false]
-reviewer_fast_retry: cursor/grok-4.6[fast=false]
+planner: cursor/grok-4.6[effort=high,fast=false]
+reviewer: cursor/grok-4.6[effort=high,fast=false]
+reviewer_fast_retry: cursor/grok-4.6[effort=high,fast=false]
 plan_reviewer: cursor/grok-4.6[effort=high,fast=false]

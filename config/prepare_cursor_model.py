@@ -32,6 +32,8 @@ def _validate_cli_model(cli_model: str) -> None:
     if "[" not in cli_model and "]" not in cli_model:
         if not MODEL_RE.fullmatch(cli_model):
             raise CursorModelError("invalid_cursor_model")
+        if cli_model == "grok-4.6":
+            raise CursorModelError("missing_cursor_grok_4_6_effort")
         return
 
     if cli_model.count("[") != 1 or cli_model.count("]") != 1:
@@ -51,6 +53,9 @@ def _validate_cli_model(cli_model: str) -> None:
         if key in seen:
             raise CursorModelError("duplicate_cursor_model_parameter")
         seen.add(key)
+
+    if model == "grok-4.6" and "effort" not in seen:
+        raise CursorModelError("missing_cursor_grok_4_6_effort")
 
 
 def prepare_cursor_model(stored: str, *, require_api_key: bool = False) -> str:
