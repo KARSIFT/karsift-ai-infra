@@ -92,6 +92,7 @@ class CursorResultTests(unittest.TestCase):
             ("You've hit your usage limit for this billing cycle", "usage_limit"),
             ("HTTP 429: too many requests", "rate_limit"),
             ("Authentication failed: invalid API key", "authentication"),
+            ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
         )
@@ -111,6 +112,19 @@ class CursorResultTests(unittest.TestCase):
             diagnostic = str(raised.exception)
             self.assertIn(f"reason={expected}", diagnostic)
             self.assertNotIn(provider_text, diagnostic)
+
+    def test_api_key_help_text_does_not_false_classify_unrelated_errors(self):
+        fixtures = (
+            "Set your API key with --api-key. Cached model preset is expired.",
+            "See docs for API key setup. TLS certificate revoked for another host.",
+            "Provide an API key via env. This feature is not valid on the free plan.",
+        )
+        for diagnostic in fixtures:
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(
+                    cursor_result.classify_error_text(diagnostic),
+                    "unspecified",
+                )
 
     def test_github_annotation_exposes_only_the_bounded_diagnostic(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -199,6 +213,7 @@ class CursorResultTests(unittest.TestCase):
     def test_empty_response_uses_bounded_stderr_only_for_safe_classification(self):
         fixtures = (
             ("Authentication failed: invalid API key", "authentication"),
+            ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
             ("You've hit your usage limit", "usage_limit"),

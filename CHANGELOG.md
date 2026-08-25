@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-25 — Recognize Cursor API-key phrasing without exposing stderr
+
+- Live caller run `32839205119` still published `unspecified` after the bounded
+  stderr path landed. A safe local reproduction showed Cursor phrases an
+  invalid credential as `API key is invalid`, while the sanitizer recognized
+  only the reverse word order `invalid API key`.
+- Authentication classification now accepts the exact bounded Cursor phrase
+  `API key is invalid`. Negative regressions reject unrelated help text that
+  merely mentions an API key near expired, revoked, or invalid feature text.
+  Raw text remains withheld and the artifact vocabulary is unchanged.
+- Model bindings, parameter strings, exact-SHA review, artifact isolation,
+  protected checks, and retry limits remain unchanged.
+
 ## 2026-08-25 — Classify empty-response Cursor failures from bounded stderr
 
 - Live caller run `32836275599` proved the artifact handoff works, but the
