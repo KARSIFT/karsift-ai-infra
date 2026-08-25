@@ -10,6 +10,13 @@
   Cursor credentials, malformed bindings, and unsupported prefixes cannot
   silently select another provider or model.
 
+- Hardened VOC-117's live Cursor failure path after the first Grok 4.6 review
+  invocation returned a nonzero, structured response without a usable verdict.
+  Review and plan-review now classify only bounded reason codes from the JSON
+  response and withhold raw provider stdout/stderr, so model availability,
+  quota, rate-limit, authentication, and parameter failures are distinguishable
+  without exposing prompts, credentials, or arbitrary provider text.
+
 - Upgraded every reusable and self-CI checkout to the verified immutable
   `actions/checkout` v7.0.1 commit and its Node.js 24 runtime. Every checkout
   now disables persisted credentials; adoption configures its scoped write
