@@ -113,6 +113,8 @@ jobs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       stale: ${{ steps.pr.outputs.stale }}
+      failure_subtype: ${{ steps.verify.outputs.failure_subtype }}
+      failure_reason: ${{ steps.verify.outputs.failure_reason }}
     permissions:
       contents: read
       pull-requests: read
@@ -408,7 +410,7 @@ jobs:
           if [ "$exit_code" -ne 0 ]; then
             python3 karsift-ai-infra/config/extract-cursor-result.py \
               /tmp/verdict-response.json /tmp/verdict.md \
-              --allow-waiting --github-annotation || true
+              --allow-waiting --github-annotation --set-github-output || true
           fi
           exit "$exit_code"
 
@@ -590,3 +592,64 @@ jobs:
           fi
           gh pr comment "$PR_NUMBER" \
             --body-file /tmp/review-publish/verdict-comment.md
+
+  publish-review-failure:
+    needs: review
+    if: ${{ always() && needs.review.result == 'failure' && needs.review.outputs.stale != 'true' && needs.review.outputs.failure_reason != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout exact shared failure-publication policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: KARSIFT/karsift-ai-infra
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Validate exact PR identity and bounded failure classification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
+          FAILURE_SUBTYPE: ${{ needs.review.outputs.failure_subtype }}
+          FAILURE_REASON: ${{ needs.review.outputs.failure_reason }}
+        run: |
+          set -euo pipefail
+          gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid > /tmp/live-pr.json
+          python3 karsift-ai-infra/config/build-review-failure-comment.py \
+            reviewer /tmp/live-pr.json /tmp/review-failure-comment.md \
+            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "${{ github.run_id }}" \
+            "$FAILURE_SUBTYPE" "$FAILURE_REASON"
+
+      - name: Mint failure-comment App token on the clean runner
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      - name: Publish App-signed bounded failure comment
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
+          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          live_pair=$(gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid)
+          if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
+             [ "$(jq -r .headRefOid <<<"$live_pair")" != "$EXPECTED_HEAD_SHA" ] ||
+             [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$EXPECTED_BASE_SHA" ]; then
+            echo "PR base/head pair changed immediately before failure publication." >&2
+            exit 1
+          fi
+          gh pr comment "$PR_NUMBER" --body-file /tmp/review-failure-comment.md

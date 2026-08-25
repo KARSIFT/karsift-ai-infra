@@ -1,5 +1,6 @@
 from importlib.util import module_from_spec, spec_from_file_location
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -117,6 +118,7 @@ class CursorResultTests(unittest.TestCase):
             scratch_path = Path(scratch)
             input_path = scratch_path / "response.json"
             output_path = scratch_path / "verdict.md"
+            github_output = scratch_path / "github-output"
             provider_text = "Requested model is not available; secret-like tail"
             input_path.write_text(
                 json.dumps(
@@ -128,6 +130,8 @@ class CursorResultTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            env = os.environ.copy()
+            env["GITHUB_OUTPUT"] = str(github_output)
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -136,18 +140,27 @@ class CursorResultTests(unittest.TestCase):
                     str(output_path),
                     "--allow-waiting",
                     "--github-annotation",
+                    "--set-github-output",
                 ],
                 text=True,
                 capture_output=True,
+                env=env,
                 check=False,
             )
             self.assertEqual(completed.returncode, 75)
-            self.assertIn("::error title=Cursor invocation failed::", completed.stdout)
+            self.assertIn("::error::Cursor invocation failed:", completed.stdout)
             self.assertIn("reason=model_unavailable_or_invalid", completed.stdout)
             self.assertIn("Raw provider output is withheld.", completed.stdout)
             self.assertNotIn(provider_text, completed.stdout)
             self.assertEqual(completed.stderr, "")
             self.assertFalse(output_path.exists())
+            self.assertEqual(
+                github_output.read_text(encoding="utf-8").splitlines(),
+                [
+                    "failure_subtype=error_during_execution",
+                    "failure_reason=model_unavailable_or_invalid",
+                ],
+            )
 
     def test_github_annotation_uses_fixed_message_for_io_failure(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -169,7 +182,7 @@ class CursorResultTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 75)
             self.assertEqual(
                 completed.stdout.strip(),
-                "::error title=Cursor invocation failed::Cursor response could not "
+                "::error::Cursor invocation failed: Cursor response could not "
                 "be read or written. Raw provider output is withheld.",
             )
             self.assertNotIn(str(missing_input), completed.stdout)
@@ -180,6 +193,14 @@ class CursorResultTests(unittest.TestCase):
         for workflow in self.review_workflows:
             with self.subTest(workflow=workflow.splitlines()[0]):
                 self.assertIn("--github-annotation", workflow)
+                self.assertIn("--set-github-output", workflow)
+                self.assertIn(
+                    "failure_reason: ${{ steps.verify.outputs.failure_reason }}",
+                    workflow,
+                )
+                self.assertIn("build-review-failure-comment.py", workflow)
+                self.assertIn("ref: ${{ job.workflow_sha }}", workflow)
+                self.assertIn("permission-pull-requests: write", workflow)
                 self.assertNotIn("cat /tmp/cursor-stderr.log >&2", workflow)
 
     def test_invalid_or_oversized_responses_fail_closed(self):
