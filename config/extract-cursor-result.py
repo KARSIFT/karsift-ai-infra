@@ -11,6 +11,7 @@ import sys
 
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_RESULT_BYTES = 122_880
+MAX_FAILURE_INPUT_BYTES = 65_536
 SAFE_SUBTYPE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 VERDICT = re.compile(
     r"VERDICT: (?:FAIL|PASS|PASS WITH NON-BLOCKING FINDINGS|"
@@ -33,14 +34,10 @@ class CursorResponseError(ValueError):
         self.reason = reason
 
 
-def classify_error_reason(payload: dict[str, object]) -> str:
-    """Return a bounded reason code without exposing provider response text."""
+def classify_error_text(fields: str) -> str:
+    """Return a bounded reason code without returning the inspected text."""
 
-    fields = " ".join(
-        value.lower()
-        for key in ("result", "error", "message")
-        if isinstance((value := payload.get(key)), str)
-    )
+    fields = fields.lower()
     if any(marker in fields for marker in ("usage limit", "quota", "spend limit")):
         return "usage_limit"
     if any(marker in fields for marker in ("rate limit", "too many requests", "http 429")):
@@ -57,6 +54,32 @@ def classify_error_reason(payload: dict[str, object]) -> str:
     ):
         return "model_parameter_invalid"
     return "unspecified"
+
+
+def classify_error_reason(payload: dict[str, object]) -> str:
+    """Return a bounded reason code without exposing provider response text."""
+
+    fields = " ".join(
+        value.lower()
+        for key in ("result", "error", "message")
+        if isinstance((value := payload.get(key)), str)
+    )
+    return classify_error_text(fields)
+
+
+def classify_failure_input(path: Path | None) -> str:
+    """Inspect a bounded local diagnostic file and return only an allowlisted code."""
+
+    if path is None:
+        return "unspecified"
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_FAILURE_INPUT_BYTES + 1)
+    except OSError:
+        return "unspecified"
+    if len(raw) > MAX_FAILURE_INPUT_BYTES:
+        return "unspecified"
+    return classify_error_text(raw.decode("utf-8", errors="replace"))
 
 
 def extract_result(raw: bytes, *, allow_waiting: bool = False) -> str:
@@ -105,21 +128,30 @@ def main(argv: list[str]) -> int:
     failure_record_flags = [
         flag for flag in flags if flag.startswith("--failure-record=")
     ]
+    failure_input_flags = [
+        flag for flag in flags if flag.startswith("--failure-input=")
+    ]
     simple_flags = [
-        flag for flag in flags if not flag.startswith("--failure-record=")
+        flag
+        for flag in flags
+        if not flag.startswith(("--failure-record=", "--failure-input="))
     ]
     allowed_flags = {"--allow-waiting", "--github-annotation"}
     if (
         len(argv) < 3
-        or len(argv) > 6
+        or len(argv) > 7
         or len(simple_flags) != len(set(simple_flags))
         or not set(simple_flags).issubset(allowed_flags)
         or len(failure_record_flags) > 1
         or any(not flag.removeprefix("--failure-record=") for flag in failure_record_flags)
+        or len(failure_input_flags) > 1
+        or any(not flag.removeprefix("--failure-input=") for flag in failure_input_flags)
+        or (failure_input_flags and not failure_record_flags)
     ):
         print(
             "usage: extract-cursor-result.py INPUT_JSON OUTPUT_TEXT "
-            "[--allow-waiting] [--github-annotation] [--failure-record=PATH]",
+            "[--allow-waiting] [--github-annotation] [--failure-record=PATH] "
+            "[--failure-input=PATH]",
             file=sys.stderr,
         )
         return 2
@@ -132,14 +164,22 @@ def main(argv: list[str]) -> int:
         if failure_record_flags
         else None
     )
+    failure_input_path = (
+        Path(failure_input_flags[0].removeprefix("--failure-input="))
+        if failure_input_flags
+        else None
+    )
 
     def emit_failure(error: CursorResponseError) -> None:
+        safe_reason = error.reason
+        if safe_reason == "unspecified":
+            safe_reason = classify_failure_input(failure_input_path)
         if failure_record_path is not None:
             try:
                 failure_record_path.write_text(
                     json.dumps(
                         {
-                            "failure_reason": error.reason,
+                            "failure_reason": safe_reason,
                             "failure_subtype": error.subtype,
                             "schema_version": 1,
                         },
@@ -152,7 +192,8 @@ def main(argv: list[str]) -> int:
                 pass
         if github_annotation:
             print(
-                f"::error::Cursor invocation failed: {error} "
+                f"::error::Cursor invocation failed: subtype={error.subtype}, "
+                f"reason={safe_reason}. "
                 "Raw provider output is withheld.",
                 file=sys.stdout,
             )

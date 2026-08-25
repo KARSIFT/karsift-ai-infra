@@ -159,7 +159,7 @@ class CursorResultTests(unittest.TestCase):
                 },
             )
 
-    def test_github_annotation_uses_fixed_message_for_io_failure(self):
+    def test_github_annotation_uses_bounded_codes_for_io_failure(self):
         with tempfile.TemporaryDirectory() as scratch:
             scratch_path = Path(scratch)
             missing_input = scratch_path / "provider-response-missing.json"
@@ -181,8 +181,8 @@ class CursorResultTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 75)
             self.assertEqual(
                 completed.stdout.strip(),
-                "::error::Cursor invocation failed: Cursor response could not "
-                "be read or written. Raw provider output is withheld.",
+                "::error::Cursor invocation failed: subtype=unspecified, "
+                "reason=unspecified. Raw provider output is withheld.",
             )
             self.assertNotIn(str(missing_input), completed.stdout)
             self.assertEqual(completed.stderr, "")
@@ -196,11 +196,100 @@ class CursorResultTests(unittest.TestCase):
                 },
             )
 
+    def test_empty_response_uses_bounded_stderr_only_for_safe_classification(self):
+        fixtures = (
+            ("Authentication failed: invalid API key", "authentication"),
+            ("Requested model is not available", "model_unavailable_or_invalid"),
+            ("Invalid parameter override", "model_parameter_invalid"),
+            ("You've hit your usage limit", "usage_limit"),
+            ("HTTP 429: too many requests", "rate_limit"),
+        )
+        for diagnostic, expected_reason in fixtures:
+            with (
+                self.subTest(expected_reason=expected_reason),
+                tempfile.TemporaryDirectory() as scratch,
+            ):
+                scratch_path = Path(scratch)
+                input_path = scratch_path / "response.json"
+                output_path = scratch_path / "verdict.md"
+                failure_input = scratch_path / "cursor-stderr.log"
+                failure_record = scratch_path / "failure.json"
+                input_path.write_bytes(b"")
+                failure_input.write_text(
+                    f"{diagnostic}; secret-like tail must stay private",
+                    encoding="utf-8",
+                )
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "config/extract-cursor-result.py"),
+                        str(input_path),
+                        str(output_path),
+                        "--github-annotation",
+                        f"--failure-record={failure_record}",
+                        f"--failure-input={failure_input}",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 75)
+                self.assertIn(f"reason={expected_reason}", completed.stdout)
+                self.assertNotIn(diagnostic, completed.stdout + completed.stderr)
+                self.assertNotIn("secret-like", completed.stdout + completed.stderr)
+                self.assertEqual(
+                    json.loads(failure_record.read_text(encoding="utf-8")),
+                    {
+                        "failure_reason": expected_reason,
+                        "failure_subtype": "unspecified",
+                        "schema_version": 1,
+                    },
+                )
+
+    def test_failure_input_is_bounded_and_requires_a_failure_record(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            input_path = scratch_path / "response.json"
+            output_path = scratch_path / "verdict.md"
+            failure_input = scratch_path / "cursor-stderr.log"
+            failure_record = scratch_path / "failure.json"
+            input_path.write_bytes(b"")
+            failure_input.write_bytes(
+                b"Authentication failed: invalid API key\n"
+                + b"x" * cursor_result.MAX_FAILURE_INPUT_BYTES
+            )
+            invalid = cursor_result.main(
+                [
+                    "extract-cursor-result.py",
+                    str(input_path),
+                    str(output_path),
+                    f"--failure-input={failure_input}",
+                ]
+            )
+            self.assertEqual(invalid, 2)
+            bounded = cursor_result.main(
+                [
+                    "extract-cursor-result.py",
+                    str(input_path),
+                    str(output_path),
+                    f"--failure-record={failure_record}",
+                    f"--failure-input={failure_input}",
+                ]
+            )
+            self.assertEqual(bounded, 75)
+            self.assertEqual(
+                json.loads(failure_record.read_text(encoding="utf-8"))[
+                    "failure_reason"
+                ],
+                "unspecified",
+            )
+
     def test_review_failure_paths_emit_sanitized_diagnostics_only(self):
         for workflow in self.review_workflows:
             with self.subTest(workflow=workflow.splitlines()[0]):
                 self.assertIn("--github-annotation", workflow)
                 self.assertIn("--failure-record=", workflow)
+                self.assertIn("--failure-input=/tmp/cursor-stderr.log", workflow)
                 self.assertIn("Upload bounded", workflow)
                 self.assertIn("Download bounded", workflow)
                 self.assertIn("actions/upload-artifact@", workflow)

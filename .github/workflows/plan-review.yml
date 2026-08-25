@@ -258,7 +258,8 @@ jobs:
           python3 karsift-ai-infra/config/extract-cursor-result.py \
             /tmp/verdict-response.json /tmp/verdict.md \
             --github-annotation \
-            --failure-record=/tmp/plan-review-failure/failure.json || classification_status=$?
+            --failure-record=/tmp/plan-review-failure/failure.json \
+            --failure-input=/tmp/cursor-stderr.log || classification_status=$?
           if [ "$classification_status" -ne 75 ] ||
              [ ! -s /tmp/plan-review-failure/failure.json ]; then
             echo "Bounded plan-review failure classification could not be recorded." >&2

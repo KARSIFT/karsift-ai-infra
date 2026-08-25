@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-25 — Classify empty-response Cursor failures from bounded stderr
+
+- Live caller run `32836275599` proved the artifact handoff works, but the
+  Cursor CLI exited nonzero with an empty JSON response and placed its
+  diagnostic only on stderr, leaving the published bounded reason unspecified.
+- The failed producer job now lets `extract-cursor-result.py` inspect at most
+  64 KiB of its local stderr file and map recognizable text to the existing
+  allowlisted reason codes. Oversized, missing, or unrecognized input remains
+  `unspecified`; the option is invalid unless a failure record is requested.
+- Raw stderr never enters annotations, artifacts, comments, or job outputs.
+  Exact-SHA binding, clean App-token publication, role mappings, parameterized
+  model strings, protected checks, and retry limits remain unchanged.
+
 ## 2026-08-25 — Hand off bounded reviewer failures through artifacts
 
 - Live caller run `32828138123` proved GitHub did not expose step/job outputs
