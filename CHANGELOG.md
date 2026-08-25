@@ -66,6 +66,22 @@
 - Role mappings, model parameters, exact-SHA binding, protected checks, and the
   bounded retry limit are unchanged.
 
+## 2026-08-25 — Require explicit Grok 4.6 effort in live Cursor identifiers
+
+- Corrected planner, reviewer, and reviewer-retry bindings to
+  `cursor/grok-4.6[effort=high,fast=false]`. Live Cursor CLI discovery and
+  invocation proved the prior effort-omitted expression unavailable while the
+  explicit high-effort Standard expression succeeds.
+- `prepare_cursor_model.py` now rejects Grok 4.6 bindings that omit `effort`,
+  preventing a syntactically valid but unavailable identifier from reaching a
+  workflow invocation or silently selecting another model.
+- Bounded failure classification now recognizes Cursor's allowlisted
+  `Available models:` diagnostic as `model_unavailable_or_invalid` without
+  publishing the model list or any raw provider output.
+- Composer 2.5 and explicit high-effort non-Fast Grok 4.6 were both verified
+  live; exact-SHA controls, protected checks, risk classification, and bounded
+  retry limits are unchanged.
+
 ## 2026-08-25 — Publish bounded Cursor failure reasons as check annotations
 
 - `config/extract-cursor-result.py` now supports a fail-closed

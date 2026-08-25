@@ -24,9 +24,9 @@ from prepare_cursor_model import (  # noqa: E402
 VOC117_BINDINGS = {
     "implementer": "cursor/composer-2.5",
     "implementer_escalation": "cursor/composer-2.5",
-    "planner": "cursor/grok-4.6[fast=false]",
-    "reviewer": "cursor/grok-4.6[fast=false]",
-    "reviewer_fast_retry": "cursor/grok-4.6[fast=false]",
+    "planner": "cursor/grok-4.6[effort=high,fast=false]",
+    "reviewer": "cursor/grok-4.6[effort=high,fast=false]",
+    "reviewer_fast_retry": "cursor/grok-4.6[effort=high,fast=false]",
     "plan_reviewer": "cursor/grok-4.6[effort=high,fast=false]",
 }
 
@@ -78,7 +78,7 @@ class Voc117RoleBindingsTests(unittest.TestCase):
     def test_voc117_tests_01_and_02_preserve_parameterized_models(self):
         self.assertEqual(
             prepare_cursor_model(VOC117_BINDINGS["planner"]),
-            "grok-4.6[fast=false]",
+            "grok-4.6[effort=high,fast=false]",
         )
         self.assertEqual(
             prepare_cursor_model(VOC117_BINDINGS["plan_reviewer"]),
@@ -87,7 +87,7 @@ class Voc117RoleBindingsTests(unittest.TestCase):
         for role in ("reviewer", "reviewer_fast_retry"):
             self.assertEqual(
                 prepare_cursor_model(VOC117_BINDINGS[role]),
-                "grok-4.6[fast=false]",
+                "grok-4.6[effort=high,fast=false]",
             )
         for role in ("implementer", "implementer_escalation"):
             self.assertEqual(
@@ -132,6 +132,8 @@ class Voc117RoleBindingsTests(unittest.TestCase):
             "cursor/grok-4.6[fast=false",
             "cursor/grok-4.6[fast=false,fast=true]",
             "cursor/grok-4.6[fast=]",
+            "cursor/grok-4.6",
+            "cursor/grok-4.6[fast=false]",
         )
         for stored in invalid:
             with self.subTest(stored=stored), self.assertRaises(CursorModelError):

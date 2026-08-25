@@ -94,6 +94,7 @@ class CursorResultTests(unittest.TestCase):
             ("Authentication failed: invalid API key", "authentication"),
             ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
+            ("Available models: auto, cursor-grok-4.6-high", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
         )
         for provider_text, expected in fixtures:
@@ -215,6 +216,7 @@ class CursorResultTests(unittest.TestCase):
             ("Authentication failed: invalid API key", "authentication"),
             ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
+            ("Available models: auto, cursor-grok-4.6-high", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
             ("You've hit your usage limit", "usage_limit"),
             ("HTTP 429: too many requests", "rate_limit"),

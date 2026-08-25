@@ -52,6 +52,8 @@ def classify_error_text(fields: str) -> str:
         )
     ):
         return "authentication"
+    if "available models:" in fields:
+        return "model_unavailable_or_invalid"
     if "model" in fields and any(
         marker in fields
         for marker in ("not available", "not found", "unknown", "unsupported", "invalid")
