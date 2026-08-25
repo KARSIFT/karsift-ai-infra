@@ -112,10 +112,72 @@ class CursorResultTests(unittest.TestCase):
             self.assertIn(f"reason={expected}", diagnostic)
             self.assertNotIn(provider_text, diagnostic)
 
+    def test_github_annotation_exposes_only_the_bounded_diagnostic(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            input_path = scratch_path / "response.json"
+            output_path = scratch_path / "verdict.md"
+            provider_text = "Requested model is not available; secret-like tail"
+            input_path.write_text(
+                json.dumps(
+                    {
+                        "is_error": True,
+                        "subtype": "error_during_execution",
+                        "result": provider_text,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "config/extract-cursor-result.py"),
+                    str(input_path),
+                    str(output_path),
+                    "--allow-waiting",
+                    "--github-annotation",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 75)
+            self.assertIn("::error title=Cursor invocation failed::", completed.stderr)
+            self.assertIn("reason=model_unavailable_or_invalid", completed.stderr)
+            self.assertIn("Raw provider output is withheld.", completed.stderr)
+            self.assertNotIn(provider_text, completed.stderr)
+            self.assertFalse(output_path.exists())
+
+    def test_github_annotation_uses_fixed_message_for_io_failure(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch_path = Path(scratch)
+            missing_input = scratch_path / "provider-response-missing.json"
+            output_path = scratch_path / "verdict.md"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "config/extract-cursor-result.py"),
+                    str(missing_input),
+                    str(output_path),
+                    "--github-annotation",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 75)
+            self.assertEqual(
+                completed.stderr.strip(),
+                "::error title=Cursor invocation failed::Cursor response could not "
+                "be read or written. Raw provider output is withheld.",
+            )
+            self.assertNotIn(str(missing_input), completed.stderr)
+            self.assertFalse(output_path.exists())
+
     def test_review_failure_paths_emit_sanitized_diagnostics_only(self):
         for workflow in self.review_workflows:
             with self.subTest(workflow=workflow.splitlines()[0]):
-                self.assertIn("raw provider output is withheld", workflow)
+                self.assertIn("--github-annotation", workflow)
                 self.assertNotIn("cat /tmp/cursor-stderr.log >&2", workflow)
 
     def test_invalid_or_oversized_responses_fail_closed(self):
