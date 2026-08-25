@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-08-25 — Emit Cursor workflow-command annotations on stdout
+
+- `config/extract-cursor-result.py` now writes only its sanitized
+  `--github-annotation` workflow command to stdout, the channel GitHub Actions
+  parses for annotations; ordinary non-annotation diagnostics remain on stderr.
+- Subprocess regressions assert the exact stdout/stderr boundary for both a
+  classified provider error and a missing response file. Raw provider output,
+  paths, and credentials remain withheld.
+- Role mappings, model parameters, exact-SHA binding, protected checks, and the
+  bounded retry limit are unchanged.
+
 ## 2026-08-25 — Publish bounded Cursor failure reasons as check annotations
 
 - `config/extract-cursor-result.py` now supports a fail-closed

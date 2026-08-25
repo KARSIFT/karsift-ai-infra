@@ -142,10 +142,11 @@ class CursorResultTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(completed.returncode, 75)
-            self.assertIn("::error title=Cursor invocation failed::", completed.stderr)
-            self.assertIn("reason=model_unavailable_or_invalid", completed.stderr)
-            self.assertIn("Raw provider output is withheld.", completed.stderr)
-            self.assertNotIn(provider_text, completed.stderr)
+            self.assertIn("::error title=Cursor invocation failed::", completed.stdout)
+            self.assertIn("reason=model_unavailable_or_invalid", completed.stdout)
+            self.assertIn("Raw provider output is withheld.", completed.stdout)
+            self.assertNotIn(provider_text, completed.stdout)
+            self.assertEqual(completed.stderr, "")
             self.assertFalse(output_path.exists())
 
     def test_github_annotation_uses_fixed_message_for_io_failure(self):
@@ -167,11 +168,12 @@ class CursorResultTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 75)
             self.assertEqual(
-                completed.stderr.strip(),
+                completed.stdout.strip(),
                 "::error title=Cursor invocation failed::Cursor response could not "
                 "be read or written. Raw provider output is withheld.",
             )
-            self.assertNotIn(str(missing_input), completed.stderr)
+            self.assertNotIn(str(missing_input), completed.stdout)
+            self.assertEqual(completed.stderr, "")
             self.assertFalse(output_path.exists())
 
     def test_review_failure_paths_emit_sanitized_diagnostics_only(self):
