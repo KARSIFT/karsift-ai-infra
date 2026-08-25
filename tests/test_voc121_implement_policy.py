@@ -52,6 +52,15 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             '            "${{ steps.source-branch.outputs.model_base_sha }}"',
             WORKFLOW,
         )
+        report_no_change = WORKFLOW[
+            WORKFLOW.index("\n  report-no-change:") : WORKFLOW.index(
+                "\n  publish:", WORKFLOW.index("\n  report-no-change:")
+            )
+        ]
+        self.assertIn(
+            "needs.implement.outputs.has_source_changes != 'true'",
+            report_no_change,
+        )
 
     def test_source_publisher_requires_app_token_without_caller_token_fallback(self):
         source_publisher = WORKFLOW[WORKFLOW.index("\n  publish-source:") :]
