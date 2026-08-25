@@ -115,7 +115,7 @@ def main(argv: list[str]) -> int:
             print(
                 f"::error title=Cursor invocation failed::{exc} "
                 "Raw provider output is withheld.",
-                file=sys.stderr,
+                file=sys.stdout,
             )
         else:
             print(str(exc), file=sys.stderr)
@@ -126,7 +126,7 @@ def main(argv: list[str]) -> int:
             print(
                 f"::error title=Cursor invocation failed::{message} "
                 "Raw provider output is withheld.",
-                file=sys.stderr,
+                file=sys.stdout,
             )
         else:
             print(message, file=sys.stderr)
