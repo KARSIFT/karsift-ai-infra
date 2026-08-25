@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import re
 import sys
@@ -103,20 +102,24 @@ def extract_result(raw: bytes, *, allow_waiting: bool = False) -> str:
 
 def main(argv: list[str]) -> int:
     flags = argv[3:]
-    allowed_flags = {
-        "--allow-waiting",
-        "--github-annotation",
-        "--set-github-output",
-    }
+    failure_record_flags = [
+        flag for flag in flags if flag.startswith("--failure-record=")
+    ]
+    simple_flags = [
+        flag for flag in flags if not flag.startswith("--failure-record=")
+    ]
+    allowed_flags = {"--allow-waiting", "--github-annotation"}
     if (
         len(argv) < 3
         or len(argv) > 6
-        or len(flags) != len(set(flags))
-        or not set(flags).issubset(allowed_flags)
+        or len(simple_flags) != len(set(simple_flags))
+        or not set(simple_flags).issubset(allowed_flags)
+        or len(failure_record_flags) > 1
+        or any(not flag.removeprefix("--failure-record=") for flag in failure_record_flags)
     ):
         print(
             "usage: extract-cursor-result.py INPUT_JSON OUTPUT_TEXT "
-            "[--allow-waiting] [--github-annotation] [--set-github-output]",
+            "[--allow-waiting] [--github-annotation] [--failure-record=PATH]",
             file=sys.stderr,
         )
         return 2
@@ -124,18 +127,29 @@ def main(argv: list[str]) -> int:
     output_path = Path(argv[2])
     allow_waiting = "--allow-waiting" in flags
     github_annotation = "--github-annotation" in flags
-    set_github_output = "--set-github-output" in flags
+    failure_record_path = (
+        Path(failure_record_flags[0].removeprefix("--failure-record="))
+        if failure_record_flags
+        else None
+    )
 
     def emit_failure(error: CursorResponseError) -> None:
-        if set_github_output:
-            github_output = os.environ.get("GITHUB_OUTPUT", "")
-            if github_output:
-                try:
-                    with Path(github_output).open("a", encoding="utf-8") as sink:
-                        sink.write(f"failure_subtype={error.subtype}\n")
-                        sink.write(f"failure_reason={error.reason}\n")
-                except OSError:
-                    pass
+        if failure_record_path is not None:
+            try:
+                failure_record_path.write_text(
+                    json.dumps(
+                        {
+                            "failure_reason": error.reason,
+                            "failure_subtype": error.subtype,
+                            "schema_version": 1,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
         if github_annotation:
             print(
                 f"::error::Cursor invocation failed: {error} "

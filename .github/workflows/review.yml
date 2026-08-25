@@ -113,8 +113,6 @@ jobs:
       sha: ${{ steps.pr.outputs.sha }}
       base_sha: ${{ steps.pr.outputs.base_sha }}
       stale: ${{ steps.pr.outputs.stale }}
-      failure_subtype: ${{ steps.verify.outputs.failure_subtype }}
-      failure_reason: ${{ steps.verify.outputs.failure_reason }}
     permissions:
       contents: read
       pull-requests: read
@@ -407,12 +405,33 @@ jobs:
           # content-free failures only) applies identically here.
           retry_if_transient /tmp/cursor-stderr.log /tmp/verdict-response.json -- run_review
           exit_code=$?
-          if [ "$exit_code" -ne 0 ]; then
-            python3 karsift-ai-infra/config/extract-cursor-result.py \
-              /tmp/verdict-response.json /tmp/verdict.md \
-              --allow-waiting --github-annotation --set-github-output || true
-          fi
           exit "$exit_code"
+
+      - name: Build bounded reviewer failure record
+        id: failure-record
+        if: ${{ failure() && steps.pr.outputs.stale != 'true' && steps.verify.outcome == 'failure' }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/review-failure
+          classification_status=0
+          python3 karsift-ai-infra/config/extract-cursor-result.py \
+            /tmp/verdict-response.json /tmp/verdict.md \
+            --allow-waiting --github-annotation \
+            --failure-record=/tmp/review-failure/failure.json || classification_status=$?
+          if [ "$classification_status" -ne 75 ] ||
+             [ ! -s /tmp/review-failure/failure.json ]; then
+            echo "Bounded reviewer failure classification could not be recorded." >&2
+            exit 1
+          fi
+
+      - name: Upload bounded reviewer failure record
+        if: ${{ always() && steps.failure-record.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: review-failure-${{ inputs.pr_number }}-${{ inputs.expected_head_sha }}
+          path: /tmp/review-failure/failure.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Extract verdict text
         if: steps.pr.outputs.stale != 'true'
@@ -595,12 +614,19 @@ jobs:
 
   publish-review-failure:
     needs: review
-    if: ${{ always() && needs.review.result == 'failure' && needs.review.outputs.stale != 'true' && needs.review.outputs.failure_reason != '' }}
+    if: ${{ always() && needs.review.result == 'failure' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pull-requests: read
     steps:
+      - name: Download bounded reviewer failure record
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: review-failure-${{ inputs.pr_number }}-${{ inputs.expected_head_sha }}
+          path: /tmp/review-failure-input
+
       - name: Checkout exact shared failure-publication policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -614,17 +640,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
-          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
-          FAILURE_SUBTYPE: ${{ needs.review.outputs.failure_subtype }}
-          FAILURE_REASON: ${{ needs.review.outputs.failure_reason }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid > /tmp/live-pr.json
           python3 karsift-ai-infra/config/build-review-failure-comment.py \
-            reviewer /tmp/live-pr.json /tmp/review-failure-comment.md \
-            "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA" "${{ github.run_id }}" \
-            "$FAILURE_SUBTYPE" "$FAILURE_REASON"
+            reviewer /tmp/live-pr.json /tmp/review-failure-input/failure.json \
+            /tmp/review-failure-comment.md "$EXPECTED_HEAD_SHA" \
+            "$EXPECTED_BASE_SHA" "${{ github.run_id }}"
 
       - name: Mint failure-comment App token on the clean runner
         id: app-token
@@ -641,8 +665,8 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          EXPECTED_HEAD_SHA: ${{ needs.review.outputs.sha }}
-          EXPECTED_BASE_SHA: ${{ needs.review.outputs.base_sha }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
         run: |
           set -euo pipefail
           live_pair=$(gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid)

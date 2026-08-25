@@ -1,6 +1,5 @@
 from importlib.util import module_from_spec, spec_from_file_location
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -118,7 +117,7 @@ class CursorResultTests(unittest.TestCase):
             scratch_path = Path(scratch)
             input_path = scratch_path / "response.json"
             output_path = scratch_path / "verdict.md"
-            github_output = scratch_path / "github-output"
+            failure_record = scratch_path / "failure.json"
             provider_text = "Requested model is not available; secret-like tail"
             input_path.write_text(
                 json.dumps(
@@ -130,8 +129,6 @@ class CursorResultTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            env = os.environ.copy()
-            env["GITHUB_OUTPUT"] = str(github_output)
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -140,11 +137,10 @@ class CursorResultTests(unittest.TestCase):
                     str(output_path),
                     "--allow-waiting",
                     "--github-annotation",
-                    "--set-github-output",
+                    f"--failure-record={failure_record}",
                 ],
                 text=True,
                 capture_output=True,
-                env=env,
                 check=False,
             )
             self.assertEqual(completed.returncode, 75)
@@ -155,11 +151,12 @@ class CursorResultTests(unittest.TestCase):
             self.assertEqual(completed.stderr, "")
             self.assertFalse(output_path.exists())
             self.assertEqual(
-                github_output.read_text(encoding="utf-8").splitlines(),
-                [
-                    "failure_subtype=error_during_execution",
-                    "failure_reason=model_unavailable_or_invalid",
-                ],
+                json.loads(failure_record.read_text(encoding="utf-8")),
+                {
+                    "failure_reason": "model_unavailable_or_invalid",
+                    "failure_subtype": "error_during_execution",
+                    "schema_version": 1,
+                },
             )
 
     def test_github_annotation_uses_fixed_message_for_io_failure(self):
@@ -167,6 +164,7 @@ class CursorResultTests(unittest.TestCase):
             scratch_path = Path(scratch)
             missing_input = scratch_path / "provider-response-missing.json"
             output_path = scratch_path / "verdict.md"
+            failure_record = scratch_path / "failure.json"
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -174,6 +172,7 @@ class CursorResultTests(unittest.TestCase):
                     str(missing_input),
                     str(output_path),
                     "--github-annotation",
+                    f"--failure-record={failure_record}",
                 ],
                 text=True,
                 capture_output=True,
@@ -188,16 +187,26 @@ class CursorResultTests(unittest.TestCase):
             self.assertNotIn(str(missing_input), completed.stdout)
             self.assertEqual(completed.stderr, "")
             self.assertFalse(output_path.exists())
+            self.assertEqual(
+                json.loads(failure_record.read_text(encoding="utf-8")),
+                {
+                    "failure_reason": "unspecified",
+                    "failure_subtype": "unspecified",
+                    "schema_version": 1,
+                },
+            )
 
     def test_review_failure_paths_emit_sanitized_diagnostics_only(self):
         for workflow in self.review_workflows:
             with self.subTest(workflow=workflow.splitlines()[0]):
                 self.assertIn("--github-annotation", workflow)
-                self.assertIn("--set-github-output", workflow)
-                self.assertIn(
-                    "failure_reason: ${{ steps.verify.outputs.failure_reason }}",
-                    workflow,
-                )
+                self.assertIn("--failure-record=", workflow)
+                self.assertIn("Upload bounded", workflow)
+                self.assertIn("Download bounded", workflow)
+                self.assertIn("actions/upload-artifact@", workflow)
+                self.assertIn("actions/download-artifact@", workflow)
+                self.assertIn("if-no-files-found: error", workflow)
+                self.assertNotIn("steps.verify.outputs.failure_reason", workflow)
                 self.assertIn("build-review-failure-comment.py", workflow)
                 self.assertIn("ref: ${{ job.workflow_sha }}", workflow)
                 self.assertIn("permission-pull-requests: write", workflow)

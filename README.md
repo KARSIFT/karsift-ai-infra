@@ -171,6 +171,12 @@ A `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, waiting state, or no verdict yet
 (with CI still green) are implementation-remediation no-ops. Only an explicit
 implementation `FAIL` or CI failure can consume the bounded implementation
 retry. A review-job error stays in the isolated reviewer-infrastructure lane.
+After a terminal Cursor invocation failure, that lane writes only a strict
+schema-v1 reason/subtype record and retains it as a one-day workflow artifact.
+A clean publisher downloads and revalidates the bounded record plus the exact
+live PR base/head pair before minting its narrowly scoped App token and posting
+a non-verdict infrastructure comment. Raw provider responses, stderr, prompts,
+environment values, and credentials never enter that artifact or comment.
 
 The implementer job deliberately has no `actions` permission and receives no
 general Actions inspection/dispatch credential. Operator reconciliation is a

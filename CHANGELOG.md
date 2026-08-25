@@ -1,12 +1,28 @@
 # Changelog
 
+## 2026-08-25 — Hand off bounded reviewer failures through artifacts
+
+- Live caller run `32828138123` proved GitHub did not expose step/job outputs
+  from the failed reviewer job to its downstream publisher; the publisher was
+  skipped even though the model step had reached terminal failure.
+- Reviewer and plan-reviewer failure handlers now write a strict schema-v1 JSON
+  record containing only the allowlisted reason and regex-bounded subtype, then
+  upload it with a one-day retention. Dedicated clean publisher jobs download
+  and revalidate that record before minting the narrowly scoped App token.
+- Failure publishers no longer depend on outputs from a failed job. Exact live
+  PR base/head and reusable-workflow SHA binding, non-verdict separation, raw
+  provider-output withholding, role mappings, and retry limits remain intact.
+
 ## 2026-08-25 — Publish bounded reviewer failures from an isolated runner
 
-- Cursor result extraction now exposes only regex/allowlist-constrained
+- Historical note: merge `21a24db` introduced a step-output handoff that the
+  later live run above proved unavailable after the producer job failed. It is
+  superseded by the bounded artifact handoff.
+- Cursor result extraction exposed only regex/allowlist-constrained
   `failure_subtype` and `failure_reason` step outputs after terminal invocation
   failure; raw provider response text and stderr remain withheld.
-- Reviewer and plan-reviewer jobs pass those bounded values to dedicated clean
-  publisher jobs. Each publisher checks out the exact reusable-workflow SHA,
+- Reviewer and plan-reviewer jobs passed those bounded values to dedicated clean
+  publisher jobs. Each publisher checked out the exact reusable-workflow SHA,
   validates the live PR base/head pair and bounded vocabulary, mints the App
   token only after validation, rechecks identity, and posts a non-verdict
   infrastructure-failure comment.
