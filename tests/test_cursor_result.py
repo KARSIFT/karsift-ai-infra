@@ -92,6 +92,7 @@ class CursorResultTests(unittest.TestCase):
             ("You've hit your usage limit for this billing cycle", "usage_limit"),
             ("HTTP 429: too many requests", "rate_limit"),
             ("Authentication failed: invalid API key", "authentication"),
+            ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
         )
@@ -199,6 +200,7 @@ class CursorResultTests(unittest.TestCase):
     def test_empty_response_uses_bounded_stderr_only_for_safe_classification(self):
         fixtures = (
             ("Authentication failed: invalid API key", "authentication"),
+            ("The provided API key is invalid", "authentication"),
             ("Requested model is not available", "model_unavailable_or_invalid"),
             ("Invalid parameter override", "model_parameter_invalid"),
             ("You've hit your usage limit", "usage_limit"),

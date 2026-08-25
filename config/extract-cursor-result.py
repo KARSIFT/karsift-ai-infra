@@ -42,7 +42,13 @@ def classify_error_text(fields: str) -> str:
         return "usage_limit"
     if any(marker in fields for marker in ("rate limit", "too many requests", "http 429")):
         return "rate_limit"
-    if any(marker in fields for marker in ("authentication", "unauthorized", "invalid api key")):
+    if any(marker in fields for marker in ("authentication", "unauthorized", "invalid api key")) or (
+        "api key" in fields
+        and any(
+            marker in fields
+            for marker in ("is invalid", "not valid", "incorrect", "expired", "revoked")
+        )
+    ):
         return "authentication"
     if "model" in fields and any(
         marker in fields
