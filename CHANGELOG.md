@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-25 — Publish bounded reviewer failures from an isolated runner
+
+- Cursor result extraction now exposes only regex/allowlist-constrained
+  `failure_subtype` and `failure_reason` step outputs after terminal invocation
+  failure; raw provider response text and stderr remain withheld.
+- Reviewer and plan-reviewer jobs pass those bounded values to dedicated clean
+  publisher jobs. Each publisher checks out the exact reusable-workflow SHA,
+  validates the live PR base/head pair and bounded vocabulary, mints the App
+  token only after validation, rechecks identity, and posts a non-verdict
+  infrastructure-failure comment.
+- Successful verdict publication, role mappings, parameterized models,
+  exact-SHA review binding, protected checks, and retry limits are unchanged.
+
 ## 2026-08-25 — Emit Cursor workflow-command annotations on stdout
 
 - `config/extract-cursor-result.py` now writes only its sanitized
