@@ -112,7 +112,10 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn("$GITHUB_STEP_SUMMARY", ci_metadata)
         self.assertIn("previous attempt failed deterministic CI before review", self.implement)
         self.assertIn("Reproduce the failure in this", self.implement)
-        self.assertIn("failed_head_sha: ${{ inputs.expected_head_sha }}", self.implement)
+        self.assertIn(
+            "failed_head_sha: ${{ steps.bind-carrier.outputs.expected_head_sha }}",
+            self.implement,
+        )
 
     def test_stale_caller_run_cannot_dispatch_newer_head(self):
         self.assertIn("expected_head_sha:", self.workflow)
@@ -135,6 +138,7 @@ class RemediatePolicyTests(unittest.TestCase):
         self.assertIn("uses: KARSIFT/karsift-ai-infra/.github/workflows/implement.yml@main", retry)
         self.assertIn("attempt: ${{ needs.decide.outputs.next_attempt }}", retry)
         self.assertIn("expected_base_sha: ${{ inputs.expected_base_sha }}", retry)
+        self.assertIn("existing_pr_number: ${{ inputs.pr_number }}", retry)
 
     def test_no_founder_override_or_comment_authority(self):
         self.assertNotIn("founder_username:", self.workflow)
