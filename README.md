@@ -232,13 +232,16 @@ instead of executing from an unreviewed same-repository PR.
 
 When an adopted caller task also authorizes changes to its nested
 `karsift-ai-infra` checkout, `implement.yml` preserves every self-correction
-helper before removing the checkout from caller staging. It commits and bundles
-the authorized source changes separately, then a second clean publisher with an
-infrastructure-scoped App token verifies exact lineage and an explicit branch
-lease before opening a non-closing cross-repository PR. The model runner never
-receives that token, a stale or racing source head fails closed, and caller
-fixtures cannot consume the source carrier until its independently reviewed
-merge SHA is known.
+helper before removing the checkout from caller staging. It commits the
+authorized source changes and binds the exact committed head to one temporary,
+fixed-name ref before creating the separate bundle. The carrier verifies that
+this is the bundle's sole advertised head, verifies the bundle itself, and
+removes the temporary ref on every exit path. A second clean publisher with an
+infrastructure-scoped App token then verifies exact lineage and an explicit
+branch lease before opening a non-closing cross-repository PR. The model runner
+never receives that token, a stale or racing source head fails closed, and
+caller fixtures cannot consume the source carrier until its independently
+reviewed merge SHA is known.
 All PR operations and bounded issue notifications in these clean jobs name the
 calling repository explicitly, because they intentionally have no checked-out
 Git worktree from which GitHub CLI could infer repository context.
