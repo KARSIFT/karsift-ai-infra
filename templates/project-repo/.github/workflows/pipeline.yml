@@ -91,6 +91,10 @@ on:
         required: false
         type: string
         default: "1"
+      existing_pr_number:
+        description: "implement only: existing open implementation PR to resume at attempt 2"
+        required: false
+        type: string
       request:
         description: "plan only: free-text description of the change package to draft"
         required: false
@@ -270,6 +274,7 @@ jobs:
       issue_number: ${{ inputs.issue_number }}
       attempt: ${{ inputs.attempt }}
       integration_branch: "develop"   # "main" for a GitHub-flow-only project
+      existing_pr_number: ${{ inputs.existing_pr_number }}
     secrets: inherit
 
   plan:

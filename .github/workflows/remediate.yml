@@ -504,4 +504,5 @@ jobs:
       integration_branch: ${{ inputs.integration_branch }}
       expected_head_sha: ${{ inputs.expected_head_sha }}
       expected_base_sha: ${{ inputs.expected_base_sha }}
+      existing_pr_number: ${{ inputs.pr_number }}
     secrets: inherit

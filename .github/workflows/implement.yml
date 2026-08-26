@@ -8,6 +8,15 @@ name: implement (reusable)
 # commit/PR machinery around it is provider-agnostic by design and needs no
 # changes in review.yml/merge-gate.yml either way.
 #
+# Current state (VOC-125, 2026-08-26): operator resume of an existing
+# implementation carrier uses `workflow_dispatch` attempt `2` plus
+# `existing_pr_number` on the caller pipeline. `implement.yml` derives
+# immutable `expected_head_sha` / `expected_base_sha` from the live open PR
+# (or binds event-derived SHAs from automatic `remediate.yml`) before
+# `Create implementation branch` and before model resolution. Free-form SHA
+# paste is not an operator interface. Attempt `1` with an existing carrier
+# fails closed; attempt `3` is rejected.
+#
 # Current state (VOC-124, 2026-08-26): the clean `publish-source` App token
 # requests `workflows: write` so an authorized nested infrastructure commit
 # that changes `.github/workflows/**` can be published. The caller `publish`
@@ -82,6 +91,11 @@ on:
         required: false
         type: string
         default: ""
+      existing_pr_number:
+        description: "Attempt 2 operator resume: explicit existing caller PR number for existing-carrier recovery."
+        required: false
+        type: string
+        default: ""
     secrets:
       OPENAI_API_KEY:
         description: "Unused since implementer_escalation moved to OpenCode (2026-07-26) - kept optional in case codex-action escalation is ever re-enabled, see this file's header comment."
@@ -126,6 +140,8 @@ jobs:
       source_integration_sha: ${{ steps.infra-checkout.outputs.base_sha }}
       source_expected_head_sha: ${{ steps.source-branch.outputs.expected_head_sha }}
       risk: ${{ steps.package.outputs.risk }}
+      expected_head_sha: ${{ steps.bind-carrier.outputs.expected_head_sha }}
+      expected_base_sha: ${{ steps.bind-carrier.outputs.expected_base_sha }}
     concurrency:
       # One implementer at a time per adopted package. A queued manual
       # dispatch still has to pass the dependency preflight below, so this is
@@ -286,6 +302,26 @@ jobs:
             echo "Dependency satisfied: $dependency via $merged_sha."
           done < /tmp/task-dependencies.tsv
 
+      - name: Bind existing-carrier recovery identity
+        id: bind-carrier
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pip install --quiet pyyaml
+          python3 karsift-ai-infra/config/bind-existing-carrier-runner.py \
+            --repository "${{ github.repository }}" \
+            --attempt "${{ inputs.attempt }}" \
+            --change-id "${{ inputs.change_id }}" \
+            --package-path "${{ inputs.package_path }}" \
+            --task-id "${{ inputs.task_id }}" \
+            --issue-number "${{ inputs.issue_number }}" \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --existing-pr-number "${{ inputs.existing_pr_number }}" \
+            --expected-head-sha "${{ inputs.expected_head_sha }}" \
+            --expected-base-sha "${{ inputs.expected_base_sha }}" \
+            --github-output "$GITHUB_OUTPUT"
+
       # On attempt 2+ (a remediate.yml retry), resume the existing
       # agent/<change>-<slug> branch instead of always branching fresh off
       # integration_branch. Found live 2026-07-25 on VOC-026-T00 (PR #88):
@@ -328,7 +364,7 @@ jobs:
               fetch origin "$branch"
             remote_head=$(git rev-parse "origin/$branch")
             head_state=$(python3 karsift-ai-infra/config/verify-expected-head.py \
-              --expected-sha "${{ inputs.expected_head_sha }}" \
+              --expected-sha "${{ steps.bind-carrier.outputs.expected_head_sha }}" \
               --current-sha "$remote_head")
             if [ "$head_state" != "CURRENT" ]; then
               echo "Remediation exact-head precondition is $head_state; refusing to modify $branch." >&2
@@ -452,7 +488,7 @@ jobs:
         if: inputs.attempt != '1'
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_BASE_SHA: ${{ inputs.expected_base_sha }}
+          EXPECTED_BASE_SHA: ${{ steps.bind-carrier.outputs.expected_base_sha }}
         run: |
           set -euo pipefail
           pr_number=$(gh pr list --head "${{ steps.branch.outputs.branch }}" --state open --json number -q '.[0].number' 2>/dev/null || echo "")
@@ -463,7 +499,7 @@ jobs:
             check_ok=$(gh pr checks "$pr_number" --json name,state -q \
               '[.[] | select(.name == "review / publish-review")] | length > 0 and all(.state == "SUCCESS")' \
               2>/dev/null || echo "false")
-            if [ "$live_sha" = "${{ inputs.expected_head_sha }}" ] &&
+            if [ "$live_sha" = "${{ steps.bind-carrier.outputs.expected_head_sha }}" ] &&
                [ "$live_base_sha" = "$EXPECTED_BASE_SHA" ] && [ "$check_ok" = "true" ]; then
               header="**Independent verification - bound to commit \`$live_sha\`**"
               task_line="task_id: \`${{ inputs.task_id }}\`"
@@ -545,8 +581,8 @@ jobs:
               echo "guess from or request raw workflow logs. Reproduce the failure in this"
               echo "clean checkout using the repository's documented validation commands,"
               echo "identify the root cause, and implement the smallest in-scope repair."
-              echo "failed_head_sha: ${{ inputs.expected_head_sha }}"
-              echo "failed_base_sha: ${{ inputs.expected_base_sha }}"
+              echo "failed_head_sha: ${{ steps.bind-carrier.outputs.expected_head_sha }}"
+              echo "failed_base_sha: ${{ steps.bind-carrier.outputs.expected_base_sha }}"
             fi
             echo
             echo "## Lessons learned (.karsift/lessons.md, if present)"
@@ -1173,7 +1209,7 @@ jobs:
           PUBLISH_BRANCH: ${{ needs.implement.outputs.branch }}
           PUBLISH_HEAD_SHA: ${{ needs.implement.outputs.head_sha }}
           PUBLISH_INTEGRATION_SHA: ${{ needs.implement.outputs.integration_sha }}
-          EXPECTED_OLD_HEAD: ${{ inputs.expected_head_sha }}
+          EXPECTED_OLD_HEAD: ${{ needs.implement.outputs.expected_head_sha }}
         run: |
           set -euo pipefail
           bundle=/tmp/implementer-publish/implementer-work.bundle

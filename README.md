@@ -444,6 +444,15 @@ a remote reference and restarts the retry from the current integration tip, with
 in the implementer prompt. Stale sibling-task state therefore cannot silently consume the final
 attempt.
 
+Operator resume after automatic remediation stops uses caller `workflow_dispatch`
+`action=implement` with `attempt=2` and `existing_pr_number=<open PR>`. The
+caller forwards only the PR number—not free-form SHAs. `implement.yml` derives
+immutable `expected_head_sha` / `expected_base_sha` from the live open PR (and
+App-signed review metadata when present) before `Create implementation branch`
+and before model resolution. Automatic `remediate.yml` retry continues to pass
+event-derived SHAs and also forwards `pr_number` as `existing_pr_number`.
+Attempt `1` with an existing open carrier fails closed; attempt `3` is rejected.
+
 ## Drafting and issue-creation are two separate steps
 
 `plan.yml` only ever drafts a package and opens a PR for it - it does not open any tracking issues.

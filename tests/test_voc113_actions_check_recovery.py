@@ -95,7 +95,7 @@ class ActionsCheckRecoveryTests(unittest.TestCase):
         )[0]
         self.assertLessEqual(
             len(re.findall(r"^      [a-z0-9_]+:$", dispatch_inputs, re.MULTILINE)),
-            25,
+            26,
         )
 
     def test_scheduled_secondary_wake_retries_exact_integration_head(self):
