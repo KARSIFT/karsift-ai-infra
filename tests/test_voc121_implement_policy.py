@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "config"))
 from implementer_source_carrier import (  # noqa: E402
     CarrierError,
     build_source_pr_body,
+    create_verified_source_bundle,
     nested_worktree_has_changes,
     validate_no_gitlink_paths,
 )
@@ -49,7 +50,9 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
         )
 
     def test_workflow_bundles_nested_edits_before_removal(self):
-        self.assertIn("git -C karsift-ai-infra bundle create /tmp/implementer-source.bundle", WORKFLOW)
+        self.assertIn("implementer_source_carrier.py \\", WORKFLOW)
+        self.assertIn("create-bundle \\", WORKFLOW)
+        self.assertIn("--output /tmp/implementer-source.bundle", WORKFLOW)
         self.assertIn("has_source_changes=true", WORKFLOW)
         self.assertIn("publish-source:", WORKFLOW)
         self.assertIn(
@@ -221,7 +224,12 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             self.git(nested, "commit", "-m", "coordinated source carrier")
             source_head = self.git(nested, "rev-parse", "HEAD").stdout.strip()
             bundle = Path(directory) / "source.bundle"
-            self.git(nested, "bundle", "create", str(bundle), f"{source_base}..HEAD")
+            create_verified_source_bundle(
+                repository=nested,
+                base_sha=source_base,
+                head_sha=source_head,
+                bundle_path=bundle,
+            )
             self.assertTrue(bundle.is_file())
             self.assertNotEqual(source_head, source_base)
 

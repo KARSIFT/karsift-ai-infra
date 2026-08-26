@@ -8,6 +8,13 @@ name: implement (reusable)
 # commit/PR machinery around it is provider-agnostic by design and needs no
 # changes in review.yml/merge-gate.yml either way.
 #
+# Current state (VOC-123, 2026-08-26): nested source bundles advertise one
+# isolated temporary ref bound to the exact committed infrastructure head.
+# Raw object IDs are not used as positive bundle revisions because Git cannot
+# advertise them as bundle heads. Creation verifies the exact sole head and
+# prerequisite, removes the temporary ref on every path, and then hands the
+# credential-free bundle to the existing clean `publish-source` job.
+#
 # Current state (VOC-121, 2026-08-25): nested `karsift-ai-infra/` policy input is
 # never silently discarded when it contains authorized implementer edits.
 # Authorized infrastructure work is committed in the nested checkout, bundled,
@@ -921,8 +928,12 @@ jobs:
             git -C karsift-ai-infra add -A
             git -C karsift-ai-infra commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} coordinated source carrier (attempt ${{ inputs.attempt }})"
             SOURCE_HEAD_SHA=$(git -C karsift-ai-infra rev-parse HEAD)
-            git -C karsift-ai-infra bundle create /tmp/implementer-source.bundle \
-              "${{ steps.infra-checkout.outputs.base_sha }}..$SOURCE_HEAD_SHA"
+            python3 karsift-ai-infra/config/implementer_source_carrier.py \
+              create-bundle \
+              --repository karsift-ai-infra \
+              --base-sha "${{ steps.infra-checkout.outputs.base_sha }}" \
+              --head-sha "$SOURCE_HEAD_SHA" \
+              --output /tmp/implementer-source.bundle
             echo "has_source_changes=true" >> "$GITHUB_OUTPUT"
             echo "source_head_sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
           else
