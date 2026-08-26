@@ -12,6 +12,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+PLAN_WORKFLOW = (ROOT / ".github/workflows/plan.yml").read_text(encoding="utf-8")
 sys.path.insert(0, str(ROOT / "config"))
 
 from implementer_source_carrier import (  # noqa: E402
@@ -180,6 +181,13 @@ class Voc123SourceBundleTests(unittest.TestCase):
                 head_sha=self.head_sha,
                 bundle_path=self.root / "malformed.bundle",
             )
+        with self.assertRaisesRegex(CarrierError, "invalid_head_sha"):
+            create_verified_source_bundle(
+                repository=self.repository,
+                base_sha=self.base_sha,
+                head_sha="not-a-sha",
+                bundle_path=self.root / "malformed-head.bundle",
+            )
 
         self.git("switch", "--orphan", "unrelated-history")
         (self.repository / "other.txt").write_text("other\n", encoding="utf-8")
@@ -230,6 +238,16 @@ class Voc123SourceBundleTests(unittest.TestCase):
         )
 
     def test_caller_and_planner_head_ranges_advertise_expected_head(self):
+        self.assertIn(
+            'git bundle create /tmp/implementer-work.bundle '
+            '"${{ steps.branch.outputs.integration_sha }}..HEAD"',
+            WORKFLOW,
+        )
+        self.assertIn(
+            'git bundle create /tmp/planner-work.bundle '
+            '"${{ steps.branch.outputs.base_sha }}..HEAD"',
+            PLAN_WORKFLOW,
+        )
         for detached in (False, True):
             if detached:
                 self.git("switch", "--detach", self.head_sha)
