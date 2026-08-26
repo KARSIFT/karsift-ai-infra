@@ -79,6 +79,10 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
             REPOSITORY_ROOT
             / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
+        cls.project_pipeline_verify_template = (
+            REPOSITORY_ROOT
+            / "templates/project-repo/.github/workflows/pipeline-verify.yml"
+        ).read_text()
 
     def test_voc102_test_00_contract_path_is_authoritative(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -795,12 +799,12 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         self.assertNotRegex(verifier_runner, r"[\"']logs[\"']")
         self.assertNotRegex(verifier_runner, r"[\"']artifacts[\"']")
 
-        template = self.project_pipeline_template
+        template = self.project_pipeline_verify_template
         self.assertIn("verify-auto-advance-live-evidence", template)
         self.assertIn("verify-ready-for-review-reuse", template)
-        self.assertIn("verify-remediate-operator-ownership]", template)
-        template_auto_advance = template.split("  auto-advance:", 1)[1].split(
-            "  verify-auto-advance-live-evidence:", 1
+        self.assertIn("verify-post-promotion-workflow]", template)
+        template_auto_advance = self.project_pipeline_template.split("  auto-advance:", 1)[1].split(
+            "  live-evidence-reconcile:", 1
         )[0]
         self.assertNotIn("secrets: inherit", template_auto_advance)
         self.assertEqual(
@@ -815,7 +819,7 @@ class AutoAdvanceOwnershipTests(unittest.TestCase):
         )
         template_verify = template.split(
             "  verify-auto-advance-live-evidence:", 1
-        )[1].split("  live-evidence-reconcile:", 1)[0]
+        )[1].split("  verify-ready-for-review-reuse:", 1)[0]
         self.assertIn("actions: read", template_verify)
         self.assertNotIn("actions: write", template_verify)
         self.assertNotIn("secrets:", template_verify)

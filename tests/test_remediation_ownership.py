@@ -57,16 +57,16 @@ class RemediationOwnershipTests(unittest.TestCase):
 
     def test_caller_template_exposes_read_only_remediation_verifier(self):
         template = (
-            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+            ROOT / "templates/project-repo/.github/workflows/pipeline-verify.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "verify-remediate-operator-ownership]",
+            "verify-post-promotion-workflow]",
             template,
         )
         self.assertIn("  verify-remediate-operator-ownership:", template)
         verifier_block = template.split(
             "  verify-remediate-operator-ownership:", 1
-        )[1].split("\n  live-evidence-reconcile:", 1)[0]
+        )[1].split("\n  verify-promotion-check-recovery:", 1)[0]
         self.assertIn("actions: read", verifier_block)
         self.assertIn("contents: read", verifier_block)
         self.assertIn("issues: read", verifier_block)

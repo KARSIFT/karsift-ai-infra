@@ -1249,6 +1249,9 @@ class WorkflowContractTests(unittest.TestCase):
         template = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
+        verify_template = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline-verify.yml"
+        ).read_text()
         self.assertIn("ready-for-review-reuse:", template)
         self.assertIn("needs: [ready-for-review-reuse]", template)
         self.assertIn("always() &&", template)
@@ -1265,12 +1268,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("if: inputs.event_action == 'ready_for_review'", reuse_workflow)
         self.assertIn(
             "expected_proof_head_sha: ${{ github.sha }}",
-            template,
+            verify_template,
         )
-        self.assertNotIn("verify_reuse_proof_head_sha:", template)
-        self.assertIn("source_pr_number:", template)
-        self.assertIn("expected_source_head_sha:", template)
-        self.assertIn("expected_source_base_sha:", template)
+        self.assertNotIn("verify_reuse_proof_head_sha:", verify_template)
+        self.assertIn("source_pr_number:", verify_template)
+        self.assertIn("expected_source_head_sha:", verify_template)
+        self.assertIn("expected_source_base_sha:", verify_template)
         self.assertIn("name: decide (${{ inputs.event_action }})", reuse_workflow)
         self.assertIn("Select the fail-closed full path after evaluation failure", reuse_workflow)
         self.assertIn("steps.fail-closed.outputs.outcome", reuse_workflow)
