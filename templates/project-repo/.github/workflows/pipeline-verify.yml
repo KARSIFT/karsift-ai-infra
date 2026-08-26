@@ -1,0 +1,153 @@
+name: pipeline-verify
+
+# Thin read-only verifier dispatch for KARSIFT/karsift-ai-infra reusable workflows.
+# Relocated from pipeline.yml (VOC-126) so project-repo pipeline.yml can expose
+# existing_pr_number while each workflow_dispatch block stays within GitHub's
+# 25-input maximum. Dispatch read-only verifiers here; mutating operator-loop
+# actions remain on pipeline.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Which read-only verifier to run"
+        required: true
+        type: choice
+        options: [verify-auto-advance-live-evidence, verify-ready-for-review-reuse, verify-remediate-operator-ownership, verify-promotion-check-recovery, verify-post-promotion-workflow]
+        default: verify-auto-advance-live-evidence
+      change_id:
+        description: "verify-remediate-operator-ownership only: adopted package change id"
+        required: false
+        type: string
+      package_path:
+        description: "verify-remediate-operator-ownership only: canonical package directory path"
+        required: false
+        type: string
+      task_id:
+        description: "verify-remediate-operator-ownership only: task id"
+        required: false
+        type: string
+      live_evidence_run_id:
+        description: "verify-remediate-operator-ownership only: predecessor remediate pipeline run id"
+        required: false
+        type: string
+      live_evidence_pr_number:
+        description: "verify-remediate-operator-ownership only: target PR number"
+        required: false
+        type: string
+      promotion_pr_number:
+        description: "verify-promotion-check-recovery and verify-post-promotion-workflow: target promotion PR number"
+        required: false
+        type: string
+      verify_source_run_id:
+        description: "verify-auto-advance-live-evidence only: predecessor close pipeline run id"
+        required: false
+        type: string
+      verify_waiting_pr_number:
+        description: "verify-auto-advance-live-evidence only: draft evidence-carrier PR number"
+        required: false
+        type: string
+      verify_change_id:
+        description: "verify-auto-advance-live-evidence only: adopted package change id"
+        required: false
+        type: string
+      verify_task_id:
+        description: "verify-auto-advance-live-evidence only: operator-owned task id"
+        required: false
+        type: string
+      verify_package_path:
+        description: "verify-auto-advance-live-evidence only: canonical package directory path"
+        required: false
+        type: string
+      verify_ready_run_id:
+        description: "verify-ready-for-review-reuse only: ready_for_review pipeline run id"
+        required: false
+        type: string
+      verify_prior_run_id:
+        description: "verify-ready-for-review-reuse only: prior successful pipeline run id"
+        required: false
+        type: string
+      verify_reuse_source_pr_number:
+        description: "verify-ready-for-review-reuse only: source transition pull request number"
+        required: false
+        type: string
+      verify_reuse_source_head_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed head SHA"
+        required: false
+        type: string
+      verify_reuse_source_base_sha:
+        description: "verify-ready-for-review-reuse only: exact source reviewed base SHA"
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  verify-auto-advance-live-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-auto-advance-live-evidence'
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-auto-advance-live-evidence.yml@main
+    with:
+      source_run_id: ${{ inputs.verify_source_run_id }}
+      waiting_pr_number: ${{ inputs.verify_waiting_pr_number }}
+      change_id: ${{ inputs.verify_change_id }}
+      task_id: ${{ inputs.verify_task_id }}
+      package_path: ${{ inputs.verify_package_path }}
+      integration_branch: "develop"
+
+  verify-ready-for-review-reuse:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-ready-for-review-reuse'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-ready-for-review-reuse.yml@main
+    with:
+      ready_run_id: ${{ inputs.verify_ready_run_id }}
+      prior_run_id: ${{ inputs.verify_prior_run_id }}
+      source_pr_number: ${{ inputs.verify_reuse_source_pr_number }}
+      expected_source_head_sha: ${{ inputs.verify_reuse_source_head_sha }}
+      expected_source_base_sha: ${{ inputs.verify_reuse_source_base_sha }}
+      expected_proof_head_sha: ${{ github.sha }}
+
+  verify-remediate-operator-ownership:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-remediate-operator-ownership'
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-remediate-operator-ownership.yml@main
+    with:
+      source_run_id: ${{ inputs.live_evidence_run_id }}
+      pr_number: ${{ inputs.live_evidence_pr_number }}
+      change_id: ${{ inputs.change_id }}
+      task_id: ${{ inputs.task_id }}
+      package_path: ${{ inputs.package_path }}
+      integration_branch: "develop"
+
+  verify-promotion-check-recovery:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-promotion-check-recovery'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-promotion-check-recovery.yml@main
+    with:
+      promotion_pr_number: ${{ inputs.promotion_pr_number }}
+
+  verify-post-promotion-workflow:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'verify-post-promotion-workflow'
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/verify-post-promotion-workflow.yml@main
+    with:
+      promotion_pr_number: ${{ inputs.promotion_pr_number }}

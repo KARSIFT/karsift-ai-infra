@@ -428,7 +428,8 @@ mistaken for permission to continue.
 
 The ownership classifier is read-only. Only the non-model carrier publisher receives an App token
 for contents/issues/pull-request writes, and the fail-closed notifier receives issue-write only.
-Neither receives Actions-write or model credentials. A separate read-only
+Neither receives Actions-write or model credentials. Read-only verifier dispatch
+uses caller `pipeline-verify.yml` (VOC-126); the separate reusable
 `verify-auto-advance-live-evidence.yml` workflow validates the later controlled source-run/carrier
 proof from Actions, issue, and PR metadata only—never logs or artifacts.
 
