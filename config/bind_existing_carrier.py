@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +36,53 @@ class BindResult:
 class BindFailure:
     code: str
     detail: str = ""
+
+
+@dataclass(frozen=True)
+class LsRemoteProbeResult:
+    status: str
+    head_sha: str | None = None
+
+
+@dataclass(frozen=True)
+class OpenPrListProbeResult:
+    status: str
+    pr_number: str | None = None
+
+
+def interpret_ls_remote_probe(*, returncode: int, stdout: str) -> LsRemoteProbeResult:
+    """Distinguish confirmed absence from transport/auth probe failure."""
+    if returncode != 0:
+        return LsRemoteProbeResult(status="PROBE_FAILED")
+    text = stdout.strip()
+    if not text:
+        return LsRemoteProbeResult(status="OK_ABSENT")
+    line = text.splitlines()[0]
+    parts = line.split()
+    if not parts:
+        return LsRemoteProbeResult(status="OK_ABSENT")
+    sha = parts[0]
+    if not _valid_sha(sha):
+        return LsRemoteProbeResult(status="PROBE_FAILED")
+    return LsRemoteProbeResult(status="OK_PRESENT", head_sha=sha)
+
+
+def interpret_open_pr_list_probe(*, returncode: int, stdout: str) -> OpenPrListProbeResult:
+    """Distinguish confirmed no open PR from gh API/transport failure."""
+    if returncode != 0:
+        return OpenPrListProbeResult(status="PROBE_FAILED")
+    try:
+        items = json.loads(stdout or "[]")
+    except json.JSONDecodeError:
+        return OpenPrListProbeResult(status="PROBE_FAILED")
+    if not isinstance(items, list):
+        return OpenPrListProbeResult(status="PROBE_FAILED")
+    if not items:
+        return OpenPrListProbeResult(status="OK_ABSENT")
+    number = str(items[0].get("number") or "")
+    if not number:
+        return OpenPrListProbeResult(status="PROBE_FAILED")
+    return OpenPrListProbeResult(status="OK_PRESENT", pr_number=number)
 
 
 def _normalize_sha(value: str) -> str:
@@ -290,17 +338,19 @@ def bind_existing_carrier(
     if head_state != "CURRENT":
         return BindFailure("STALE_HEAD", head_state)
 
-    if review_comments is not None:
-        review_state = validate_review_comments(
-            review_comments,
-            head_sha=bound_head,
-            base_sha=bound_base,
-            task_id=task_id,
-            package_path=package_path,
-            issue_number=issue_number,
-        )
-        if review_state == "FOREIGN_REVIEW":
-            return BindFailure("FOREIGN_REVIEW")
+    if review_comments is None:
+        return BindFailure("REVIEW_COMMENTS_UNAVAILABLE")
+
+    review_state = validate_review_comments(
+        review_comments,
+        head_sha=bound_head,
+        base_sha=bound_base,
+        task_id=task_id,
+        package_path=package_path,
+        issue_number=issue_number,
+    )
+    if review_state == "FOREIGN_REVIEW":
+        return BindFailure("FOREIGN_REVIEW")
 
     return BindResult(
         expected_head_sha=bound_head,

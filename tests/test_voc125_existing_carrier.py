@@ -2,22 +2,39 @@
 
 from __future__ import annotations
 
+import json
+import sys
 import unittest
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys_path = ROOT / "config"
-import sys
-
-sys.path.insert(0, str(sys_path))
+sys.path.insert(0, str(ROOT / "config"))
 
 from bind_existing_carrier import (  # noqa: E402
     BindFailure,
+    LsRemoteProbeResult,
+    OpenPrListProbeResult,
     bind_existing_carrier,
+    interpret_ls_remote_probe,
+    interpret_open_pr_list_probe,
     validate_implement_pr_metadata,
     validate_review_comments,
 )
 
+
+def load_bind_runner():
+    path = ROOT / "config/bind-existing-carrier-runner.py"
+    spec = spec_from_file_location("bind_existing_carrier_runner", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+BIND_RUNNER = load_bind_runner()
 
 HEAD = "0b7be8c531be8300d5a1d5534acc83bf4d6a1791"
 BASE = "e910eb4a21d48bbb5b3e0c30b8ee647d64683dbe"
@@ -338,10 +355,474 @@ class Voc125ExistingCarrierTests(unittest.TestCase):
             has_remote_branch=True,
             open_pr_number="1012",
             pr_data=pr_data(),
-            review_comments=None,
+            review_comments=[],
         )
         self.assertEqual(result.expected_head_sha, HEAD)
         self.assertEqual(result.expected_base_sha, BASE)
+
+    def test_malformed_sha_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="not-a-sha",
+            expected_base_sha=BASE,
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("MALFORMED_SHA"))
+
+    def test_attempt1_with_existing_pr_number_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=1,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=None,
+            has_remote_branch=False,
+            open_pr_number=None,
+            pr_data=None,
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("ATTEMPT1_WITH_EXISTING_PR_NUMBER"))
+
+    def test_attempt1_with_sha_inputs_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=1,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="",
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            issue_state="OPEN",
+            remote_branch_head=None,
+            has_remote_branch=False,
+            open_pr_number=None,
+            pr_data=None,
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("ATTEMPT1_WITH_SHA_INPUTS"))
+
+    def test_wrong_pr_missing_pr_data_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=None,
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("WRONG_PR"))
+
+    def test_wrong_pr_number_mismatch_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(number="1099"),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("WRONG_PR"))
+
+    def test_wrong_pr_closed_state_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(state="CLOSED"),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("WRONG_PR"))
+
+    def test_wrong_pr_other_repository_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(repository="KARSIFT/other-repo"),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("WRONG_PR"))
+
+    def test_wrong_pr_merged_state_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(state="MERGED"),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("WRONG_PR"))
+
+    def test_missing_remote_branch_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=None,
+            has_remote_branch=False,
+            open_pr_number="1012",
+            pr_data=pr_data(),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("STALE_HEAD"))
+
+    def test_pr_number_with_matching_supplied_shas_succeeds(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(),
+            review_comments=[valid_review_comment()],
+        )
+        self.assertEqual(result.expected_head_sha, HEAD)
+        self.assertEqual(result.expected_base_sha, BASE)
+
+    def test_changed_head_bind_race_fails_closed(self):
+        raced = "cccccccccccccccccccccccccccccccccccccccc"
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=raced,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(),
+            review_comments=None,
+        )
+        self.assertEqual(result.code, "STALE_HEAD")
+
+    def test_review_comments_unavailable_fails_closed(self):
+        result = bind_existing_carrier(
+            attempt=2,
+            change_id=CHANGE_ID,
+            package_path=PACKAGE_PATH,
+            task_id=TASK_ID,
+            issue_number=ISSUE,
+            integration_branch=INTEGRATION,
+            repository=REPO,
+            existing_pr_number="1012",
+            expected_head_sha="",
+            expected_base_sha="",
+            issue_state="OPEN",
+            remote_branch_head=HEAD,
+            has_remote_branch=True,
+            open_pr_number="1012",
+            pr_data=pr_data(),
+            review_comments=None,
+        )
+        self.assertEqual(result, BindFailure("REVIEW_COMMENTS_UNAVAILABLE"))
+
+    def test_interpret_ls_remote_probe_absent_success_and_failure(self):
+        absent = interpret_ls_remote_probe(returncode=0, stdout="")
+        self.assertEqual(absent.status, "OK_ABSENT")
+        self.assertIsNone(absent.head_sha)
+
+        present = interpret_ls_remote_probe(
+            returncode=0,
+            stdout=f"{HEAD}\trefs/heads/{BRANCH}\n",
+        )
+        self.assertEqual(present.status, "OK_PRESENT")
+        self.assertEqual(present.head_sha, HEAD)
+
+        failed = interpret_ls_remote_probe(returncode=128, stdout="")
+        self.assertEqual(failed.status, "PROBE_FAILED")
+
+    def test_interpret_open_pr_list_probe_absent_success_and_failure(self):
+        absent = interpret_open_pr_list_probe(returncode=0, stdout="[]")
+        self.assertEqual(absent.status, "OK_ABSENT")
+        self.assertIsNone(absent.pr_number)
+
+        present = interpret_open_pr_list_probe(
+            returncode=0,
+            stdout=json.dumps([{"number": 1012}]),
+        )
+        self.assertEqual(present.status, "OK_PRESENT")
+        self.assertEqual(present.pr_number, "1012")
+
+        failed = interpret_open_pr_list_probe(returncode=1, stdout="")
+        self.assertEqual(failed.status, "PROBE_FAILED")
+
+        invalid = interpret_open_pr_list_probe(returncode=0, stdout="not-json")
+        self.assertEqual(invalid.status, "PROBE_FAILED")
+
+    def test_git_ls_remote_command_uses_credential_helper_without_token(self):
+        command = BIND_RUNNER.git_ls_remote_command(branch=BRANCH)
+        self.assertIn("credential.https://github.com.helper=!gh auth git-credential", command)
+        self.assertNotIn("GH_TOKEN", command)
+        self.assertNotIn("x-access-token", " ".join(command))
+
+    def test_probe_remote_branch_authenticates_via_env_not_argv(self):
+        with mock.patch.object(BIND_RUNNER.subprocess, "run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="")
+            BIND_RUNNER.probe_remote_branch(
+                branch=BRANCH,
+                env={"GH_TOKEN": "fixture-token"},
+            )
+        command = run.call_args.args[0]
+        env = run.call_args.kwargs["env"]
+        self.assertIn("gh auth git-credential", " ".join(command))
+        self.assertNotIn("fixture-token", " ".join(command))
+        self.assertEqual(env["GH_TOKEN"], "fixture-token")
+
+    def test_runner_fails_closed_when_remote_probe_fails(self):
+        argv = [
+            "bind-existing-carrier-runner.py",
+            "--repository",
+            REPO,
+            "--attempt",
+            "1",
+            "--change-id",
+            CHANGE_ID,
+            "--package-path",
+            PACKAGE_PATH,
+            "--task-id",
+            TASK_ID,
+            "--issue-number",
+            ISSUE,
+            "--integration-branch",
+            INTEGRATION,
+        ]
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "fixture-token"}, clear=False):
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "gh_json",
+                    return_value={"state": "OPEN"},
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_remote_branch",
+                    return_value=LsRemoteProbeResult(status="PROBE_FAILED"),
+                ),
+            ):
+                exit_code = BIND_RUNNER.main()
+        self.assertEqual(exit_code, 1)
+
+    def test_runner_fails_closed_when_open_pr_probe_fails(self):
+        argv = [
+            "bind-existing-carrier-runner.py",
+            "--repository",
+            REPO,
+            "--attempt",
+            "1",
+            "--change-id",
+            CHANGE_ID,
+            "--package-path",
+            PACKAGE_PATH,
+            "--task-id",
+            TASK_ID,
+            "--issue-number",
+            ISSUE,
+            "--integration-branch",
+            INTEGRATION,
+        ]
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "fixture-token"}, clear=False):
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "gh_json",
+                    return_value={"state": "OPEN"},
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_remote_branch",
+                    return_value=LsRemoteProbeResult(status="OK_ABSENT"),
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_open_pr",
+                    return_value=OpenPrListProbeResult(status="PROBE_FAILED"),
+                ),
+            ):
+                exit_code = BIND_RUNNER.main()
+        self.assertEqual(exit_code, 1)
+
+    def test_runner_attempt1_succeeds_when_probes_confirm_absence(self):
+        argv = [
+            "bind-existing-carrier-runner.py",
+            "--repository",
+            REPO,
+            "--attempt",
+            "1",
+            "--change-id",
+            CHANGE_ID,
+            "--package-path",
+            PACKAGE_PATH,
+            "--task-id",
+            TASK_ID,
+            "--issue-number",
+            ISSUE,
+            "--integration-branch",
+            INTEGRATION,
+        ]
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "fixture-token"}, clear=False):
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "gh_json",
+                    return_value={"state": "OPEN"},
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_remote_branch",
+                    return_value=LsRemoteProbeResult(status="OK_ABSENT"),
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_open_pr",
+                    return_value=OpenPrListProbeResult(status="OK_ABSENT"),
+                ),
+            ):
+                exit_code = BIND_RUNNER.main()
+        self.assertEqual(exit_code, 0)
+
+    def test_runner_attempt1_fails_when_probe_shows_existing_carrier(self):
+        argv = [
+            "bind-existing-carrier-runner.py",
+            "--repository",
+            REPO,
+            "--attempt",
+            "1",
+            "--change-id",
+            CHANGE_ID,
+            "--package-path",
+            PACKAGE_PATH,
+            "--task-id",
+            TASK_ID,
+            "--issue-number",
+            ISSUE,
+            "--integration-branch",
+            INTEGRATION,
+        ]
+        with mock.patch.dict("os.environ", {"GH_TOKEN": "fixture-token"}, clear=False):
+            with (
+                mock.patch.object(sys, "argv", argv),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "gh_json",
+                    return_value={"state": "OPEN"},
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_remote_branch",
+                    return_value=LsRemoteProbeResult(
+                        status="OK_PRESENT",
+                        head_sha=HEAD,
+                    ),
+                ),
+                mock.patch.object(
+                    BIND_RUNNER,
+                    "probe_open_pr",
+                    return_value=OpenPrListProbeResult(status="OK_ABSENT"),
+                ),
+            ):
+                exit_code = BIND_RUNNER.main()
+        self.assertEqual(exit_code, 1)
 
     def test_implement_workflow_declares_bind_step_before_branch(self):
         self.assertIn("existing_pr_number:", self.implement)
