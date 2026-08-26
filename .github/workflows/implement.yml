@@ -8,6 +8,12 @@ name: implement (reusable)
 # commit/PR machinery around it is provider-agnostic by design and needs no
 # changes in review.yml/merge-gate.yml either way.
 #
+# Current state (VOC-124, 2026-08-26): the clean `publish-source` App token
+# requests `workflows: write` so an authorized nested infrastructure commit
+# that changes `.github/workflows/**` can be published. The caller `publish`
+# token still omits that permission and still rejects caller workflow-file
+# changes before push.
+#
 # Current state (VOC-123, 2026-08-26): nested source bundles advertise one
 # isolated temporary ref bound to the exact committed infrastructure head.
 # Raw object IDs are not used as positive bundle revisions because Git cannot
@@ -1250,9 +1256,9 @@ jobs:
           Closes #${{ inputs.issue_number }}.
 
           Implemented by the implementer role (attempt ${{ inputs.attempt }} of 2,
-          model resolved from karsift-ai-infra/config/roles.yml). Independent review
-          and required human approval are still pending - this PR is not authorized
-          to merge on its own.
+          model resolved from karsift-ai-infra/config/roles.yml). Independent
+          exact-revision review is still pending - this PR is not authorized to
+          merge on its own.
 
           Risk classification: $PACKAGE_RISK
 
@@ -1283,7 +1289,9 @@ jobs:
 
   # Isolated infrastructure carrier publication. The implementer runner never
   # receives a token scoped to KARSIFT/karsift-ai-infra; only this clean job
-  # mints that least-privilege credential and consumes the nested-source bundle.
+  # mints that least-privilege credential (including workflows: write for
+  # authorized nested workflow-file commits) and consumes the nested-source
+  # bundle. The caller `publish` job still omits workflows: write.
   publish-source:
     needs: implement
     if: needs.implement.outputs.has_source_changes == 'true'
@@ -1324,6 +1332,7 @@ jobs:
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Publish exact infrastructure bundle from an isolated bare repository
         env:

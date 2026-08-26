@@ -614,7 +614,8 @@ class LiveEvidenceReconcilePolicyTests(unittest.TestCase):
             'property "workflow_sha" is not defined in object type',
             self_ci,
         )
-        implement_job, publish_job = self.implement.split("\n  publish:", 1)
+        implement_job, remainder = self.implement.split("\n  publish:", 1)
+        publish_job, _ = remainder.split("\n  publish-source:", 1)
         self.assertNotIn("create-github-app-token@", implement_job)
         self.assertNotIn("APP_TOKEN", implement_job)
         self.assertGreaterEqual(implement_job.count("persist-credentials: false"), 2)

@@ -236,12 +236,16 @@ helper before removing the checkout from caller staging. It commits the
 authorized source changes and binds the exact committed head to one temporary,
 fixed-name ref before creating the separate bundle. The carrier verifies that
 this is the bundle's sole advertised head, verifies the bundle itself, and
-removes the temporary ref on every exit path. A second clean publisher with an
-infrastructure-scoped App token then verifies exact lineage and an explicit
-branch lease before opening a non-closing cross-repository PR. The model runner
-never receives that token, a stale or racing source head fails closed, and
-caller fixtures cannot consume the source carrier until its independently
-reviewed merge SHA is known.
+removes the temporary ref on every exit path. A second clean publisher with an infrastructure-scoped App token that requests
+`workflows: write` (in addition to contents, issues, and pull requests) then
+verifies exact lineage and an explicit branch lease before opening a
+non-closing cross-repository PR. That permission covers authorized nested
+commits that change `.github/workflows/**`; the caller `publish` token still
+omits `workflows: write` and still rejects every caller
+`.github/workflows/**` change before push. The model runner never receives the
+infrastructure token, a stale or racing source head fails closed, and caller
+fixtures cannot consume the source carrier until its independently reviewed
+merge SHA is known.
 All PR operations and bounded issue notifications in these clean jobs name the
 calling repository explicitly, because they intentionally have no checked-out
 Git worktree from which GitHub CLI could infer repository context.
