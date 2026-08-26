@@ -213,6 +213,11 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
         dispatch.assert_not_called()
 
     def test_replan_rerun_refuses_second_attempt_selected_run(self):
+        pending_view = [
+            {"name": "governance-policy", "state": "PENDING"},
+            {"name": "validate", "state": "SUCCESS"},
+            {"name": "ci / ci", "state": "SUCCESS"},
+        ]
         cancelled_view = [
             {
                 "name": "governance-policy",
@@ -229,7 +234,7 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
             runner,
             "run_metadata_phase",
             side_effect=[
-                (True, gate_summary, [], cancelled_view),
+                (True, gate_summary, [], pending_view),
                 (True, gate_summary, [], cancelled_view),
             ],
         ), mock.patch.object(
@@ -246,6 +251,11 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
         dispatch.assert_not_called()
 
     def test_replan_rerun_still_binds_pr_head_branch_event_and_workflow(self):
+        pending_view = [
+            {"name": "governance-policy", "state": "PENDING"},
+            {"name": "validate", "state": "SUCCESS"},
+            {"name": "ci / ci", "state": "SUCCESS"},
+        ]
         cancelled_view = [
             {
                 "name": "governance-policy",
@@ -273,6 +283,7 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
                 runner,
                 "run_metadata_phase",
                 side_effect=[
+                    (True, gate_summary, [], pending_view),
                     (True, gate_summary, [], cancelled_view),
                 ],
             ), mock.patch.object(
