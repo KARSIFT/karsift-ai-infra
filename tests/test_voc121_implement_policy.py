@@ -81,6 +81,12 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             source_publisher,
         )
         self.assertNotIn("|| github.token", source_publisher)
+        mint = source_publisher[
+            source_publisher.index(
+                "- name: Mint least-privilege App token for infrastructure repository"
+            ) :
+        ]
+        self.assertIn("permission-workflows: write", mint)
 
     def test_source_publisher_refuses_stale_or_racing_branch_heads(self):
         source_publisher = WORKFLOW[WORKFLOW.index("\n  publish-source:") :]

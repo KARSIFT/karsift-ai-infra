@@ -265,6 +265,31 @@ class Voc121SourceCarrierPublisherTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("unverifiable bundle", completed.stderr)
 
+    def test_workflow_file_source_bundle_is_not_rejected_by_source_publisher_checks(self):
+        work = self.clone("source-workflow-file")
+        branch = "agent/voc-124-voc-124-t00"
+        base_sha = git(work, "rev-parse", "HEAD")
+        git(work, "checkout", "-b", branch)
+        self.commit(
+            work,
+            ".github/workflows/recover-actions-checks.yml",
+            "name: recover-actions-checks\n",
+            "authorized workflow-file source carrier",
+        )
+        bundle, head = self.create_source_bundle(work, base_sha, "workflow-source.bundle")
+        completed = self.publish_source(
+            bundle=bundle,
+            branch=branch,
+            head=head,
+            integration_sha=base_sha,
+            attempt=1,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("cannot publish workflow-file changes", completed.stderr)
+        self.assertEqual(
+            git(self.root, "--git-dir", str(self.remote), "rev-parse", branch), head
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
