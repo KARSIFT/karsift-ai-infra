@@ -212,7 +212,11 @@ event, workflow name/path, and failed conclusion before rerunning that same run
 ID. Automatic recovery accepts only the original run attempt, preserving the
 one-rerun ceiling. Only a genuinely absent context uses the allowlisted
 workflow-dispatch bootstrap; pending rows wait, and ambiguous, status-only,
-foreign, or unreadable rows fail closed. Only when both evidence views pass may
+foreign, or unreadable rows fail closed. Promotion recovery re-evaluates the
+required PR view during the bounded wait, not only from the first snapshot, so
+a context that appears later as a cancelled or failed selected pull-request row
+is still rerun in the same invocation after the same identity checks. Only when
+both evidence views pass may
 the release job
 publish same-SHA success statuses for
 `governance-policy`, `validate`, and `ci / ci`, linked to the release run. The
@@ -567,8 +571,10 @@ planner-authored) aren't covered - the release gate only applies going forward.
 Close/reopen or draft/ready transitions on a promotion pull request do not
 recover missing required checks. VOC-121 recovery reruns a ruleset-selected
 failed/cancelled pull-request run in place and retains VOC-113's genuine
-allowlisted dispatch only for a missing required row, with a bounded
-1800-second fail-closed wait. Recovery calls are serialized by mode and target
+allowlisted dispatch only for a missing required row. VOC-122 replans against
+GitHub's current required PR view during the bounded 1800-second fail-closed
+wait so a row that appears after the first snapshot can still be rerun in the
+same invocation. Recovery calls are serialized by mode and target
 SHA. The caller template's hourly
 schedule also resolves the current integration head and performs a secondary
 integration recovery wake; it is a mutation-free no-op after both required

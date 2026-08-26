@@ -330,6 +330,9 @@ jobs:
           echo "head_sha=$(jq -r .headRefOid <<<"$live")" >> "$GITHUB_OUTPUT"
 
       - name: Recover missing exact-head promotion checks
+        # Promotion recovery replans against GitHub's current required PR view
+        # during the bounded wait so a row that appears after the first snapshot
+        # can still be rerun in this invocation.
         id: recovery
         if: steps.promotion.outputs.needed == 'true'
         env:

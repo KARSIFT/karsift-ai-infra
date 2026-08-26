@@ -365,6 +365,118 @@ def collect_missing(
     return missing
 
 
+def apply_promotion_pr_recovery_plan(
+    *,
+    token: str,
+    repository: str,
+    target_sha: str,
+    branch_ref: str,
+    pr_number: int,
+    pr_required_checks: list[dict[str, Any]],
+    rerun_ids: set[int],
+    dispatched_contexts: set[str],
+    dispatched: list[str],
+) -> None:
+    """Plan and apply promotion recovery for GitHub's current required PR view."""
+
+    rerun_plans, dispatch_contexts = plan_required_check_recovery(
+        pr_required_checks,
+        required_contexts("promotion_pr"),
+        repository=repository,
+    )
+    for rerun_plan in rerun_plans:
+        if rerun_plan.run_id in rerun_ids:
+            continue
+        run_payload = load_selected_workflow_run(
+            token,
+            repository,
+            rerun_plan.run_id,
+        )
+        validate_selected_workflow_run(
+            run_payload,
+            rerun_plan,
+            target_sha=target_sha,
+            branch_ref=branch_ref,
+            pr_number=pr_number,
+        )
+        rerun_selected_workflow(
+            token,
+            repository,
+            rerun_plan.run_id,
+        )
+        rerun_ids.add(rerun_plan.run_id)
+        dispatched.append(f"rerun:{rerun_plan.run_id}")
+
+    plans = plan_recovery_dispatches(
+        mode="promotion_pr",
+        target_sha=target_sha,
+        branch_ref=branch_ref,
+        pr_number=pr_number,
+        integration_deploy_required=True,
+    )
+    # These contexts are absent from GitHub's required PR view.
+    # A same-head successful workflow run did not create the required row,
+    # so it must not suppress the bootstrap dispatch.
+    plans = [
+        plan
+        for plan in plans
+        if PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file) in dispatch_contexts
+    ]
+    for plan in plans:
+        context = PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file)
+        if context is None or context in dispatched_contexts:
+            continue
+        dispatch_workflow(
+            token,
+            repository,
+            plan.workflow_file,
+            plan.ref,
+            dict(plan.inputs),
+        )
+        dispatched_contexts.add(context)
+        dispatched.append(plan.workflow_file)
+
+
+def apply_integration_push_recovery_plan(
+    *,
+    token: str,
+    repository: str,
+    target_sha: str,
+    branch_ref: str,
+    pr_number: int | None,
+    integration_deploy_required: bool,
+    gate_summary: dict,
+    workflow_runs: list[dict],
+    pr_required_checks: list[dict[str, Any]] | None,
+    dispatched: list[str],
+) -> None:
+    """Plan and apply integration_push recovery from the current snapshot only."""
+
+    plans = plan_recovery_dispatches(
+        mode="integration_push",
+        target_sha=target_sha,
+        branch_ref=branch_ref,
+        pr_number=pr_number,
+        integration_deploy_required=integration_deploy_required,
+    )
+    plans = suppress_active_or_successful_dispatches(
+        plans,
+        workflow_runs,
+        head_sha=target_sha,
+        gate_summary=gate_summary,
+        pr_required_checks=pr_required_checks,
+    )
+    for plan in plans:
+        dispatch_workflow(
+            token,
+            repository,
+            plan.workflow_file,
+            plan.ref,
+            dict(plan.inputs),
+        )
+        dispatched.append(plan.workflow_file)
+
+
 def run_metadata_phase(
     *,
     mode: str,
@@ -374,7 +486,7 @@ def run_metadata_phase(
     branch_ref: str,
     pr_number: int | None,
 ) -> tuple[bool, dict, list[dict], list[dict[str, Any]] | None]:
-    """Read exact-SHA metadata; fail closed before dispatch planning."""
+    """Read exact-SHA metadata; fail closed before recovery planning."""
 
     pr_required_checks: list[dict[str, Any]] | None = None
     integration_deploy_required = True
@@ -426,6 +538,8 @@ def main() -> int:
         return 1
 
     dispatched: list[str] = []
+    rerun_ids: set[int] = set()
+    dispatched_contexts: set[str] = set()
     try:
         integration_deploy_required, initial_gate_summary, initial_workflow_runs, pr_required_checks = (
             run_metadata_phase(
@@ -445,73 +559,33 @@ def main() -> int:
             integration_deploy_required=integration_deploy_required,
             pr_required_checks=pr_required_checks,
         ):
-            rerun_plans: list[SelectedRequiredCheckRun] = []
-            dispatch_contexts: list[str] = []
             if mode == "promotion_pr":
                 if pr_number is None or pr_required_checks is None:
                     raise RecoveryError("missing_pr_required_checks")
-                rerun_plans, dispatch_contexts = plan_required_check_recovery(
-                    pr_required_checks,
-                    required_contexts(mode),
+                apply_promotion_pr_recovery_plan(
+                    token=token,
                     repository=args.repository,
-                )
-                rerun_ids: set[int] = set()
-                for rerun_plan in rerun_plans:
-                    if rerun_plan.run_id in rerun_ids:
-                        continue
-                    run_payload = load_selected_workflow_run(
-                        token,
-                        args.repository,
-                        rerun_plan.run_id,
-                    )
-                    validate_selected_workflow_run(
-                        run_payload,
-                        rerun_plan,
-                        target_sha=target_sha,
-                        branch_ref=args.branch_ref,
-                        pr_number=pr_number,
-                    )
-                    rerun_selected_workflow(
-                        token,
-                        args.repository,
-                        rerun_plan.run_id,
-                    )
-                    rerun_ids.add(rerun_plan.run_id)
-                    dispatched.append(f"rerun:{rerun_plan.run_id}")
-            plans = plan_recovery_dispatches(
-                mode=mode,
-                target_sha=target_sha,
-                branch_ref=args.branch_ref,
-                pr_number=pr_number,
-                integration_deploy_required=integration_deploy_required,
-            )
-            if mode == "promotion_pr":
-                # These contexts are absent from GitHub's required PR view.
-                # A same-head successful workflow run did not create the
-                # required row, so it must not suppress the bootstrap dispatch.
-                plans = [
-                    plan
-                    for plan in plans
-                    if PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file)
-                    in dispatch_contexts
-                ]
-            else:
-                plans = suppress_active_or_successful_dispatches(
-                    plans,
-                    initial_workflow_runs,
-                    head_sha=target_sha,
-                    gate_summary=initial_gate_summary,
+                    target_sha=target_sha,
+                    branch_ref=args.branch_ref,
+                    pr_number=pr_number,
                     pr_required_checks=pr_required_checks,
+                    rerun_ids=rerun_ids,
+                    dispatched_contexts=dispatched_contexts,
+                    dispatched=dispatched,
                 )
-            for plan in plans:
-                dispatch_workflow(
-                    token,
-                    args.repository,
-                    plan.workflow_file,
-                    plan.ref,
-                    dict(plan.inputs),
+            else:
+                apply_integration_push_recovery_plan(
+                    token=token,
+                    repository=args.repository,
+                    target_sha=target_sha,
+                    branch_ref=args.branch_ref,
+                    pr_number=pr_number,
+                    integration_deploy_required=integration_deploy_required,
+                    gate_summary=initial_gate_summary,
+                    workflow_runs=initial_workflow_runs,
+                    pr_required_checks=pr_required_checks,
+                    dispatched=dispatched,
                 )
-                dispatched.append(plan.workflow_file)
     except (RunnerError, RecoveryError, SatisfactionError) as exc:
         print(f"actions-check-recovery: {exc}", file=sys.stderr)
         return 1
@@ -529,7 +603,7 @@ def main() -> int:
                 branch_ref=args.branch_ref,
                 pr_number=pr_number,
             )
-        except (RunnerError, RecoveryError) as exc:
+        except (RunnerError, RecoveryError, SatisfactionError) as exc:
             print(f"actions-check-recovery: {exc}", file=sys.stderr)
             return 1
         if recovery_complete(
@@ -545,6 +619,24 @@ def main() -> int:
                 f"mode={mode} target_sha={target_sha} dispatched={','.join(dispatched) or 'none'}"
             )
             return 0
+        if mode == "promotion_pr":
+            try:
+                if pr_number is None or pr_required_checks is None:
+                    raise RecoveryError("missing_pr_required_checks")
+                apply_promotion_pr_recovery_plan(
+                    token=token,
+                    repository=args.repository,
+                    target_sha=target_sha,
+                    branch_ref=args.branch_ref,
+                    pr_number=pr_number,
+                    pr_required_checks=pr_required_checks,
+                    rerun_ids=rerun_ids,
+                    dispatched_contexts=dispatched_contexts,
+                    dispatched=dispatched,
+                )
+            except (RunnerError, RecoveryError, SatisfactionError) as exc:
+                print(f"actions-check-recovery: {exc}", file=sys.stderr)
+                return 1
         time.sleep(POLL_INTERVAL_SECONDS)
 
     missing = collect_missing(

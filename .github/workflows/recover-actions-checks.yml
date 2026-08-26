@@ -1,10 +1,11 @@
 name: recover-actions-checks (reusable)
 
-# VOC-113/VOC-121 durable recovery for missing downstream Actions runs after
+# VOC-113/VOC-121/VOC-122 durable recovery for missing downstream Actions runs after
 # App-driven mutations. Reruns the exact failed/cancelled pull_request run that
 # GitHub's required-check view selects; only a truly absent context uses a
-# genuine allowlisted workflow dispatch. It waits with a bounded timeout and
-# fails closed without fabricating statuses.
+# genuine allowlisted workflow dispatch. Promotion recovery replans against the
+# current required PR view during the bounded wait, not only from the first
+# snapshot. It fails closed without fabricating statuses.
 
 on:
   workflow_call:
