@@ -12,7 +12,11 @@ import subprocess
 import sys
 
 from actions_check_recovery import RecoveryError, validate_promotion_target, validate_sha
-from promotion_status_attestation import AttestationError, attestable_contexts
+from promotion_status_attestation import (
+    AttestationError,
+    attestable_contexts,
+    verify_promotion_required_run_semantics,
+)
 from required_check_satisfaction import SatisfactionError, parse_gh_pr_checks_json
 
 
@@ -112,6 +116,12 @@ def main() -> int:
             pr_number=args.pr_number,
         )
         for context, run_id in contexts:
+            run_payload = gh_api(
+                args.github_token,
+                args.repository,
+                f"repos/{args.repository}/actions/runs/{run_id}",
+            )
+            verify_promotion_required_run_semantics(run_payload, context=context)
             gh_api(
                 args.github_token,
                 args.repository,

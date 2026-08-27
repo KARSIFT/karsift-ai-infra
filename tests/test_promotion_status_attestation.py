@@ -102,6 +102,20 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                         {"name": "ci / ci", "state": "SUCCESS"},
                     ]
                 )
+            elif "/actions/runs/" in joined:
+                run_id = int(command[-1].rsplit("/", 1)[-1])
+                event = "pull_request"
+                display_title = "pipeline"
+                if run_id == 3:
+                    event = "workflow_dispatch"
+                    display_title = "recover-promotion-pr-checks"
+                result.stdout = json.dumps(
+                    {
+                        "event": event,
+                        "path": ".github/workflows/pipeline.yml",
+                        "display_title": display_title,
+                    }
+                )
             else:
                 result.stdout = "{}"
             return result

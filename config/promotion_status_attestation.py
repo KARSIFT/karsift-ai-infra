@@ -15,9 +15,39 @@ EXPECTED_WORKFLOWS: dict[str, str] = {
     "ci / ci": ".github/workflows/pipeline.yml",
 }
 
+PROMOTION_CI_RECOVERY_DISPLAY_MARKERS: frozenset[str] = frozenset(
+    {"recover-promotion-pr-checks"}
+)
+
 
 class AttestationError(ValueError):
     """Promotion evidence cannot be attested safely."""
+
+
+def verify_promotion_required_run_semantics(
+    run_payload: Any,
+    *,
+    context: str,
+) -> None:
+    """Reject weaker same-head dispatches that cannot prove pr-validation."""
+
+    if context != "ci / ci":
+        return
+    if not isinstance(run_payload, dict):
+        raise AttestationError("invalid_ci_recovery_run_payload")
+    event = str(run_payload.get("event") or "")
+    if event == "pull_request":
+        return
+    if event != "workflow_dispatch":
+        raise AttestationError("untrusted_ci_recovery_event")
+    path = str(run_payload.get("path") or "").split("@", 1)[0]
+    if path != EXPECTED_WORKFLOWS["ci / ci"]:
+        raise AttestationError("untrusted_ci_recovery_workflow")
+    display_title = str(run_payload.get("display_title") or "").lower()
+    if not any(
+        marker in display_title for marker in PROMOTION_CI_RECOVERY_DISPLAY_MARKERS
+    ):
+        raise AttestationError("untrusted_ci_recovery_semantics")
 
 
 def attestable_contexts(

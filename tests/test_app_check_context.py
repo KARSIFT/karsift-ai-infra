@@ -18,6 +18,7 @@ class AppCheckContextTests(unittest.TestCase):
 
     def test_runner_binds_exact_pr_context_without_fetching_evidence(self):
         self.assertIn('--pr-base-sha SHA --pr-head-sha SHA', self.runner)
+        self.assertIn('--promotion-pr', self.runner)
         self.assertIn('git cat-file -e "${validation_base_sha}^{commit}"', self.runner)
         self.assertIn('git merge-base "$validation_base_sha" "$validation_head_sha"', self.runner)
         self.assertIn('validation_mode="pr-validation"', self.runner)
@@ -33,7 +34,7 @@ class AppCheckContextTests(unittest.TestCase):
             self.runner,
         )
 
-    def _run_fixture_transition(self, transition):
+    def _run_fixture_transition(self, transition, *, promotion_pr=False):
         fixture = Path(
             "scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
         )
@@ -81,15 +82,18 @@ class AppCheckContextTests(unittest.TestCase):
             head = subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=repository, text=True
             ).strip()
+            command = [
+                "bash",
+                str(ROOT / "config/run-app-checks.sh"),
+                "--pr-base-sha",
+                base,
+                "--pr-head-sha",
+                head,
+            ]
+            if promotion_pr:
+                command.append("--promotion-pr")
             result = subprocess.run(
-                [
-                    "bash",
-                    str(ROOT / "config/run-app-checks.sh"),
-                    "--pr-base-sha",
-                    base,
-                    "--pr-head-sha",
-                    head,
-                ],
+                command,
                 cwd=repository,
                 check=True,
                 text=True,
@@ -120,6 +124,82 @@ class AppCheckContextTests(unittest.TestCase):
             "application-check provenance mode: pr-ancestry",
             self._run_fixture_transition("deleted"),
         )
+
+    def test_promotion_modified_fixture_uses_pr_validation(self):
+        self.assertIn(
+            "application-check provenance mode: pr-validation",
+            self._run_fixture_transition("modified", promotion_pr=True),
+        )
+
+    def test_promotion_fixture_change_ignores_missing_subject(self):
+        fixture = Path(
+            "scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
+        )
+        missing_subject = "f9d11e232a07c7d7a9c433d02c9267912543ba10"
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "test"], cwd=repository, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            target = repository / fixture
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                '{"capture":"base","subject_revision":"'
+                + missing_subject
+                + '"}\n'
+            )
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "base"], cwd=repository, check=True
+            )
+            base = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            target.write_text(
+                '{"capture":"head","subject_revision":"'
+                + missing_subject
+                + '"}\n'
+            )
+            (repository / "unrelated.txt").write_text("promotion")
+            subprocess.run(["git", "add", "-A"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "head"], cwd=repository, check=True
+            )
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ROOT / "config/run-app-checks.sh"),
+                    "--pr-base-sha",
+                    base,
+                    "--pr-head-sha",
+                    head,
+                    "--promotion-pr",
+                ],
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            self.assertIn(
+                "application-check provenance mode: pr-validation",
+                result.stdout,
+            )
+            self.assertFalse(
+                subprocess.run(
+                    ["git", "cat-file", "-e", f"{missing_subject}^{{commit}}"],
+                    cwd=repository,
+                    capture_output=True,
+                ).returncode == 0
+            )
 
     def test_fixture_diff_error_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -187,8 +267,13 @@ class AppCheckContextTests(unittest.TestCase):
         self.assertIn("fetch-depth: 0", checkout)
         self.assertIn('EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}', self.ci)
         self.assertIn('EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}', self.ci)
+        self.assertIn('EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}', self.ci)
+        self.assertIn('EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}', self.ci)
+        self.assertIn('EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', self.ci)
+        self.assertIn('INPUT_PROMOTION_PR: ${{ inputs.promotion_pr }}', self.ci)
         self.assertIn('--pr-base-sha "$EVENT_BASE_SHA"', self.ci)
         self.assertIn('--pr-head-sha "$EVENT_HEAD_SHA"', self.ci)
+        self.assertIn('--promotion-pr', self.ci)
         self.assertIn('run-app-checks.sh --squash-safe-push', self.ci)
 
     def test_implementer_uses_integration_anchor_and_live_committed_head(self):
