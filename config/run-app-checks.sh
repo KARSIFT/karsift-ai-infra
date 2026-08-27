@@ -64,9 +64,16 @@ if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
 
   validation_mode="pr-validation"
   capture_fixture="scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
-  if ! git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"; then
-    validation_mode="pr-ancestry"
-  fi
+  git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"
+  fixture_diff_status=$?
+  case "$fixture_diff_status" in
+    0) ;;
+    1) validation_mode="pr-ancestry" ;;
+    *)
+      echo "capture fixture comparison failed" >&2
+      exit 2
+      ;;
+  esac
 elif [ "$validation_mode" = "squash-safe-push" ]; then
   :
 elif [ "$validation_mode" != "local" ]; then

@@ -1,3 +1,5 @@
+import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -119,7 +121,70 @@ class AppCheckContextTests(unittest.TestCase):
             self._run_fixture_transition("deleted"),
         )
 
+    def test_fixture_diff_error_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory) / "repository"
+            repository.mkdir()
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "test"], cwd=repository, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            (repository / "base.txt").write_text("base")
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "base"], cwd=repository, check=True
+            )
+            base = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            (repository / "head.txt").write_text("head")
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "head"], cwd=repository, check=True
+            )
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+
+            wrappers = Path(directory) / "bin"
+            wrappers.mkdir()
+            wrapper = wrappers / "git"
+            wrapper.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [ "$1" = "diff" ]; then exit 2; fi\n'
+                f'exec "{shutil.which("git")}" "$@"\n'
+            )
+            wrapper.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{wrappers}:{environment['PATH']}"
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ROOT / "config/run-app-checks.sh"),
+                    "--pr-base-sha",
+                    base,
+                    "--pr-head-sha",
+                    head,
+                ],
+                cwd=repository,
+                text=True,
+                capture_output=True,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stderr.strip(), "capture fixture comparison failed")
+
     def test_ci_passes_event_exact_shas_and_recovery_mode(self):
+        checkout = self.ci.split(
+            "- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            1,
+        )[1].split("- name: Checkout karsift-ai-infra", 1)[0]
+        self.assertIn("fetch-depth: 0", checkout)
         self.assertIn('EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}', self.ci)
         self.assertIn('EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}', self.ci)
         self.assertIn('--pr-base-sha "$EVENT_BASE_SHA"', self.ci)
