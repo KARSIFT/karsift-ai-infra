@@ -34,9 +34,22 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
         )
 
     def test_workflow_preserves_helpers_before_nested_removal(self):
+        preserve = WORKFLOW.index("- name: Preserve post-implementer lifecycle helpers")
+        implement = WORKFLOW.index("- name: Run implementer (cursor-agent)")
+        commit = WORKFLOW.index("- name: Commit implementer's work")
+        self.assertLess(preserve, implement)
+        self.assertLess(implement, commit)
         self.assertIn("HELPER_DIR=/tmp/karsift-implement-helpers", WORKFLOW)
         self.assertIn(
             'cp karsift-ai-infra/config/prepare_cursor_model.py "$HELPER_DIR/prepare_cursor_model.py"',
+            WORKFLOW,
+        )
+        self.assertIn(
+            'cp karsift-ai-infra/config/implementer_source_carrier.py "$HELPER_DIR/implementer_source_carrier.py"',
+            WORKFLOW,
+        )
+        self.assertIn(
+            'cp karsift-ai-infra/config/cross_repo_reference.py "$HELPER_DIR/cross_repo_reference.py"',
             WORKFLOW,
         )
         self.assertIn("/tmp/karsift-implement-helpers/prepare_cursor_model.py", WORKFLOW)
@@ -49,15 +62,36 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             WORKFLOW,
         )
 
+    def test_workflow_handles_implementer_removed_nested_checkout_fail_closed(self):
+        commit = WORKFLOW[
+            WORKFLOW.index("- name: Commit implementer's work") : WORKFLOW.index(
+                "- name: Pre-push validation"
+            )
+        ]
+        self.assertIn("if [ ! -e karsift-ai-infra ]; then", commit)
+        self.assertIn("no nested source changes to publish", commit)
+        self.assertIn(
+            "Nested infrastructure path survived without a valid Git checkout",
+            commit,
+        )
+        self.assertIn(
+            'python3 "$HELPER_DIR/implementer_source_carrier.py"',
+            commit,
+        )
+        self.assertNotIn(
+            "python3 karsift-ai-infra/config/implementer_source_carrier.py",
+            commit,
+        )
+
     def test_workflow_bundles_nested_edits_before_removal(self):
-        self.assertIn("implementer_source_carrier.py \\", WORKFLOW)
+        self.assertIn('python3 "$HELPER_DIR/implementer_source_carrier.py" \\', WORKFLOW)
         self.assertIn("create-bundle \\", WORKFLOW)
         self.assertIn("--output /tmp/implementer-source.bundle", WORKFLOW)
         self.assertIn("has_source_changes=true", WORKFLOW)
         self.assertIn("publish-source:", WORKFLOW)
         self.assertIn(
             'git -C karsift-ai-infra reset --soft \\\n'
-            '            "${{ steps.source-branch.outputs.model_base_sha }}"',
+            '              "${{ steps.source-branch.outputs.model_base_sha }}"',
             WORKFLOW,
         )
         report_no_change = WORKFLOW[

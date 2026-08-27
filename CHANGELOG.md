@@ -279,6 +279,14 @@ every past state.
 
 ## implement.yml
 
+- **2026-08-27, post-implementer helper lifetime**: a governed caller task
+  correctly removed the untracked nested `karsift-ai-infra/` checkout to keep
+  it out of caller staging, but the later commit step still tried to copy its
+  validation and source-carrier helpers from that deleted directory. The
+  reusable workflow now preserves those helpers before the unrestricted model
+  runs, treats an absent nested checkout as no infrastructure-source change,
+  and fails closed if the path survives without being a valid Git checkout.
+  Authorized nested edits retain the existing exact-head bundle path.
 - **2026-07-23, restored to `openai/codex-action`**: once OpenAI API billing
   became available again, after an earlier same-vendor compromise (Claude
   Code CLI for both implementer and reviewer) that this replaced.

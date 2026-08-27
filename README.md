@@ -241,8 +241,12 @@ security-sensitive edits use a separately supervised review/publication path
 instead of executing from an unreviewed same-repository PR.
 
 When an adopted caller task also authorizes changes to its nested
-`karsift-ai-infra` checkout, `implement.yml` preserves every self-correction
-helper before removing the checkout from caller staging. It commits the
+`karsift-ai-infra` checkout, `implement.yml` preserves every post-model
+lifecycle helper in an immutable temporary path before the unrestricted
+implementer runs. A caller-only task may therefore remove the untracked nested
+checkout before publication without breaking commit or validation; a surviving
+non-repository path fails closed as ambiguous source state. When the checkout
+survives with authorized source edits, the workflow commits the
 authorized source changes and binds the exact committed head to one temporary,
 fixed-name ref before creating the separate bundle. The carrier verifies that
 this is the bundle's sole advertised head, verifies the bundle itself, and
