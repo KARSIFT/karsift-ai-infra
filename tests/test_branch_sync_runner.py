@@ -17,6 +17,7 @@ SPEC.loader.exec_module(runner)
 
 
 SHA = "a" * 40
+OLD = "b" * 40
 
 
 def args(**overrides):
@@ -79,6 +80,78 @@ class BranchSyncRunnerEligibilityTests(unittest.TestCase):
         ):
             runner.resolve(args())
 
+
+class BranchSyncRunnerMutationTests(unittest.TestCase):
+    def setUp(self):
+        self.args = args(
+            mode="promotion",
+            pr_number=17,
+            expected_head_sha=OLD,
+            expected_base_sha="c" * 40,
+        )
+        self.plan = runner.BranchSyncPlan("update", OLD, SHA)
+
+    @mock.patch.object(runner, "resolve")
+    @mock.patch.object(runner, "_run")
+    @mock.patch.object(runner, "git")
+    @mock.patch.object(runner, "git_env", return_value={})
+    def test_apply_uses_exact_lease_and_revalidates_before_and_after_push(
+        self, git_env, git, run, resolve
+    ):
+        git.side_effect = lambda *values, **_kwargs: (
+            SHA if values[:2] == ("rev-parse", "origin/main") else
+            OLD if values[:2] == ("rev-parse", "origin/develop") else ""
+        )
+        run.return_value = mock.Mock(returncode=0)
+        resolve.side_effect = (
+            self.plan,
+            runner.BranchSyncPlan("noop", SHA, SHA),
+        )
+        self.assertTrue(runner.apply(self.plan, self.args))
+        pushes = [call for call in git.call_args_list if call.args[0] == "push"]
+        self.assertEqual(len(pushes), 1)
+        self.assertIn(
+            "--force-with-lease=refs/heads/develop:" + OLD,
+            pushes[0].args,
+        )
+        self.assertEqual(resolve.call_count, 2)
+        git_env.assert_called_once_with()
+
+    @mock.patch.object(runner, "resolve")
+    @mock.patch.object(runner, "_run")
+    @mock.patch.object(runner, "git")
+    @mock.patch.object(runner, "git_env", return_value={})
+    def test_changed_state_fails_before_push(
+        self, _git_env, git, run, resolve
+    ):
+        git.side_effect = lambda *values, **_kwargs: (
+            SHA if values[:2] == ("rev-parse", "origin/main") else
+            OLD if values[:2] == ("rev-parse", "origin/develop") else ""
+        )
+        run.return_value = mock.Mock(returncode=1)
+        resolve.return_value = runner.BranchSyncPlan("update", "d" * 40, SHA)
+        with self.assertRaisesRegex(
+            runner.BranchSyncError, "branch_state_changed_before_push"
+        ):
+            runner.apply(self.plan, self.args)
+        self.assertFalse(any(call.args[0] == "push" for call in git.call_args_list))
+
+    @mock.patch.object(runner, "_run")
+    @mock.patch.object(runner, "git")
+    @mock.patch.object(runner, "git_env", return_value={})
+    def test_tree_comparison_error_is_not_treated_as_a_real_diff(
+        self, _git_env, git, run
+    ):
+        git.side_effect = lambda *values, **_kwargs: (
+            SHA if values[:2] == ("rev-parse", "origin/main") else
+            OLD if values[:2] == ("rev-parse", "origin/develop") else ""
+        )
+        run.return_value = mock.Mock(returncode=128)
+        with self.assertRaisesRegex(
+            runner.BranchSyncError, "tree_equivalence_check_failed"
+        ):
+            runner.apply(self.plan, self.args)
+        self.assertFalse(any(call.args[0] == "push" for call in git.call_args_list))
 
 if __name__ == "__main__":
     unittest.main()
