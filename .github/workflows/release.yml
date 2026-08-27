@@ -191,7 +191,10 @@ jobs:
     if: needs.identify.outputs.should_evaluate == 'true'
     runs-on: ubuntu-latest
     concurrency:
-      group: release-converge-${{ github.repository }}-${{ needs.identify.outputs.change_id }}
+      # Promotions mutate one shared production/integration pair. Serialize the
+      # pair globally, not merely per package, so two completed packages cannot
+      # race between merge and exact-SHA integration convergence.
+      group: release-converge-${{ github.repository }}-${{ inputs.integration_branch }}-${{ inputs.production_branch }}
       cancel-in-progress: false
     permissions:
       actions: write
@@ -290,10 +293,48 @@ jobs:
           set -euo pipefail
           change_id="${{ needs.identify.outputs.change_id }}"
           requested_pr="${{ needs.identify.outputs.promotion_pr_number }}"
+          integration_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/${{ inputs.integration_branch }}" --jq .object.sha)
+          production_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/${{ inputs.production_branch }}" --jq .object.sha)
+          if [ "$integration_sha" = "$production_sha" ]; then
+            gh issue close "$RELEASE_ISSUE" --comment "Already promoted and synchronized at exact SHA $production_sha."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "sync_needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           compare=$(gh api "repos/${{ github.repository }}/compare/${{ inputs.production_branch }}...${{ inputs.integration_branch }}")
           if [ "$(jq -r .ahead_by <<<"$compare")" = "0" ]; then
-            gh issue close "$RELEASE_ISSUE" --comment "Already promoted; production contains the completed integration state."
+            if [ "$(jq -r .merge_base_commit.sha <<<"$compare")" != "$integration_sha" ]; then
+              echo "Production and integration diverged without an open promotion; refusing." >&2
+              exit 1
+            fi
+            # A prior attempt merged the promotion but stopped before advancing
+            # integration. Bind recovery to the one merged PR carrying this
+            # release issue/change identity; do not guess from branch ancestry.
+            gh api --paginate --slurp \
+              "repos/${{ github.repository }}/pulls?state=closed&base=${{ inputs.production_branch }}&per_page=100" \
+              > /tmp/closed-promotion-pages.json
+            jq --arg issue "$RELEASE_ISSUE" --arg change "$change_id" \
+              '[.[][] | select(
+                .head.ref == "${{ inputs.integration_branch }}" and
+                (.body // "" | split("\n") | index("release_issue: `" + $issue + "`") != null) and
+                (.body // "" | split("\n") | index("change_id: `" + $change + "`") != null) and
+                .merged_at != null and .merge_commit_sha != null
+              )]' /tmp/closed-promotion-pages.json > /tmp/matching-merged-promotions.json
+            if [ "$(jq length /tmp/matching-merged-promotions.json)" != "1" ]; then
+              echo "Merged promotion recovery identity is missing or ambiguous; refusing." >&2
+              exit 1
+            fi
+            recovered=$(jq '.[0]' /tmp/matching-merged-promotions.json)
+            if [ "$(jq -r .merge_commit_sha <<<"$recovered")" != "$production_sha" ] || \
+               [ "$(jq -r .head.sha <<<"$recovered")" != "$integration_sha" ]; then
+              echo "Merged promotion recovery no longer matches live refs; refusing." >&2
+              exit 1
+            fi
             echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "sync_needed=true" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$(jq -r .number <<<"$recovered")" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$(jq -r .head.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$(jq -r .base.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \
@@ -318,7 +359,7 @@ jobs:
               --title "Release: promote ${{ inputs.integration_branch }} to ${{ inputs.production_branch }}" --body "$body")
             existing=$(basename "$url")
           fi
-          live=$(gh pr view "$existing" --json state,isDraft,headRefOid,baseRefName,headRefName)
+          live=$(gh pr view "$existing" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
           if [ "$(jq -r .state <<<"$live")" != "OPEN" ] || [ "$(jq -r .isDraft <<<"$live")" != "false" ] || \
              [ "$(jq -r .baseRefName <<<"$live")" != "${{ inputs.production_branch }}" ] || \
              [ "$(jq -r .headRefName <<<"$live")" != "${{ inputs.integration_branch }}" ]; then
@@ -326,8 +367,10 @@ jobs:
             exit 1
           fi
           echo "needed=true" >> "$GITHUB_OUTPUT"
+          echo "sync_needed=false" >> "$GITHUB_OUTPUT"
           echo "pr_number=$existing" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(jq -r .headRefOid <<<"$live")" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -r .baseRefOid <<<"$live")" >> "$GITHUB_OUTPUT"
 
       - name: Recover missing exact-head promotion checks
         # Promotion recovery replans against GitHub's current required PR view
@@ -359,6 +402,7 @@ jobs:
           PYTHONPATH: karsift-ai-infra/config
           PR_NUMBER: ${{ steps.promotion.outputs.pr_number }}
           HEAD_SHA: ${{ steps.promotion.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ steps.promotion.outputs.base_sha }}
         run: |
           set -euo pipefail
           live=$(gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid)
@@ -368,6 +412,10 @@ jobs:
             exit 0
           fi
           base_sha=$(jq -r .baseRefOid <<<"$live")
+          if [ "$base_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "Production base changed after promotion planning; refusing stale checks." >&2
+            exit 1
+          fi
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/release-pr.json
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > /tmp/release-check-runs.json
@@ -412,51 +460,99 @@ jobs:
             --github-token "$GH_TOKEN"
 
       - name: Perform the single exact-head merge decision
+        id: merge
         if: steps.gates.outputs.merge == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.promotion.outputs.pr_number }}
           CHECKED_HEAD_SHA: ${{ steps.promotion.outputs.head_sha }}
+          CHECKED_BASE_SHA: ${{ steps.promotion.outputs.base_sha }}
           RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -euo pipefail
-          live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefName,headRefName)
-          if [ "$(jq -r .state <<<"$live")" != "OPEN" ]; then
-            echo "Promotion PR is already terminal; successful no-op."
-            exit 0
+          live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
+          state=$(jq -r .state <<<"$live")
+          if [ "$state" != "OPEN" ] && [ "$state" != "MERGED" ]; then
+            echo "Promotion PR is terminal without a merge; refusing." >&2
+            exit 1
           fi
           if [ "$(jq -r .isDraft <<<"$live")" != "false" ] || [ "$(jq -r .headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA" ] || \
+             [ "$(jq -r .baseRefOid <<<"$live")" != "$CHECKED_BASE_SHA" ] || \
              [ "$(jq -r .baseRefName <<<"$live")" != "${{ inputs.production_branch }}" ] || \
              [ "$(jq -r .headRefName <<<"$live")" != "${{ inputs.integration_branch }}" ]; then
             echo "Promotion PR changed after evaluation; refusing stale merge." >&2
             exit 1
           fi
-          for attempt in 1 2 3; do
-            if gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
-              break
-            fi
-            if [ "$attempt" = "3" ]; then
-              echo "Promotion merge still blocked after ruleset propagation retries." >&2
-              exit 1
-            fi
-            sleep 5
-          done
-          # Promotion heads are long-lived integration branches, not disposable
-          # feature branches. Repositories commonly enable automatic deletion of
-          # merged PR heads; if their branch ruleset does not also block deletion,
-          # GitHub can remove the integration branch as part of this merge. Restore
-          # only a missing ref, and only to the exact head whose gates were checked.
-          # Never rewind a branch that advanced concurrently.
-          integration_ref="repos/${{ github.repository }}/git/ref/heads/${{ inputs.integration_branch }}"
-          if current_ref=$(gh api "$integration_ref" 2>/dev/null); then
-            current_sha=$(jq -r .object.sha <<<"$current_ref")
-            if [ "$current_sha" != "$CHECKED_HEAD_SHA" ]; then
-              echo "Integration branch advanced after promotion; preserving $current_sha."
-            fi
-          else
-            echo "Restoring auto-deleted integration branch at reviewed head $CHECKED_HEAD_SHA."
-            gh api --method POST "repos/${{ github.repository }}/git/refs" \
-              -f ref="refs/heads/${{ inputs.integration_branch }}" \
-              -f sha="$CHECKED_HEAD_SHA"
+          if [ "$state" = "OPEN" ]; then
+            for attempt in 1 2 3; do
+              live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
+              if [ "$(jq -r .state <<<"$live")" != "OPEN" ] || \
+                 [ "$(jq -r .isDraft <<<"$live")" != "false" ] || \
+                 [ "$(jq -r .headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA" ] || \
+                 [ "$(jq -r .baseRefOid <<<"$live")" != "$CHECKED_BASE_SHA" ] || \
+                 [ "$(jq -r .baseRefName <<<"$live")" != "${{ inputs.production_branch }}" ] || \
+                 [ "$(jq -r .headRefName <<<"$live")" != "${{ inputs.integration_branch }}" ]; then
+                echo "Promotion PR changed before merge attempt; refusing stale merge." >&2
+                exit 1
+              fi
+              bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+                "${{ github.repository }}" "${{ inputs.production_branch }}" \
+                karsift-ai-infra/config
+              if gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
+                break
+              fi
+              if [ "$attempt" = "3" ]; then
+                echo "Promotion merge still blocked after ruleset propagation retries." >&2
+                exit 1
+              fi
+              sleep 5
+            done
           fi
-          gh issue close "$RELEASE_ISSUE" --comment "Promoted via PR #$PR_NUMBER after newest exact-head checks passed."
+          merged=$(gh pr view "$PR_NUMBER" \
+            --json state,mergedAt,mergeCommit,headRefOid,baseRefOid,baseRefName,headRefName)
+          if [ "$(jq -r .state <<<"$merged")" != "MERGED" ] || \
+             [ "$(jq -r .headRefOid <<<"$merged")" != "$CHECKED_HEAD_SHA" ] || \
+             [ "$(jq -r .baseRefOid <<<"$merged")" != "$CHECKED_BASE_SHA" ] || \
+             [ "$(jq -r .baseRefName <<<"$merged")" != "${{ inputs.production_branch }}" ] || \
+             [ "$(jq -r .headRefName <<<"$merged")" != "${{ inputs.integration_branch }}" ] || \
+             ! [[ "$(jq -r .mergeCommit.oid <<<"$merged")" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Merged promotion result is stale or malformed; refusing synchronization." >&2
+            exit 1
+          fi
+          echo "sync_needed=true" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$CHECKED_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -r .baseRefOid <<<"$merged")" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(jq -r .mergeCommit.oid <<<"$merged")" >> "$GITHUB_OUTPUT"
+
+      - name: Synchronize integration to the exact promotion merge
+        id: sync
+        if: steps.merge.outputs.sync_needed == 'true' || steps.promotion.outputs.sync_needed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.merge.outputs.pr_number || steps.promotion.outputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ steps.merge.outputs.head_sha || steps.promotion.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ steps.merge.outputs.base_sha || steps.promotion.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          python3 karsift-ai-infra/config/branch-sync-runner.py \
+            --mode promotion \
+            --repository "${{ github.repository }}" \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --production-branch "${{ inputs.production_branch }}" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --apply
+
+      - name: Close the release audit after exact branch convergence
+        if: steps.sync.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.merge.outputs.pr_number || steps.promotion.outputs.pr_number }}
+          TARGET_SHA: ${{ steps.sync.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          gh issue close "$RELEASE_ISSUE" \
+            --comment "Promoted via PR #$PR_NUMBER and synchronized production/integration at exact SHA $TARGET_SHA."

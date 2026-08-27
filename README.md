@@ -73,9 +73,15 @@ through its own governance documents and through inputs to `merge-gate.yml`:
 - **Release PR identity and checks**: `release.yml` requires those same GitHub App credentials for
   promotion PRs. It creates and merges the PR as the App identity so GitHub does not pause the PR's
   workflows for maintainer approval, waits fail-closed for every registered PR check, and only then
-  merges the integration branch into the production branch. Release PRs declare the conservative R4
-  risk class because the promotion updates the production branch, even though deployment remains out
-  of scope.
+  merges the integration branch into the production branch. It then advances integration to the
+  exact resulting merge SHA under an exact ref lease; callers must grant the App a bypass only on
+  the integration branch for that bounded convergence while leaving production without a bypass.
+  Production must also have an active, repository-owned pull-request ruleset with strict required
+  status checks (GitHub's **Require branches to be up to date before merging**) and no bypass actors.
+  `release.yml` validates that effective rule immediately before merge, so GitHub atomically refuses
+  a promotion if production moved after its exact base was checked; the workflow then verifies the
+  resulting ordered merge parents before synchronizing integration.
+  Release PRs declare the conservative R4 risk class because promotion updates production.
 - **Independent review**: `review.yml` runs the reviewer role with **read-only** tools only. It can
   read the diff and the package and post one comment - nothing else. Findings are Critical / High /
   Medium / Low; the verdict is one of `PASS`, `PASS WITH NON-BLOCKING FINDINGS`, or `FAIL`, bound to
@@ -533,19 +539,36 @@ the missing post-marker close wake-up.
 
 When every roster marker validates, `release.yml` opens a `Release: <change_id>`
 audit issue and automatically opens (or reuses) and merges a real
-`develop → main` pull request - never a direct ref update, since a project's own
-branch-protection intent (e.g. vocanova-platform's "release pull requests only, no direct or force
-pushes") depends on promotion staying a real, reviewable PR. Adoption, merge/reuse,
-and release select the newest authoritative attempt for each logical exact-SHA
-gate, so an obsolete failure cannot poison a later pass and a newer failure cannot
-hide behind an older pass. Automatic, reconcile, and terminal-check wake-ups share
-one per-package concurrency group and final merge path. A terminal check completion
-wakes only that cheap evaluator; it does not rerun unchanged-SHA CI or the reviewer.
-If an attempt is interrupted, the caller can dispatch `reconcile-release` with the
-audit issue number; reconciliation remains idempotent and fail-closed.
+`develop → main` pull request. The PR and its merge commit remain the review and audit carrier;
+production is never promoted by a direct ref update. After the merge, a separate exact-SHA policy
+validates the PR identity, the checked base/head, the merge commit's two parents, and both live refs.
+Only then does it advance `develop` to that exact merge SHA with
+`--force-with-lease`. It refuses if production moved, integration moved, or integration gained a
+unique commit. The release audit closes only after both refs are identical.
 
-**Deploy is explicitly out of scope.** The promotion PR's merge is the entire scope of `release.yml`
-- no hosted deployment is triggered by anything in this repo today.
+All packages and retries share one production/integration-pair concurrency group, preventing
+different completed packages from racing between merge and convergence. If an attempt is interrupted
+after the PR merge, `reconcile-release` identifies exactly one merged promotion PR from the audit
+issue and change ID, then repeats the same validation and lease-protected synchronization. An exact
+retry is a no-op. A terminal check completion wakes only the cheap evaluator; it does not rerun
+unchanged-SHA CI or the reviewer.
+
+The caller template also provides an explicit reconciliation path for the exceptional package that
+is intentionally implemented against production. On the App-authored task-completion wake, it
+validates the same exact reviewed-PR marker and immutable adopted roster, requires the live production
+SHA to equal that merge, proves integration has no unique commits, then advances integration under
+the shared branch-pair lock. Ordinary integration-target tasks are mutation-free no-ops. A strict
+`reconcile-production-change` dispatch retries an interrupted eligible reconciliation.
+`merge-gate.yml` applies the same strict, non-bypassable production-ruleset guard immediately before
+merging any task PR whose base is the configured production branch, so the exceptional carrier is
+also atomically bound to its checked base.
+Release evaluation and task auto-advance both wait for this preflight, so a production-target task
+cannot race the next task or a promotion decision.
+
+`release.yml` itself does not deploy hosted infrastructure. A caller may independently trigger its
+own production deployment from the resulting push to `main`. The follow-up integration push for a
+normal merge promotion is tree-equivalent, so path-filtered staging deployment workflows receive no
+changed application path and do not run unnecessarily.
 
 Packages that predate `.karsift/tasks.json` (planned before this feature existed, or never
 planner-authored) aren't covered - the release gate only applies going forward.
@@ -560,13 +583,11 @@ planner-authored) aren't covered - the release gate only applies going forward.
   `merge-gate.yml` parses
 - Writing verification verdicts back into a package's own machine-readable status (the reviewer has
   no write authority; a human or a later deterministic step does this today)
-- A durable work queue, staged/production deployment, or anything past PR-merge into a project's
-  integration branch
+- A durable work queue or hosted staged/production deployment owned by this infrastructure repo
 - A real-time/synchronous chat interface - "anyone can open an issue and reply to the planner's
   questions" (see above) covers the same ground asynchronously, through GitHub's own issue/comment
   events, but there is no live conversational session
-- Any deploy trigger after a `release.yml` promotion merges - `main` gets updated, nothing hosted
-  does
+- A hosted deployment implementation; caller repositories own any push-to-main deployment trigger
 
 Close/reopen or draft/ready transitions on a promotion pull request do not
 recover missing required checks. VOC-121 recovery reruns a ruleset-selected

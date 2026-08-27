@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: ""
+      production_branch:
+        description: 'Protected production branch. PRs targeting it require a strict, non-bypassable server-side merge-base guard.'
+        required: false
+        type: string
+        default: "main"
     secrets:
       KARSIFT_BOT_APP_ID:
         description: >
@@ -538,20 +543,27 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REVIEWED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
           REVIEWED_BASE_SHA: ${{ needs.report-status.outputs.base_sha }}
+          REVIEWED_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
           # step above - see that step's comment (karsift-ai-infra#22).
           for attempt in 1 2 3; do
-            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state,isDraft)
+            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,baseRefName,state,isDraft)
             if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
                ! jq -e '(.isDraft | type) == "boolean" and .isDraft == false' \
                  >/dev/null <<<"$live_pair" ||
                [ "$(jq -r .headRefOid <<<"$live_pair")" != "$REVIEWED_HEAD_SHA" ] ||
-               [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$REVIEWED_BASE_SHA" ]; then
+               [ "$(jq -r .baseRefOid <<<"$live_pair")" != "$REVIEWED_BASE_SHA" ] ||
+               [ "$(jq -r .baseRefName <<<"$live_pair")" != "$REVIEWED_BASE_REF" ]; then
               echo "PR became closed or draft, or its base/head pair changed immediately before merge; refusing stale evidence." >&2
               exit 1
+            fi
+            if [ "$REVIEWED_BASE_REF" = "${{ inputs.production_branch }}" ]; then
+              bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+                "${{ github.repository }}" "${{ inputs.production_branch }}" \
+                karsift-ai-infra/config
             fi
             if gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
               exit 0
