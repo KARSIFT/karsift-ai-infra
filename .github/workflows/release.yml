@@ -310,30 +310,31 @@ jobs:
             # A prior attempt merged the promotion but stopped before advancing
             # integration. Bind recovery to the one merged PR carrying this
             # release issue/change identity; do not guess from branch ancestry.
-            gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \
-              --state merged --limit 100 \
-              --json number,body,headRefOid,baseRefOid,mergeCommit,mergedAt > /tmp/merged-promotions.json
+            gh api --paginate --slurp \
+              "repos/${{ github.repository }}/pulls?state=closed&base=${{ inputs.production_branch }}&per_page=100" \
+              > /tmp/closed-promotion-pages.json
             jq --arg issue "$RELEASE_ISSUE" --arg change "$change_id" \
-              '[.[] | select(
-                (.body | split("\n") | index("release_issue: `" + $issue + "`") != null) and
-                (.body | split("\n") | index("change_id: `" + $change + "`") != null) and
-                .mergedAt != null and .mergeCommit.oid != null
-              )]' /tmp/merged-promotions.json > /tmp/matching-merged-promotions.json
+              '[.[][] | select(
+                .head.ref == "${{ inputs.integration_branch }}" and
+                (.body // "" | split("\n") | index("release_issue: `" + $issue + "`") != null) and
+                (.body // "" | split("\n") | index("change_id: `" + $change + "`") != null) and
+                .merged_at != null and .merge_commit_sha != null
+              )]' /tmp/closed-promotion-pages.json > /tmp/matching-merged-promotions.json
             if [ "$(jq length /tmp/matching-merged-promotions.json)" != "1" ]; then
               echo "Merged promotion recovery identity is missing or ambiguous; refusing." >&2
               exit 1
             fi
             recovered=$(jq '.[0]' /tmp/matching-merged-promotions.json)
-            if [ "$(jq -r .mergeCommit.oid <<<"$recovered")" != "$production_sha" ] || \
-               [ "$(jq -r .headRefOid <<<"$recovered")" != "$integration_sha" ]; then
+            if [ "$(jq -r .merge_commit_sha <<<"$recovered")" != "$production_sha" ] || \
+               [ "$(jq -r .head.sha <<<"$recovered")" != "$integration_sha" ]; then
               echo "Merged promotion recovery no longer matches live refs; refusing." >&2
               exit 1
             fi
             echo "needed=false" >> "$GITHUB_OUTPUT"
             echo "sync_needed=true" >> "$GITHUB_OUTPUT"
             echo "pr_number=$(jq -r .number <<<"$recovered")" >> "$GITHUB_OUTPUT"
-            echo "head_sha=$(jq -r .headRefOid <<<"$recovered")" >> "$GITHUB_OUTPUT"
-            echo "base_sha=$(jq -r .baseRefOid <<<"$recovered")" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$(jq -r .head.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
+            echo "base_sha=$(jq -r .base.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \

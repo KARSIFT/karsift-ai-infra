@@ -90,6 +90,8 @@ class ReleasePolicyTests(unittest.TestCase):
             "permissions:", 1
         )[0]
         self.assertNotIn("needs.identify.outputs.change_id", concurrency)
+        self.assertIn("--paginate --slurp", self.release)
+        self.assertIn("closed-promotion-pages.json", self.release)
         self.assertIn("matching-merged-promotions.json", self.release)
         self.assertIn('!= "$production_sha"', self.release)
         self.assertIn('!= "$integration_sha"', self.release)
