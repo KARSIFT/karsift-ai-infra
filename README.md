@@ -559,6 +559,9 @@ validates the same exact reviewed-PR marker and immutable adopted roster, requir
 SHA to equal that merge, proves integration has no unique commits, then advances integration under
 the shared branch-pair lock. Ordinary integration-target tasks are mutation-free no-ops. A strict
 `reconcile-production-change` dispatch retries an interrupted eligible reconciliation.
+`merge-gate.yml` applies the same strict, non-bypassable production-ruleset guard immediately before
+merging any task PR whose base is the configured production branch, so the exceptional carrier is
+also atomically bound to its checked base.
 Release evaluation and task auto-advance both wait for this preflight, so a production-target task
 cannot race the next task or a promotion decision.
 

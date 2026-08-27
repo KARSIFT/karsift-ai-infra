@@ -22,7 +22,10 @@ def effective(*, strict=True, source=REPOSITORY, ruleset_id=42):
     return [
         {
             "type": "required_status_checks",
-            "parameters": {"strict_required_status_checks_policy": strict},
+            "parameters": {
+                "strict_required_status_checks_policy": strict,
+                "required_status_checks": [{"context": "ci"}],
+            },
             "ruleset_source_type": "Repository",
             "ruleset_source": source,
             "ruleset_id": ruleset_id,
@@ -42,7 +45,10 @@ def ruleset(*, bypass=None, enforcement="active", strict=True):
             {"type": "pull_request", "parameters": {}},
             {
                 "type": "required_status_checks",
-                "parameters": {"strict_required_status_checks_policy": strict},
+                "parameters": {
+                    "strict_required_status_checks_policy": strict,
+                    "required_status_checks": [{"context": "ci"}],
+                },
             },
         ],
     }
@@ -68,6 +74,31 @@ class ProductionMergeGuardTests(unittest.TestCase):
                 effective_rules=effective(strict=False),
                 rulesets=[ruleset()],
             )
+
+    def test_rejects_empty_or_malformed_required_check_lists(self):
+        for effective_checks, full_checks in (
+            ([], [{"context": "ci"}]),
+            ([{"context": "ci"}], []),
+            ([{"context": ""}], [{"context": "ci"}]),
+            ([{"context": "ci"}], [{}]),
+        ):
+            effective_rules = effective()
+            effective_rules[0]["parameters"]["required_status_checks"] = (
+                effective_checks
+            )
+            full_ruleset = ruleset()
+            full_ruleset["rules"][1]["parameters"]["required_status_checks"] = (
+                full_checks
+            )
+            with self.subTest(
+                effective_checks=effective_checks, full_checks=full_checks
+            ):
+                with self.assertRaises(ProductionMergeGuardError):
+                    validate_production_merge_guard(
+                        repository=REPOSITORY,
+                        effective_rules=effective_rules,
+                        rulesets=[full_ruleset],
+                    )
 
     def test_rejects_app_or_any_other_bypass(self):
         with self.assertRaises(ProductionMergeGuardError):

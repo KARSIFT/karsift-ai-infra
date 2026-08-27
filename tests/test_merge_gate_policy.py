@@ -65,7 +65,10 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("expected_base_sha:", self.workflow)
         self.assertIn("head_sha: ${{ steps.status.outputs.head_sha }}", self.workflow)
         self.assertIn("base_sha: ${{ steps.status.outputs.base_sha }}", self.workflow)
-        self.assertIn('gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,state,isDraft', self.auto_merge)
+        self.assertIn(
+            'gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,baseRefName,state,isDraft',
+            self.auto_merge,
+        )
         self.assertIn(
             '! jq -e \'(.isDraft | type) == "boolean" and .isDraft == false\'',
             self.auto_merge,

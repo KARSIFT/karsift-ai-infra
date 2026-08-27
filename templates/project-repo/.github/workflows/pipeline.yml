@@ -455,6 +455,7 @@ jobs:
     uses: KARSIFT/karsift-ai-infra/.github/workflows/merge-gate.yml@main
     with:
       auto_merge_enabled: "false"     # flip only after real evidence for this project's loop
+      production_branch: "main"
       expected_head_sha: ${{ github.event.pull_request.head.sha }}
       expected_base_sha: ${{ github.event.pull_request.base.sha }}
       reuse_outcome: ${{ needs.ready-for-review-reuse.outputs.outcome }}

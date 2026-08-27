@@ -10,6 +10,20 @@ class ProductionMergeGuardError(ValueError):
     """Production is not protected by a non-bypassable strict status rule."""
 
 
+def _has_required_checks(parameters: dict[str, Any]) -> bool:
+    checks = parameters.get("required_status_checks")
+    return (
+        isinstance(checks, list)
+        and len(checks) > 0
+        and all(
+            isinstance(check, dict)
+            and isinstance(check.get("context"), str)
+            and bool(check["context"].strip())
+            for check in checks
+        )
+    )
+
+
 def validate_production_merge_guard(
     *,
     repository: str,
@@ -36,6 +50,7 @@ def validate_production_merge_guard(
         if (
             rule.get("type") == "required_status_checks"
             and parameters.get("strict_required_status_checks_policy") is True
+            and _has_required_checks(parameters)
             and rule.get("ruleset_source_type") == "Repository"
             and rule.get("ruleset_source") == repository
             and isinstance(ruleset_id, int)
@@ -59,15 +74,17 @@ def validate_production_merge_guard(
             isinstance(rule, dict) and rule.get("type") == "pull_request"
             for rule in rules
         )
-        has_strict_checks = any(
-            isinstance(rule, dict)
-            and rule.get("type") == "required_status_checks"
-            and (rule.get("parameters") or {}).get(
-                "strict_required_status_checks_policy"
-            )
-            is True
-            for rule in rules
-        )
+        has_strict_checks = False
+        for rule in rules:
+            if not isinstance(rule, dict) or rule.get("type") != "required_status_checks":
+                continue
+            parameters = rule.get("parameters") or {}
+            if (
+                parameters.get("strict_required_status_checks_policy") is True
+                and _has_required_checks(parameters)
+            ):
+                has_strict_checks = True
+                break
         if has_pull_request and has_strict_checks:
             return ruleset["id"]
 

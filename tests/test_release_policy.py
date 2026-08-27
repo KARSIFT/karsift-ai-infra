@@ -61,14 +61,21 @@ class ReleasePolicyTests(unittest.TestCase):
         merge = self.release.index("Perform the single exact-head merge decision")
         sync = self.release.index("Synchronize integration to the exact promotion merge")
         guarded_merge = self.release[merge:sync]
-        self.assertIn(
-            'rules/branches/${{ inputs.production_branch }}', guarded_merge
-        )
-        self.assertIn("production-merge-guard-runner.py", guarded_merge)
+        self.assertIn("verify-production-merge-guard.sh", guarded_merge)
         self.assertLess(
-            guarded_merge.index("production-merge-guard-runner.py"),
+            guarded_merge.index("verify-production-merge-guard.sh"),
             guarded_merge.index("gh pr merge"),
         )
+
+    def test_main_target_task_merge_uses_same_atomic_server_guard(self):
+        merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text()
+        self.assertIn("production_branch:", merge_gate)
+        self.assertIn("verify-production-merge-guard.sh", merge_gate)
+        self.assertLess(
+            merge_gate.index("verify-production-merge-guard.sh"),
+            merge_gate.index("gh pr merge"),
+        )
+        self.assertIn('production_branch: "main"', self.template)
 
     def test_ruleset_attestation_is_narrow_and_precedes_merge(self):
         self.assertIn("statuses: write", self.release)

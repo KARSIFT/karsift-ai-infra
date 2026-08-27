@@ -470,27 +470,9 @@ jobs:
           RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -euo pipefail
-          gh api "repos/${{ github.repository }}/rules/branches/${{ inputs.production_branch }}" \
-            > /tmp/effective-production-rules.json
-          mapfile -t production_ruleset_ids < <(
-            jq -r '.[] | select(.type == "required_status_checks") | .ruleset_id' \
-              /tmp/effective-production-rules.json | sort -nu
-          )
-          printf '[]\n' > /tmp/production-rulesets.json
-          for ruleset_id in "${production_ruleset_ids[@]}"; do
-            if ! [[ "$ruleset_id" =~ ^[1-9][0-9]*$ ]]; then
-              echo "Production rules returned an invalid ruleset identity; refusing." >&2
-              exit 1
-            fi
-            gh api "repos/${{ github.repository }}/rulesets/$ruleset_id" > /tmp/production-ruleset.json
-            jq -s '.[0] + [.[1]]' /tmp/production-rulesets.json /tmp/production-ruleset.json \
-              > /tmp/production-rulesets.next.json
-            mv /tmp/production-rulesets.next.json /tmp/production-rulesets.json
-          done
-          python3 karsift-ai-infra/config/production-merge-guard-runner.py \
-            --repository "${{ github.repository }}" \
-            --effective-rules-file /tmp/effective-production-rules.json \
-            --rulesets-file /tmp/production-rulesets.json
+          bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+            "${{ github.repository }}" "${{ inputs.production_branch }}" \
+            karsift-ai-infra/config
           live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
           state=$(jq -r .state <<<"$live")
           if [ "$state" != "OPEN" ] && [ "$state" != "MERGED" ]; then

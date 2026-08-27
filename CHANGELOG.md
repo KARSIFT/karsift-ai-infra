@@ -12,7 +12,9 @@
 - Immediately before mutation, release verifies that production is covered by an active,
   repository-owned, non-bypassable pull-request ruleset whose required checks are strict. GitHub
   therefore atomically rejects a promotion if production no longer matches the checked base; the
-  workflow also verifies the resulting ordered merge parents before synchronization.
+  workflow also verifies the resulting ordered merge parents before synchronization. The same
+  guard requires at least one concrete required context and protects exceptional task PRs that
+  target production through `merge-gate.yml`.
 - The caller template adds one governed path for intentional production-target tasks. It accepts
   only the App-authored exact-review completion marker and adopted roster, runs before ordinary
   release evaluation, skips ineligible issue closures, and supports strict retry.
