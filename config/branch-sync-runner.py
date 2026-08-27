@@ -118,7 +118,13 @@ def roster(repository: str, package_path: str, ref: str) -> Any:
         raise BranchSyncError("adopted_roster_invalid") from exc
 
 
-def governed_marker(repository: str, issue_number: int, production_sha: str) -> tuple[dict[str, str], dict[str, Any]]:
+CompletionMetadata = tuple[
+    dict[str, Any], list[dict[str, Any]], dict[str, str], dict[str, Any]
+]
+
+
+def completion_metadata(repository: str, issue_number: int) -> CompletionMetadata:
+    """Resolve enough App-authored identity to classify the carrier branch."""
     issue = gh_json(f"repos/{repository}/issues/{issue_number}")
     comments = paginated_comments(repository, issue_number)
     candidates = [
@@ -145,6 +151,20 @@ def governed_marker(repository: str, issue_number: int, production_sha: str) -> 
     pull_request = gh_json(f"repos/{repository}/pulls/{pr_number}")
     if not isinstance(pull_request, dict) or not isinstance(issue, dict):
         raise BranchSyncError("completion_metadata_invalid")
+    return issue, comments, parsed, pull_request
+
+
+def governed_marker(
+    repository: str,
+    issue_number: int,
+    production_sha: str,
+    *,
+    metadata: CompletionMetadata | None = None,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Fully validate an eligible production-target task and adopted roster."""
+    issue, comments, parsed, pull_request = metadata or completion_metadata(
+        repository, issue_number
+    )
     expected = {
         field: parsed[field]
         for field in ("repository", "authority_issue", "package_path", "task_id")
@@ -189,17 +209,24 @@ def resolve(args: argparse.Namespace) -> BranchSyncPlan:
             comparison=compare(args.repository, integration, production),
         )
     try:
-        marker, pull_request = governed_marker(
-            args.repository, args.authority_issue_number, production
+        metadata = completion_metadata(
+            args.repository, args.authority_issue_number
         )
     except BranchSyncError as exc:
         if args.skip_ineligible and str(exc) == "completion_marker_missing":
             return BranchSyncPlan("ineligible", "", production)
         raise
+    pull_request = metadata[3]
     if (pull_request.get("base") or {}).get("ref") != args.production_branch:
         if args.skip_ineligible:
             return BranchSyncPlan("ineligible", "", production)
         raise BranchSyncError("production_task_pr_identity_invalid")
+    marker, pull_request = governed_marker(
+        args.repository,
+        args.authority_issue_number,
+        production,
+        metadata=metadata,
+    )
     merge_commit = gh_json(
         f"repos/{args.repository}/commits/{marker['merge_commit_sha']}"
     )

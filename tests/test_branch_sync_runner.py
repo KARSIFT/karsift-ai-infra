@@ -34,13 +34,13 @@ def args(**overrides):
 
 
 class BranchSyncRunnerEligibilityTests(unittest.TestCase):
-    @mock.patch.object(runner, "governed_marker")
+    @mock.patch.object(runner, "completion_metadata")
     @mock.patch.object(runner, "ref_sha")
     def test_ordinary_issue_close_is_a_mutation_free_ineligible_noop(
-        self, ref_sha, governed_marker
+        self, ref_sha, completion_metadata
     ):
         ref_sha.side_effect = (SHA, SHA)
-        governed_marker.side_effect = runner.BranchSyncError(
+        completion_metadata.side_effect = runner.BranchSyncError(
             "completion_marker_missing"
         )
         plan = runner.resolve(args(skip_ineligible=True))
@@ -48,13 +48,13 @@ class BranchSyncRunnerEligibilityTests(unittest.TestCase):
         self.assertEqual(plan.target_sha, SHA)
         self.assertTrue(runner.apply(plan, args(skip_ineligible=True)))
 
-    @mock.patch.object(runner, "governed_marker")
+    @mock.patch.object(runner, "completion_metadata")
     @mock.patch.object(runner, "ref_sha")
     def test_explicit_retry_fails_when_completion_authority_is_missing(
-        self, ref_sha, governed_marker
+        self, ref_sha, completion_metadata
     ):
         ref_sha.side_effect = (SHA, SHA)
-        governed_marker.side_effect = runner.BranchSyncError(
+        completion_metadata.side_effect = runner.BranchSyncError(
             "completion_marker_missing"
         )
         with self.assertRaisesRegex(
@@ -63,12 +63,15 @@ class BranchSyncRunnerEligibilityTests(unittest.TestCase):
             runner.resolve(args())
 
     @mock.patch.object(runner, "governed_marker")
+    @mock.patch.object(runner, "completion_metadata")
     @mock.patch.object(runner, "ref_sha")
     def test_integration_target_task_is_skipped_only_for_automatic_wake(
-        self, ref_sha, governed_marker
+        self, ref_sha, completion_metadata, governed_marker
     ):
         ref_sha.side_effect = (SHA, SHA, SHA, SHA)
-        governed_marker.return_value = (
+        completion_metadata.return_value = (
+            {},
+            [],
             {"merge_commit_sha": SHA},
             {"base": {"ref": "develop"}},
         )
@@ -79,6 +82,35 @@ class BranchSyncRunnerEligibilityTests(unittest.TestCase):
             runner.BranchSyncError, "production_task_pr_identity_invalid"
         ):
             runner.resolve(args())
+        governed_marker.assert_not_called()
+
+    @mock.patch.object(runner, "governed_main_only_sync_plan")
+    @mock.patch.object(runner, "compare", return_value={})
+    @mock.patch.object(runner, "gh_json", return_value={"sha": SHA})
+    @mock.patch.object(runner, "governed_marker")
+    @mock.patch.object(runner, "completion_metadata")
+    @mock.patch.object(runner, "ref_sha")
+    def test_production_target_runs_full_authority_validation(
+        self,
+        ref_sha,
+        completion_metadata,
+        governed_marker,
+        _gh_json,
+        _compare,
+        governed_plan,
+    ):
+        ref_sha.side_effect = (OLD, SHA)
+        marker = {"merge_commit_sha": SHA}
+        pull_request = {"base": {"ref": "main"}}
+        metadata = ({}, [], marker, pull_request)
+        completion_metadata.return_value = metadata
+        governed_marker.return_value = (marker, pull_request)
+        expected = runner.BranchSyncPlan("update", OLD, SHA)
+        governed_plan.return_value = expected
+        self.assertEqual(runner.resolve(args(skip_ineligible=True)), expected)
+        governed_marker.assert_called_once_with(
+            "KARSIFT/caller", 9, SHA, metadata=metadata
+        )
 
 
 class BranchSyncRunnerMutationTests(unittest.TestCase):
