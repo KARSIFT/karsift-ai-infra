@@ -1,3 +1,5 @@
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +29,94 @@ class AppCheckContextTests(unittest.TestCase):
         self.assertIn(
             'git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"',
             self.runner,
+        )
+
+    def _run_fixture_transition(self, transition):
+        fixture = Path(
+            "scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "test"], cwd=repository, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            target = repository / fixture
+            target.parent.mkdir(parents=True)
+            if transition != "added":
+                target.write_text('{"capture":"base"}\n')
+            else:
+                (repository / "base.txt").write_text("base")
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "base"], cwd=repository, check=True
+            )
+            base = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+
+            if transition == "modified":
+                target.write_text('{"capture":"head"}\n')
+            elif transition == "deleted":
+                target.unlink()
+            elif transition == "added":
+                target.write_text('{"capture":"head"}\n')
+            elif transition != "unchanged":
+                self.fail(f"unknown transition: {transition}")
+            unrelated = repository / "unrelated.txt"
+            unrelated.write_text(transition)
+            subprocess.run(["git", "add", "-A"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", transition],
+                cwd=repository,
+                check=True,
+            )
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(ROOT / "config/run-app-checks.sh"),
+                    "--pr-base-sha",
+                    base,
+                    "--pr-head-sha",
+                    head,
+                ],
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            return result.stdout
+
+    def test_unchanged_fixture_uses_pr_validation(self):
+        self.assertIn(
+            "application-check provenance mode: pr-validation",
+            self._run_fixture_transition("unchanged"),
+        )
+
+    def test_modified_fixture_uses_pr_ancestry(self):
+        self.assertIn(
+            "application-check provenance mode: pr-ancestry",
+            self._run_fixture_transition("modified"),
+        )
+
+    def test_added_fixture_uses_pr_ancestry(self):
+        self.assertIn(
+            "application-check provenance mode: pr-ancestry",
+            self._run_fixture_transition("added"),
+        )
+
+    def test_deleted_fixture_uses_pr_ancestry(self):
+        self.assertIn(
+            "application-check provenance mode: pr-ancestry",
+            self._run_fixture_transition("deleted"),
         )
 
     def test_ci_passes_event_exact_shas_and_recovery_mode(self):

@@ -64,8 +64,7 @@ if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
 
   validation_mode="pr-validation"
   capture_fixture="scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
-  if [ -f "$capture_fixture" ] &&
-     ! git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"; then
+  if ! git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"; then
     validation_mode="pr-ancestry"
   fi
 elif [ "$validation_mode" = "squash-safe-push" ]; then
@@ -82,6 +81,7 @@ if [ -n "$validation_base_sha" ]; then
 else
   unset PR_BASE_SHA PR_HEAD_SHA
 fi
+echo "application-check provenance mode: $validation_mode"
 
 if [ ! -f package.json ] || [ ! -f pnpm-lock.yaml ]; then
   echo "no pnpm workspace yet - nothing this generic CI step knows how to run"
