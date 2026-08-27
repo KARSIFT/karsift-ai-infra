@@ -43,4 +43,16 @@ jobs:
       - name: Detect and run pnpm checks
         if: ${{ !inputs.reuse_evidence }}
         shell: bash
-        run: bash karsift-ai-infra/config/run-app-checks.sh
+        env:
+          WORKFLOW_EVENT: ${{ github.event_name }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$WORKFLOW_EVENT" = "pull_request" ]; then
+            bash karsift-ai-infra/config/run-app-checks.sh \
+              --pr-base-sha "$EVENT_BASE_SHA" \
+              --pr-head-sha "$EVENT_HEAD_SHA"
+          else
+            bash karsift-ai-infra/config/run-app-checks.sh --squash-safe-push
+          fi

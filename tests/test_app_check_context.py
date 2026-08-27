@@ -1,0 +1,53 @@
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class AppCheckContextTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.runner = (ROOT / "config/run-app-checks.sh").read_text()
+        cls.ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+
+    def test_runner_binds_exact_pr_context_without_fetching_evidence(self):
+        self.assertIn('--pr-base-sha SHA --pr-head-sha SHA', self.runner)
+        self.assertIn('git cat-file -e "${validation_base_sha}^{commit}"', self.runner)
+        self.assertIn('git merge-base "$validation_base_sha" "$validation_head_sha"', self.runner)
+        self.assertIn('validation_mode="pr-validation"', self.runner)
+        self.assertIn('validation_mode="pr-ancestry"', self.runner)
+        self.assertIn('export PR_BASE_SHA="$validation_base_sha"', self.runner)
+        self.assertNotIn("git fetch", self.runner)
+
+    def test_fixture_changes_select_strict_ancestry(self):
+        fixture = "scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
+        self.assertIn(f'capture_fixture="{fixture}"', self.runner)
+        self.assertIn(
+            'git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"',
+            self.runner,
+        )
+
+    def test_ci_passes_event_exact_shas_and_recovery_mode(self):
+        self.assertIn('EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}', self.ci)
+        self.assertIn('EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}', self.ci)
+        self.assertIn('--pr-base-sha "$EVENT_BASE_SHA"', self.ci)
+        self.assertIn('--pr-head-sha "$EVENT_HEAD_SHA"', self.ci)
+        self.assertIn('run-app-checks.sh --squash-safe-push', self.ci)
+
+    def test_implementer_uses_integration_anchor_and_live_committed_head(self):
+        self.assertGreaterEqual(
+            self.implement.count(
+                '--pr-base-sha "${{ steps.branch.outputs.integration_sha }}"'
+            ),
+            2,
+        )
+        self.assertGreaterEqual(
+            self.implement.count('--pr-head-sha "$(git rev-parse HEAD)"'),
+            2,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

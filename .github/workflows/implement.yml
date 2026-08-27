@@ -1034,7 +1034,10 @@ jobs:
         continue-on-error: true
         run: |
           set -uo pipefail
-          if bash /tmp/run-app-checks.sh > /tmp/prepush-checks.log 2>&1; then
+          if bash /tmp/run-app-checks.sh \
+            --pr-base-sha "${{ steps.branch.outputs.integration_sha }}" \
+            --pr-head-sha "$(git rev-parse HEAD)" \
+            > /tmp/prepush-checks.log 2>&1; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
           else
             echo "passed=false" >> "$GITHUB_OUTPUT"
@@ -1103,7 +1106,10 @@ jobs:
       - name: Re-run pre-push validation after self-correction
         if: steps.selfcorrect.outcome == 'success'
         continue-on-error: true
-        run: bash /tmp/run-app-checks.sh
+        run: |
+          bash /tmp/run-app-checks.sh \
+            --pr-base-sha "${{ steps.branch.outputs.integration_sha }}" \
+            --pr-head-sha "$(git rev-parse HEAD)"
 
       # A GitHub Actions job cannot resume mid-job on rerun - a failed job
       # reruns from step 1 on a brand-new runner, and everything on the old
