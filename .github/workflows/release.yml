@@ -82,6 +82,18 @@ jobs:
           ref: ${{ steps.caller-ref.outputs.ref }}
           persist-credentials: false
 
+      # The caller checkout owns the workspace root and cleans untracked
+      # nested paths, including the shared-policy checkout used by the ref
+      # resolver above. Rehydrate the exact reusable-workflow revision before
+      # any later lifecycle helper is invoked.
+      - name: Restore shared lifecycle policy after caller checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
       - name: Resolve an authoritative release identity
         id: identify
         env:
@@ -237,6 +249,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.caller-ref.outputs.ref }}
+          persist-credentials: false
+      - name: Restore shared lifecycle policy after caller checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
           persist-credentials: false
       - name: Mint App installation token for release mutation
         id: app-token
