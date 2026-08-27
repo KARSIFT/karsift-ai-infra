@@ -149,6 +149,32 @@ class ReleasePolicyTests(unittest.TestCase):
             self.assertIn("ref: ${{ steps.caller-ref.outputs.ref }}", job)
         self.assertNotIn("ref: ${{ inputs.integration_branch }}", self.release)
 
+    def test_caller_checkout_rehydrates_shared_policy_before_lifecycle_helpers(self):
+        self.assertEqual(
+            self.release.count(
+                "Restore shared lifecycle policy after caller checkout"
+            ),
+            2,
+        )
+        for job_name, end_marker, helper in (
+            ("  identify:", "  converge:", "task-completion-runner.py validate-task"),
+            ("  converge:", None, "task-completion-runner.py validate-roster"),
+        ):
+            job = self.release.split(job_name, 1)[1]
+            if end_marker:
+                job = job.split(end_marker, 1)[0]
+            caller_checkout = job.index("Checkout caller release state")
+            restore = job.index(
+                "Restore shared lifecycle policy after caller checkout"
+            )
+            helper_use = job.index(helper)
+            self.assertLess(caller_checkout, restore)
+            self.assertLess(restore, helper_use)
+            restored = job[restore:helper_use]
+            self.assertIn("repository: ${{ job.workflow_repository }}", restored)
+            self.assertIn("ref: ${{ job.workflow_sha }}", restored)
+            self.assertIn("path: karsift-ai-infra", restored)
+
     def test_main_only_reconciliation_precedes_release_and_has_strict_retry(self):
         self.assertIn("reconcile-production-change:", self.template)
         self.assertIn(
