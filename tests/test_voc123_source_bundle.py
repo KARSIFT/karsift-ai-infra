@@ -260,7 +260,7 @@ class Voc123SourceBundleTests(unittest.TestCase):
                 )
 
     def test_workflow_calls_verified_helper_and_preserves_publisher_contract(self):
-        self.assertIn("implementer_source_carrier.py \\", WORKFLOW)
+        self.assertIn('python3 "$HELPER_DIR/implementer_source_carrier.py" \\', WORKFLOW)
         self.assertIn("create-bundle \\", WORKFLOW)
         self.assertIn('--head-sha "$SOURCE_HEAD_SHA"', WORKFLOW)
         self.assertIn("publish-source:", WORKFLOW)

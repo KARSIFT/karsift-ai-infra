@@ -34,9 +34,11 @@ name: implement (reusable)
 # never silently discarded when it contains authorized implementer edits.
 # Authorized infrastructure work is committed in the nested checkout, bundled,
 # and published from a separate clean `publish-source` job scoped only to
-# `KARSIFT/karsift-ai-infra`. Self-correction helpers (`run-app-checks.sh`,
-# `prepare_cursor_model.py`) are copied to immutable `/tmp` paths before the
-# nested checkout is removed from the caller worktree. Required-check recovery
+# `KARSIFT/karsift-ai-infra`. Post-model lifecycle helpers (`run-app-checks.sh`,
+# `prepare_cursor_model.py`, and the source-carrier helpers) are copied to
+# immutable `/tmp` paths before the unrestricted implementer runs, so caller
+# tasks may remove the untracked nested checkout without breaking publication.
+# Required-check recovery
 # follows GitHub's PR required-check view (`gh pr checks --required`) so a
 # cancelled exact-head check-run is not treated as satisfied by an alternate
 # successful run or same-named status when GitHub still reports failure.
@@ -171,6 +173,17 @@ jobs:
         run: |
           set -euo pipefail
           echo "base_sha=$(git -C karsift-ai-infra rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve post-implementer lifecycle helpers
+        run: |
+          set -euo pipefail
+          HELPER_DIR=/tmp/karsift-implement-helpers
+          mkdir -p "$HELPER_DIR"
+          cp karsift-ai-infra/config/run-app-checks.sh /tmp/run-app-checks.sh
+          cp karsift-ai-infra/config/prepare_cursor_model.py "$HELPER_DIR/prepare_cursor_model.py"
+          cp karsift-ai-infra/config/implementer_source_carrier.py "$HELPER_DIR/implementer_source_carrier.py"
+          cp karsift-ai-infra/config/cross_repo_reference.py "$HELPER_DIR/cross_repo_reference.py"
+          cp karsift-ai-infra/config/implementer_nested_checkout.py "$HELPER_DIR/implementer_nested_checkout.py"
 
       - name: Refuse to run without an adopted, authorized package
         id: package
@@ -951,36 +964,45 @@ jobs:
           # `publish-source` job before removing the directory from the caller
           # worktree.
           #
-          # Self-correction helpers are copied to immutable /tmp paths first so
-          # "Pre-push validation" and "Self-correct failed pre-push validation"
-          # can still invoke them after this directory is gone.
+          # Post-model helpers were copied to immutable /tmp paths before the
+          # unrestricted implementer ran. The implementer may legitimately
+          # remove this untracked checkout to keep it out of the caller commit;
+          # an absent checkout therefore means there are no nested source
+          # changes to publish. A surviving non-repository path is ambiguous
+          # and fails closed rather than being silently discarded.
           HELPER_DIR=/tmp/karsift-implement-helpers
-          mkdir -p "$HELPER_DIR"
-          cp karsift-ai-infra/config/run-app-checks.sh /tmp/run-app-checks.sh
-          cp karsift-ai-infra/config/prepare_cursor_model.py "$HELPER_DIR/prepare_cursor_model.py"
-
-          # As with the caller branch, normalize any commits the model made
-          # itself back into staged source changes. This prevents a clean
-          # nested status from silently discarding already-committed edits.
-          git -C karsift-ai-infra reset --soft \
-            "${{ steps.source-branch.outputs.model_base_sha }}"
-          if [ -n "$(git -C karsift-ai-infra status --porcelain)" ]; then
-            git -C karsift-ai-infra config user.name "karsift-ai-infra-bot"
-            git -C karsift-ai-infra config user.email "actions@users.noreply.github.com"
-            git -C karsift-ai-infra add -A
-            git -C karsift-ai-infra commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} coordinated source carrier (attempt ${{ inputs.attempt }})"
-            SOURCE_HEAD_SHA=$(git -C karsift-ai-infra rev-parse HEAD)
-            python3 karsift-ai-infra/config/implementer_source_carrier.py \
-              create-bundle \
-              --repository karsift-ai-infra \
-              --base-sha "${{ steps.infra-checkout.outputs.base_sha }}" \
-              --head-sha "$SOURCE_HEAD_SHA" \
-              --output /tmp/implementer-source.bundle
-            echo "has_source_changes=true" >> "$GITHUB_OUTPUT"
-            echo "source_head_sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
-          else
+          if ! NESTED_STATE=$(python3 "$HELPER_DIR/implementer_nested_checkout.py" karsift-ai-infra); then
+            echo "Nested infrastructure path is not a distinct Git checkout; refusing to discard ambiguous source state." >&2
+            exit 1
+          fi
+          if [ "$NESTED_STATE" = "absent" ]; then
+            echo "Implementer removed the untracked infrastructure checkout; no nested source changes to publish."
             echo "has_source_changes=false" >> "$GITHUB_OUTPUT"
             echo "source_head_sha=" >> "$GITHUB_OUTPUT"
+          else
+            # As with the caller branch, normalize any commits the model made
+            # itself back into staged source changes. This prevents a clean
+            # nested status from silently discarding already-committed edits.
+            git -C karsift-ai-infra reset --soft \
+              "${{ steps.source-branch.outputs.model_base_sha }}"
+            if [ -n "$(git -C karsift-ai-infra status --porcelain)" ]; then
+              git -C karsift-ai-infra config user.name "karsift-ai-infra-bot"
+              git -C karsift-ai-infra config user.email "actions@users.noreply.github.com"
+              git -C karsift-ai-infra add -A
+              git -C karsift-ai-infra commit -m "${{ inputs.change_id }}: ${{ inputs.task_id }} coordinated source carrier (attempt ${{ inputs.attempt }})"
+              SOURCE_HEAD_SHA=$(git -C karsift-ai-infra rev-parse HEAD)
+              python3 "$HELPER_DIR/implementer_source_carrier.py" \
+                create-bundle \
+                --repository karsift-ai-infra \
+                --base-sha "${{ steps.infra-checkout.outputs.base_sha }}" \
+                --head-sha "$SOURCE_HEAD_SHA" \
+                --output /tmp/implementer-source.bundle
+              echo "has_source_changes=true" >> "$GITHUB_OUTPUT"
+              echo "source_head_sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_source_changes=false" >> "$GITHUB_OUTPUT"
+              echo "source_head_sha=" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
           rm -rf karsift-ai-infra
