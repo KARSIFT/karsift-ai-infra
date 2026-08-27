@@ -201,9 +201,22 @@ small compatibility context is necessary because GitHub evaluates the newest
 required check context; omitting the reusable CI caller changes its visible name
 to `ci` and leaves `ci / ci` unsatisfied even when prior evidence is valid. The
 post-transition verifier requires the marker to succeed and both checkout steps
-plus the full validation step to be skipped. Merge-gate also requires exactly one current `ci / ci`
-context in `SUCCESS`; prior evidence can never replace a skipped or ambiguous
-current compatibility context.
+plus the full validation step to be skipped. Merge-gate also requires exactly one
+current `ci / ci` context in `SUCCESS`; prior evidence can never replace a skipped
+or ambiguous current compatibility context.
+
+Application checks receive an immutable pull-request base/head pair from both
+`ci.yml` and the implementer's pre-push validation. `run-app-checks.sh` validates
+that both commits exist and share history before exporting the repository's
+PR-provenance context. Reusable CI checks out full reachable history so the event's
+real base/head objects are present instead of relying only on GitHub's synthetic
+depth-one merge commit. If the captured navigation-benchmark fixture is added,
+modified, or deleted between those trees, the script selects the stricter
+ancestry mode; an unreadable comparison fails closed rather than being treated as
+a change. Otherwise it uses merge-base-bound PR validation. Non-PR recovery checks
+use the existing squash-safe push mode. The workflow never fetches missing
+evidence commits, so caller provenance assertions remain fail-closed and pre-push
+validation predicts the protected CI invocation.
 
 Promotion recovery keeps GitHub's branch ruleset authoritative. A manual
 recovery run is not attached to the promotion PR by GitHub, so a successful
