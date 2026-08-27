@@ -122,6 +122,33 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn('!= "$production_sha"', self.release)
         self.assertIn('!= "$integration_sha"', self.release)
 
+    def test_missing_integration_ref_reaches_audit_bound_recovery(self):
+        promotion = self.release.split("Open or reuse the single promotion PR", 1)[1]
+        missing_ref = promotion.index('if [ -z "$integration_sha" ]')
+        compare = promotion.index('compare=$(gh api')
+        self.assertLess(missing_ref, compare)
+        self.assertIn("git/matching-refs/heads/", promotion[:missing_ref])
+        self.assertIn('recover_merged_promotion ""', promotion[missing_ref:compare])
+        self.assertIn("2>/dev/null", promotion[:missing_ref])
+        self.assertIn("Merged promotion recovery no longer matches production", promotion)
+        self.assertIn("branch-sync-runner.py", self.release)
+
+    def test_missing_integration_ref_cannot_fail_before_caller_checkout(self):
+        for job_name, end_marker in (
+            ("  identify:", "  converge:"),
+            ("  converge:", None),
+        ):
+            job = self.release.split(job_name, 1)[1]
+            if end_marker:
+                job = job.split(end_marker, 1)[0]
+            policy_checkout = job.index("Checkout shared lifecycle policy")
+            resolver = job.index("release-checkout-ref-runner.py")
+            caller_checkout = job.index("Checkout caller release state")
+            self.assertLess(policy_checkout, resolver)
+            self.assertLess(resolver, caller_checkout)
+            self.assertIn("ref: ${{ steps.caller-ref.outputs.ref }}", job)
+        self.assertNotIn("ref: ${{ inputs.integration_branch }}", self.release)
+
     def test_main_only_reconciliation_precedes_release_and_has_strict_retry(self):
         self.assertIn("reconcile-production-change:", self.template)
         self.assertIn(

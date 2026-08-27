@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-27 — Recover an absent integration ref after promotion
+
+- `reconcile-release` now distinguishes an absent integration ref from an unreadable ref lookup,
+  binds the unique audit-carrier promotion already at the live production tip, and reaches the
+  existing lease-protected create path instead of stopping on the API 404.
+- Both release jobs resolve their caller checkout before touching caller state: normal evaluation
+  still reads integration, while an absent integration ref reads the already-promoted production
+  tree so the audit-bound recovery path remains reachable.
+- Ambiguous carrier identity, a moved production tip, malformed ref data, or other lookup failure
+  remains fail closed with sanitized diagnostics. Deterministic policy coverage protects the missing
+  ref preflight as well as the existing exact-SHA branch-sync runner.
+
 ## 2026-08-27 — Converge integration to exact governed production history
 
 - A successful merge-commit promotion now preserves its reviewed `develop → main` PR and merge
