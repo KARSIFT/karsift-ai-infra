@@ -91,7 +91,16 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                     {
                         "number": 947,
                         "state": "open",
-                        "head": {"sha": head_sha, "ref": "develop"},
+                        "base": {
+                            "sha": "b" * 40,
+                            "ref": "main",
+                            "repo": {"full_name": repository},
+                        },
+                        "head": {
+                            "sha": head_sha,
+                            "ref": "develop",
+                            "repo": {"full_name": repository},
+                        },
                     }
                 )
             elif joined.startswith("gh pr checks"):
@@ -104,16 +113,36 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                 )
             elif "/actions/runs/" in joined:
                 run_id = int(command[-1].rsplit("/", 1)[-1])
+                workflow = list(EXPECTED_WORKFLOWS.values())[run_id - 1]
                 event = "pull_request"
-                display_title = "pipeline"
                 if run_id == 3:
                     event = "workflow_dispatch"
-                    display_title = "recover-promotion-pr-checks"
                 result.stdout = json.dumps(
                     {
+                        "id": run_id,
                         "event": event,
-                        "path": ".github/workflows/pipeline.yml",
-                        "display_title": display_title,
+                        "path": workflow,
+                        "display_title": "pipeline",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": head_sha,
+                        "head_branch": "develop",
+                        "repository": {"full_name": repository},
+                        "pull_requests": [
+                            {
+                                "number": 947,
+                                "base": {
+                                    "sha": "b" * 40,
+                                    "ref": "main",
+                                    "repo": {"full_name": repository},
+                                },
+                                "head": {
+                                    "sha": head_sha,
+                                    "ref": "develop",
+                                    "repo": {"full_name": repository},
+                                },
+                            }
+                        ],
                     }
                 )
             else:

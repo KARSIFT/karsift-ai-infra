@@ -71,6 +71,11 @@ jobs:
           EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
+          if [ "$INPUT_PROMOTION_PR" = "true" ] &&
+             { [ -z "$INPUT_PR_BASE_SHA" ] || [ -z "$INPUT_PR_HEAD_SHA" ]; }; then
+            echo "promotion PR validation requires immutable base/head metadata" >&2
+            exit 2
+          fi
           if [ -n "$INPUT_PR_BASE_SHA" ] && [ -n "$INPUT_PR_HEAD_SHA" ]; then
             app_check_args=(
               --pr-base-sha "$INPUT_PR_BASE_SHA"

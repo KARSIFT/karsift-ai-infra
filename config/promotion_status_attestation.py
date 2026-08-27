@@ -15,39 +15,99 @@ EXPECTED_WORKFLOWS: dict[str, str] = {
     "ci / ci": ".github/workflows/pipeline.yml",
 }
 
-PROMOTION_CI_RECOVERY_DISPLAY_MARKERS: frozenset[str] = frozenset(
-    {"recover-promotion-pr-checks"}
-)
-
-
 class AttestationError(ValueError):
     """Promotion evidence cannot be attested safely."""
+
+
+def _repository_matches(payload: Any, repository: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if (
+        payload.get("full_name") == repository
+        or payload.get("nameWithOwner") == repository
+    ):
+        return True
+    return str(payload.get("url") or "").rstrip("/") == (
+        f"https://api.github.com/repos/{repository}"
+    )
+
+
+def _pull_request_binding_matches(
+    payload: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+    base_ref: str,
+    head_ref: str,
+) -> bool:
+    if not isinstance(payload, dict) or payload.get("number") != pr_number:
+        return False
+    base = payload.get("base")
+    head = payload.get("head")
+    return bool(
+        isinstance(base, dict)
+        and isinstance(head, dict)
+        and base.get("sha") == base_sha
+        and base.get("ref") == base_ref
+        and _repository_matches(base.get("repo"), repository)
+        and head.get("sha") == head_sha
+        and head.get("ref") == head_ref
+        and _repository_matches(head.get("repo"), repository)
+    )
 
 
 def verify_promotion_required_run_semantics(
     run_payload: Any,
     *,
     context: str,
+    run_id: int,
+    repository: str,
+    pr_number: int,
+    base_sha: str,
+    head_sha: str,
+    base_ref: str,
+    head_ref: str,
 ) -> None:
-    """Reject weaker same-head dispatches that cannot prove pr-validation."""
+    """Bind promotion CI to the exact PR and code-enforced validation path."""
 
-    if context != "ci / ci":
-        return
     if not isinstance(run_payload, dict):
         raise AttestationError("invalid_ci_recovery_run_payload")
     event = str(run_payload.get("event") or "")
-    if event == "pull_request":
-        return
-    if event != "workflow_dispatch":
+    expected_events = (
+        {"pull_request", "workflow_dispatch"}
+        if context == "ci / ci"
+        else {"pull_request"}
+    )
+    if event not in expected_events:
         raise AttestationError("untrusted_ci_recovery_event")
     path = str(run_payload.get("path") or "").split("@", 1)[0]
-    if path != EXPECTED_WORKFLOWS["ci / ci"]:
+    if path != EXPECTED_WORKFLOWS.get(context):
         raise AttestationError("untrusted_ci_recovery_workflow")
-    display_title = str(run_payload.get("display_title") or "").lower()
-    if not any(
-        marker in display_title for marker in PROMOTION_CI_RECOVERY_DISPLAY_MARKERS
+    if (
+        run_payload.get("id") != run_id
+        or run_payload.get("status") != "completed"
+        or run_payload.get("conclusion") != "success"
+        or run_payload.get("head_sha") != head_sha
+        or run_payload.get("head_branch") != head_ref
+        or not _repository_matches(run_payload.get("repository"), repository)
     ):
-        raise AttestationError("untrusted_ci_recovery_semantics")
+        raise AttestationError("untrusted_ci_recovery_identity")
+    pull_requests = run_payload.get("pull_requests")
+    if not isinstance(pull_requests, list) or not any(
+        _pull_request_binding_matches(
+            item,
+            repository=repository,
+            pr_number=pr_number,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            base_ref=base_ref,
+            head_ref=head_ref,
+        )
+        for item in pull_requests
+    ):
+        raise AttestationError("untrusted_ci_recovery_pr_binding")
 
 
 def attestable_contexts(

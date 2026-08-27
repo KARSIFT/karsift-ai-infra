@@ -15,6 +15,9 @@ class AppCheckContextTests(unittest.TestCase):
         cls.runner = (ROOT / "config/run-app-checks.sh").read_text()
         cls.ci = (ROOT / ".github/workflows/ci.yml").read_text()
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+        cls.pipeline = (
+            ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
+        ).read_text()
 
     def test_runner_binds_exact_pr_context_without_fetching_evidence(self):
         self.assertIn('--pr-base-sha SHA --pr-head-sha SHA', self.runner)
@@ -130,6 +133,113 @@ class AppCheckContextTests(unittest.TestCase):
             "application-check provenance mode: pr-validation",
             self._run_fixture_transition("modified", promotion_pr=True),
         )
+
+    def test_promotion_requires_one_exact_non_conflicting_comparison(self):
+        cases = (
+            ["--promotion-pr"],
+            ["--promotion-pr", "--squash-safe-push"],
+        )
+        for arguments in cases:
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    [
+                        "bash",
+                        str(ROOT / "config/run-app-checks.sh"),
+                        *arguments,
+                    ],
+                    cwd=directory,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(
+                    result.stderr.strip(),
+                    "promotion PR validation requires one non-conflicting exact base/head pair",
+                )
+
+    def test_resolvable_nonancestor_fixture_subject_keeps_paths_separate(self):
+        fixture = Path(
+            "scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "config", "user.name", "test"], cwd=repository, check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repository,
+                check=True,
+            )
+            (repository / "subject.txt").write_text("nonancestor")
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "subject"],
+                cwd=repository,
+                check=True,
+            )
+            subject = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+
+            subprocess.run(
+                ["git", "checkout", "-q", "--orphan", "comparison"],
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "rm", "-q", "--cached", "subject.txt"],
+                cwd=repository,
+                check=True,
+            )
+            (repository / "subject.txt").unlink()
+            target = repository / fixture
+            target.parent.mkdir(parents=True)
+            target.write_text(f'{{"subject_revision":"{subject}","capture":"base"}}\n')
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "base"], cwd=repository, check=True
+            )
+            base = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+            target.write_text(f'{{"subject_revision":"{subject}","capture":"head"}}\n')
+            subprocess.run(["git", "add", "."], cwd=repository, check=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "head"], cwd=repository, check=True
+            )
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repository, text=True
+            ).strip()
+
+            common = [
+                "bash",
+                str(ROOT / "config/run-app-checks.sh"),
+                "--pr-base-sha",
+                base,
+                "--pr-head-sha",
+                head,
+            ]
+            ordinary = subprocess.run(
+                common, cwd=repository, check=True, text=True, capture_output=True
+            )
+            promotion = subprocess.run(
+                [*common, "--promotion-pr"],
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            self.assertIn("provenance mode: pr-ancestry", ordinary.stdout)
+            self.assertIn("provenance mode: pr-validation", promotion.stdout)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", subject, head],
+                    cwd=repository,
+                ).returncode,
+                1,
+            )
 
     def test_promotion_fixture_change_ignores_missing_subject(self):
         fixture = Path(
@@ -271,10 +381,20 @@ class AppCheckContextTests(unittest.TestCase):
         self.assertIn('EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}', self.ci)
         self.assertIn('EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}', self.ci)
         self.assertIn('INPUT_PROMOTION_PR: ${{ inputs.promotion_pr }}', self.ci)
+        self.assertIn(
+            "promotion PR validation requires immutable base/head metadata", self.ci
+        )
         self.assertIn('--pr-base-sha "$EVENT_BASE_SHA"', self.ci)
         self.assertIn('--pr-head-sha "$EVENT_HEAD_SHA"', self.ci)
         self.assertIn('--promotion-pr', self.ci)
         self.assertIn('run-app-checks.sh --squash-safe-push', self.ci)
+
+    def test_recovery_ci_requires_successful_exact_pr_metadata(self):
+        self.assertIn(
+            "inputs.action == 'recover-promotion-pr-checks' && "
+            "needs.promotion-pr-metadata.result == 'success'",
+            self.pipeline,
+        )
 
     def test_implementer_uses_integration_anchor_and_live_committed_head(self):
         self.assertGreaterEqual(

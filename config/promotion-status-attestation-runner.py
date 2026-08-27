@@ -115,13 +115,35 @@ def main() -> int:
             branch_ref=args.branch_ref,
             pr_number=args.pr_number,
         )
+        base = pull_request.get("base") if isinstance(pull_request, dict) else None
+        head = pull_request.get("head") if isinstance(pull_request, dict) else None
+        if (
+            not isinstance(base, dict)
+            or not isinstance(head, dict)
+            or base.get("ref") != "main"
+            or head.get("ref") != "develop"
+            or (head.get("repo") or {}).get("full_name") != args.repository
+            or (base.get("repo") or {}).get("full_name") != args.repository
+        ):
+            raise RunnerError("promotion_pair_mismatch")
+        base_sha = validate_sha(str(base.get("sha") or ""), "base_sha")
         for context, run_id in contexts:
             run_payload = gh_api(
                 args.github_token,
                 args.repository,
                 f"repos/{args.repository}/actions/runs/{run_id}",
             )
-            verify_promotion_required_run_semantics(run_payload, context=context)
+            verify_promotion_required_run_semantics(
+                run_payload,
+                context=context,
+                run_id=run_id,
+                repository=args.repository,
+                pr_number=args.pr_number,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                base_ref="main",
+                head_ref="develop",
+            )
             gh_api(
                 args.github_token,
                 args.repository,

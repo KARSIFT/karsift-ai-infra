@@ -53,6 +53,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$promotion_pr" = true ] &&
+   { [ -z "$validation_base_sha" ] ||
+     [ -z "$validation_head_sha" ] ||
+     [ "$validation_mode" != "local" ]; }; then
+  echo "promotion PR validation requires one non-conflicting exact base/head pair" >&2
+  exit 2
+fi
+
 if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
   if [ "$validation_mode" != "local" ] ||
      ! [[ "$validation_base_sha" =~ ^[0-9a-f]{40}$ ]] ||
