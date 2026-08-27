@@ -66,6 +66,10 @@ class ReleasePolicyTests(unittest.TestCase):
             guarded_merge.index("verify-production-merge-guard.sh"),
             guarded_merge.index("gh pr merge"),
         )
+        retry = guarded_merge.index("for attempt in 1 2 3")
+        self.assertGreater(
+            guarded_merge.index("verify-production-merge-guard.sh"), retry
+        )
 
     def test_main_target_task_merge_uses_same_atomic_server_guard(self):
         merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text()

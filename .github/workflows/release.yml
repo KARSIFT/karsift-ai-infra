@@ -470,9 +470,6 @@ jobs:
           RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -euo pipefail
-          bash karsift-ai-infra/config/verify-production-merge-guard.sh \
-            "${{ github.repository }}" "${{ inputs.production_branch }}" \
-            karsift-ai-infra/config
           live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
           state=$(jq -r .state <<<"$live")
           if [ "$state" != "OPEN" ] && [ "$state" != "MERGED" ]; then
@@ -488,6 +485,19 @@ jobs:
           fi
           if [ "$state" = "OPEN" ]; then
             for attempt in 1 2 3; do
+              live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
+              if [ "$(jq -r .state <<<"$live")" != "OPEN" ] || \
+                 [ "$(jq -r .isDraft <<<"$live")" != "false" ] || \
+                 [ "$(jq -r .headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA" ] || \
+                 [ "$(jq -r .baseRefOid <<<"$live")" != "$CHECKED_BASE_SHA" ] || \
+                 [ "$(jq -r .baseRefName <<<"$live")" != "${{ inputs.production_branch }}" ] || \
+                 [ "$(jq -r .headRefName <<<"$live")" != "${{ inputs.integration_branch }}" ]; then
+                echo "Promotion PR changed before merge attempt; refusing stale merge." >&2
+                exit 1
+              fi
+              bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+                "${{ github.repository }}" "${{ inputs.production_branch }}" \
+                karsift-ai-infra/config
               if gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
                 break
               fi
