@@ -268,10 +268,14 @@ def apply(plan: BranchSyncPlan, args: argparse.Namespace) -> bool:
     tree_base = plan.expected_integration_sha or getattr(
         args, "expected_head_sha", ""
     )
-    diff = _run(["git", "diff", "--quiet", tree_base, plan.target_sha], env=env)
-    if diff.returncode not in (0, 1):
-        raise BranchSyncError("tree_equivalence_check_failed")
-    equivalent = bool(tree_base) and diff.returncode == 0
+    equivalent = False
+    if tree_base:
+        diff = _run(
+            ["git", "diff", "--quiet", tree_base, plan.target_sha], env=env
+        )
+        if diff.returncode not in (0, 1):
+            raise BranchSyncError("tree_equivalence_check_failed")
+        equivalent = diff.returncode == 0
     # Re-read every GitHub boundary immediately before the lease-protected push.
     if resolve(args) != plan:
         raise BranchSyncError("branch_state_changed_before_push")

@@ -153,5 +153,29 @@ class BranchSyncRunnerMutationTests(unittest.TestCase):
             runner.apply(self.plan, self.args)
         self.assertFalse(any(call.args[0] == "push" for call in git.call_args_list))
 
+    @mock.patch.object(runner, "resolve")
+    @mock.patch.object(runner, "_run")
+    @mock.patch.object(runner, "git")
+    @mock.patch.object(runner, "git_env", return_value={})
+    def test_missing_integration_ref_creates_without_comparing_a_missing_tree(
+        self, _git_env, git, run, resolve
+    ):
+        create = runner.BranchSyncPlan("create", "", SHA)
+        git.side_effect = lambda *values, **_kwargs: (
+            SHA if values[:2] == ("rev-parse", "origin/main") else ""
+        )
+        resolve.side_effect = (
+            create,
+            runner.BranchSyncPlan("noop", SHA, SHA),
+        )
+        main_only_args = args(expected_head_sha=None)
+        self.assertFalse(runner.apply(create, main_only_args))
+        run.assert_not_called()
+        pushes = [call for call in git.call_args_list if call.args[0] == "push"]
+        self.assertEqual(len(pushes), 1)
+        self.assertIn(
+            "--force-with-lease=refs/heads/develop:", pushes[0].args
+        )
+
 if __name__ == "__main__":
     unittest.main()
