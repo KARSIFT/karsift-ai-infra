@@ -76,7 +76,7 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
 
     def test_caller_template_has_reconciliation_dispatch(self):
         self.assertIn(
-            "options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, recover-integration-push, recover-promotion-pr-checks]",
+            "options: [implement, plan, reconcile, reconcile-release, reconcile-production-change, reconcile-live-evidence, recover-integration-push, recover-promotion-pr-checks]",
             self.template,
         )
         self.assertIn("plan_pr_number:", self.template)

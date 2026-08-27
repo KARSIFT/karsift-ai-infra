@@ -13,7 +13,7 @@ MAX_DISPATCH_INPUTS = 25
 INVALID_VOC125_TEMPLATE_SHA = "1f1705dbad41729563b0ad1e878e4154e5511e93"
 
 PIPELINE_MUTATING_OPTIONS = (
-    "implement, plan, reconcile, reconcile-release, reconcile-live-evidence, "
+    "implement, plan, reconcile, reconcile-release, reconcile-production-change, reconcile-live-evidence, "
     "recover-integration-push, recover-promotion-pr-checks"
 )
 PIPELINE_VERIFY_OPTIONS = (

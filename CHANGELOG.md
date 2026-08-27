@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-27 — Converge integration to exact governed production history
+
+- A successful merge-commit promotion now preserves its reviewed `develop → main` PR and merge
+  commit, then advances integration to that exact merge SHA under a lease. Production movement,
+  integration movement, unique integration commits, malformed merge parents, and ambiguous recovery
+  identity all fail closed; interrupted reconciliation is idempotent.
+- Release mutations now serialize globally per production/integration pair. A tree-equivalent
+  post-promotion synchronization does not create a second promotion loop or changed staging path,
+  and the release audit closes only after both refs are identical.
+- The caller template adds one governed path for intentional production-target tasks. It accepts
+  only the App-authored exact-review completion marker and adopted roster, runs before ordinary
+  release evaluation, skips ineligible issue closures, and supports strict retry.
+- Errors remain bounded codes, App credentials remain environment-only, and the active Cursor model
+  bindings, independent review, risk classification, protected checks, and retry controls are
+  unchanged.
+
 ## 2026-08-25 — Recognize Cursor API-key phrasing without exposing stderr
 
 - Live caller run `32839205119` still published `unspecified` after the bounded

@@ -1,0 +1,85 @@
+name: reconcile governed production change
+
+on:
+  workflow_call:
+    inputs:
+      authority_issue_number:
+        description: "Closed governed task issue carrying the completion marker"
+        required: true
+        type: number
+      integration_branch:
+        description: "Long-lived integration branch"
+        required: false
+        type: string
+        default: develop
+      production_branch:
+        description: "Protected production branch"
+        required: false
+        type: string
+        default: main
+      skip_ineligible:
+        description: "No-op when the issue is not a completed production-target task"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      KARSIFT_BOT_APP_ID:
+        required: true
+      KARSIFT_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    concurrency:
+      # Share the release pair lock. A main-only task must converge integration
+      # before its ordinary release evaluation is allowed to inspect the refs.
+      group: release-converge-${{ github.repository }}-${{ inputs.integration_branch }}-${{ inputs.production_branch }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Check out production metadata revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.production_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out shared automation at the invoked revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Mint bounded GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: read
+          permission-pull-requests: read
+
+      - name: Reconcile reviewed production task into integration
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          args=(
+            --mode governed-main-only
+            --repository "${{ github.repository }}"
+            --integration-branch "${{ inputs.integration_branch }}"
+            --production-branch "${{ inputs.production_branch }}"
+            --authority-issue-number "${{ inputs.authority_issue_number }}"
+            --apply
+          )
+          if [ "${{ inputs.skip_ineligible }}" = "true" ]; then
+            args+=(--skip-ineligible)
+          fi
+          python3 karsift-ai-infra/config/branch-sync-runner.py "${args[@]}"

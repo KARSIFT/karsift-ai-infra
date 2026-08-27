@@ -68,7 +68,7 @@ on:
         description: "Which reusable workflow to run"
         required: true
         type: choice
-        options: [implement, plan, reconcile, reconcile-release, reconcile-live-evidence, recover-integration-push, recover-promotion-pr-checks]
+        options: [implement, plan, reconcile, reconcile-release, reconcile-production-change, reconcile-live-evidence, recover-integration-push, recover-promotion-pr-checks]
         default: implement
       change_id:
         description: 'implement only: adopted package to implement from, e.g. "VOC-007"'
@@ -83,7 +83,7 @@ on:
         required: false
         type: string
       issue_number:
-        description: "implement only: GitHub issue carrying implementation authority"
+        description: "implement or reconcile-production-change: GitHub issue carrying task authority"
         required: false
         type: string
       attempt:
@@ -462,13 +462,36 @@ jobs:
       current_ci_result: ${{ needs.ci.result }}
     secrets: inherit
 
+  # A production-target task is an explicit exception to the normal integration
+  # carrier. Reconcile its exact reviewed merge before release evaluation. The
+  # ordinary issue-close trigger skips unrelated/integration tasks; an explicit
+  # retry is strict and fails closed.
+  reconcile-production-change:
+    if: |
+      (github.event_name == 'issues' && github.event.action == 'closed') ||
+      (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-production-change' && inputs.issue_number != '')
+    permissions:
+      contents: write
+      issues: read
+      pull-requests: read
+    uses: KARSIFT/karsift-ai-infra/.github/workflows/reconcile-production-change.yml@main
+    with:
+      authority_issue_number: ${{ github.event.issue.number || fromJSON(inputs.issue_number) }}
+      integration_branch: "develop"
+      production_branch: "main"
+      skip_ineligible: ${{ github.event_name == 'issues' }}
+    secrets:
+      KARSIFT_BOT_APP_ID: ${{ secrets.KARSIFT_BOT_APP_ID }}
+      KARSIFT_BOT_PRIVATE_KEY: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+
   # Promotes only after every roster task has a valid App-authored marker for
   # its exact merged caller PR. Issue closure and terminal checks are wake-up
   # hints, not completion authority. reconcile-release retries convergence.
   release:
-    needs: [merge-gate]
+    needs: [merge-gate, reconcile-production-change]
     if: |
-      always() && (
+      always() &&
+      (needs.reconcile-production-change.result == 'success' || needs.reconcile-production-change.result == 'skipped') && (
         (github.event_name == 'issues' && github.event.action == 'closed') ||
         (github.event_name == 'workflow_dispatch' && inputs.action == 'reconcile-release' && inputs.release_issue_number != '') ||
         (github.event_name == 'pull_request' && github.event.action != 'closed' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'develop') ||
@@ -504,7 +527,11 @@ jobs:
   # only ever be in the "next task exists" or "roster complete" state, never
   # both, so exactly one of the two actually does something per event.
   auto-advance:
-    if: github.event_name == 'issues' && github.event.action == 'closed'
+    needs: [reconcile-production-change]
+    if: |
+      always() &&
+      github.event_name == 'issues' && github.event.action == 'closed' &&
+      needs.reconcile-production-change.result == 'success'
     uses: KARSIFT/karsift-ai-infra/.github/workflows/auto-advance.yml@main
     with:
       integration_branch: "develop"   # match the value used elsewhere in this file
