@@ -183,6 +183,7 @@ jobs:
           cp karsift-ai-infra/config/prepare_cursor_model.py "$HELPER_DIR/prepare_cursor_model.py"
           cp karsift-ai-infra/config/implementer_source_carrier.py "$HELPER_DIR/implementer_source_carrier.py"
           cp karsift-ai-infra/config/cross_repo_reference.py "$HELPER_DIR/cross_repo_reference.py"
+          cp karsift-ai-infra/config/implementer_nested_checkout.py "$HELPER_DIR/implementer_nested_checkout.py"
 
       - name: Refuse to run without an adopted, authorized package
         id: package
@@ -970,16 +971,15 @@ jobs:
           # changes to publish. A surviving non-repository path is ambiguous
           # and fails closed rather than being silently discarded.
           HELPER_DIR=/tmp/karsift-implement-helpers
-          if [ ! -e karsift-ai-infra ]; then
+          if ! NESTED_STATE=$(python3 "$HELPER_DIR/implementer_nested_checkout.py" karsift-ai-infra); then
+            echo "Nested infrastructure path is not a distinct Git checkout; refusing to discard ambiguous source state." >&2
+            exit 1
+          fi
+          if [ "$NESTED_STATE" = "absent" ]; then
             echo "Implementer removed the untracked infrastructure checkout; no nested source changes to publish."
             echo "has_source_changes=false" >> "$GITHUB_OUTPUT"
             echo "source_head_sha=" >> "$GITHUB_OUTPUT"
           else
-            if ! git -C karsift-ai-infra rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-              echo "Nested infrastructure path survived without a valid Git checkout; refusing to discard ambiguous source state." >&2
-              exit 1
-            fi
-
             # As with the caller branch, normalize any commits the model made
             # itself back into staged source changes. This prevents a clean
             # nested status from silently discarding already-committed edits.

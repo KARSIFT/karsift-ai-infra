@@ -20,6 +20,10 @@ from implementer_source_carrier import (  # noqa: E402
     nested_worktree_has_changes,
     validate_no_gitlink_paths,
 )
+from implementer_nested_checkout import (  # noqa: E402
+    NestedCheckoutError,
+    classify_nested_checkout,
+)
 from prepare_cursor_model import CursorModelError, prepare_cursor_model  # noqa: E402
 
 
@@ -52,6 +56,10 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             'cp karsift-ai-infra/config/cross_repo_reference.py "$HELPER_DIR/cross_repo_reference.py"',
             WORKFLOW,
         )
+        self.assertIn(
+            'cp karsift-ai-infra/config/implementer_nested_checkout.py "$HELPER_DIR/implementer_nested_checkout.py"',
+            WORKFLOW,
+        )
         self.assertIn("/tmp/karsift-implement-helpers/prepare_cursor_model.py", WORKFLOW)
         self.assertNotIn(
             "merge-gate.yml fails closed (requires founder approval)",
@@ -68,10 +76,13 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
                 "- name: Pre-push validation"
             )
         ]
-        self.assertIn("if [ ! -e karsift-ai-infra ]; then", commit)
+        self.assertIn(
+            'python3 "$HELPER_DIR/implementer_nested_checkout.py" karsift-ai-infra',
+            commit,
+        )
         self.assertIn("no nested source changes to publish", commit)
         self.assertIn(
-            "Nested infrastructure path survived without a valid Git checkout",
+            "Nested infrastructure path is not a distinct Git checkout",
             commit,
         )
         self.assertIn(
@@ -83,6 +94,41 @@ class Voc121ImplementPolicyTests(unittest.TestCase):
             commit,
         )
 
+    def test_nested_checkout_classifier_rejects_parent_git_inheritance(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            caller = Path(scratch) / "caller"
+            caller.mkdir()
+            self.git(caller, "init")
+            nested = caller / "karsift-ai-infra"
+            nested.mkdir()
+            with self.assertRaisesRegex(
+                NestedCheckoutError,
+                "nested_checkout_inherits_parent_git",
+            ):
+                classify_nested_checkout(nested)
+
+    def test_nested_checkout_classifier_accepts_absent_or_distinct_repo(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            nested = root / "karsift-ai-infra"
+            self.assertEqual(classify_nested_checkout(nested), "absent")
+            nested.mkdir()
+            self.git(nested, "init")
+            self.assertEqual(classify_nested_checkout(nested), "valid")
+
+    def test_nested_checkout_classifier_rejects_symlink(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            target = root / "target"
+            target.mkdir()
+            self.git(target, "init")
+            nested = root / "karsift-ai-infra"
+            nested.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(
+                NestedCheckoutError,
+                "nested_checkout_symlink",
+            ):
+                classify_nested_checkout(nested)
     def test_workflow_bundles_nested_edits_before_removal(self):
         self.assertIn('python3 "$HELPER_DIR/implementer_source_carrier.py" \\', WORKFLOW)
         self.assertIn("create-bundle \\", WORKFLOW)

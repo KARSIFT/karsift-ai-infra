@@ -285,7 +285,9 @@ every past state.
   validation and source-carrier helpers from that deleted directory. The
   reusable workflow now preserves those helpers before the unrestricted model
   runs, treats an absent nested checkout as no infrastructure-source change,
-  and fails closed if the path survives without being a valid Git checkout.
+  and requires a surviving path to resolve to its own distinct Git root rather
+  than inheriting the caller repository. Non-repository and symlink paths fail
+  closed as ambiguous source state.
   Authorized nested edits retain the existing exact-head bundle path.
 - **2026-07-23, restored to `openai/codex-action`**: once OpenAI API billing
   became available again, after an earlier same-vendor compromise (Claude

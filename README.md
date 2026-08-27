@@ -245,7 +245,9 @@ When an adopted caller task also authorizes changes to its nested
 lifecycle helper in an immutable temporary path before the unrestricted
 implementer runs. A caller-only task may therefore remove the untracked nested
 checkout before publication without breaking commit or validation; a surviving
-non-repository path fails closed as ambiguous source state. When the checkout
+path must resolve to its own distinct Git root (not inherit the caller Git
+repository), while non-repository and symlink paths fail closed as ambiguous
+source state. When the checkout
 survives with authorized source edits, the workflow commits the
 authorized source changes and binds the exact committed head to one temporary,
 fixed-name ref before creating the separate bundle. The carrier verifies that
