@@ -52,6 +52,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("--paginate --slurp", self.release)
         self.assertIn("--match-head-commit \"$CHECKED_HEAD_SHA\"", self.release)
         self.assertIn('headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA', self.release)
+        self.assertIn('baseRefOid <<<"$live")" != "$CHECKED_BASE_SHA', self.release)
+        self.assertIn('base_sha" != "$EXPECTED_BASE_SHA', self.release)
         self.assertNotIn("statusCheckRollup", self.release)
         self.assertIn("gh pr checks \"$PR_NUMBER\" --required", self.release)
 

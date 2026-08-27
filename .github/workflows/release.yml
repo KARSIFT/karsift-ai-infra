@@ -402,6 +402,7 @@ jobs:
           PYTHONPATH: karsift-ai-infra/config
           PR_NUMBER: ${{ steps.promotion.outputs.pr_number }}
           HEAD_SHA: ${{ steps.promotion.outputs.head_sha }}
+          EXPECTED_BASE_SHA: ${{ steps.promotion.outputs.base_sha }}
         run: |
           set -euo pipefail
           live=$(gh pr view "$PR_NUMBER" --json state,headRefOid,baseRefOid)
@@ -411,6 +412,10 @@ jobs:
             exit 0
           fi
           base_sha=$(jq -r .baseRefOid <<<"$live")
+          if [ "$base_sha" != "$EXPECTED_BASE_SHA" ]; then
+            echo "Production base changed after promotion planning; refusing stale checks." >&2
+            exit 1
+          fi
           gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" > /tmp/release-pr.json
           gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
             "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?per_page=100" > /tmp/release-check-runs.json
@@ -461,6 +466,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.promotion.outputs.pr_number }}
           CHECKED_HEAD_SHA: ${{ steps.promotion.outputs.head_sha }}
+          CHECKED_BASE_SHA: ${{ steps.promotion.outputs.base_sha }}
           RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -euo pipefail
@@ -471,6 +477,7 @@ jobs:
             exit 1
           fi
           if [ "$(jq -r .isDraft <<<"$live")" != "false" ] || [ "$(jq -r .headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA" ] || \
+             [ "$(jq -r .baseRefOid <<<"$live")" != "$CHECKED_BASE_SHA" ] || \
              [ "$(jq -r .baseRefName <<<"$live")" != "${{ inputs.production_branch }}" ] || \
              [ "$(jq -r .headRefName <<<"$live")" != "${{ inputs.integration_branch }}" ]; then
             echo "Promotion PR changed after evaluation; refusing stale merge." >&2
@@ -492,7 +499,7 @@ jobs:
             --json state,mergedAt,mergeCommit,headRefOid,baseRefOid,baseRefName,headRefName)
           if [ "$(jq -r .state <<<"$merged")" != "MERGED" ] || \
              [ "$(jq -r .headRefOid <<<"$merged")" != "$CHECKED_HEAD_SHA" ] || \
-             [ "$(jq -r .baseRefOid <<<"$merged")" != "$(jq -r .baseRefOid <<<"$live")" ] || \
+             [ "$(jq -r .baseRefOid <<<"$merged")" != "$CHECKED_BASE_SHA" ] || \
              [ "$(jq -r .baseRefName <<<"$merged")" != "${{ inputs.production_branch }}" ] || \
              [ "$(jq -r .headRefName <<<"$merged")" != "${{ inputs.integration_branch }}" ] || \
              ! [[ "$(jq -r .mergeCommit.oid <<<"$merged")" =~ ^[0-9a-f]{40}$ ]]; then
