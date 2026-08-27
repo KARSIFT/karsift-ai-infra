@@ -57,17 +57,29 @@ jobs:
       release_issue_number: ${{ steps.identify.outputs.release_issue_number }}
       promotion_pr_number: ${{ steps.identify.outputs.promotion_pr_number }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ inputs.integration_branch }}
-          persist-credentials: false
-
       - name: Checkout shared lifecycle policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: karsift-ai-infra
+          persist-credentials: false
+
+      - name: Resolve caller release-state checkout ref
+        id: caller-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 karsift-ai-infra/config/release-checkout-ref-runner.py \
+            --repository "${{ github.repository }}" \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --production-branch "${{ inputs.production_branch }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Checkout caller release state
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.caller-ref.outputs.ref }}
           persist-credentials: false
 
       - name: Resolve an authoritative release identity
@@ -204,16 +216,27 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ inputs.integration_branch }}
-          persist-credentials: false
       - name: Checkout shared lifecycle policy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: karsift-ai-infra
+          persist-credentials: false
+      - name: Resolve caller release-state checkout ref
+        id: caller-ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 karsift-ai-infra/config/release-checkout-ref-runner.py \
+            --repository "${{ github.repository }}" \
+            --integration-branch "${{ inputs.integration_branch }}" \
+            --production-branch "${{ inputs.production_branch }}" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Checkout caller release state
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.caller-ref.outputs.ref }}
           persist-credentials: false
       - name: Mint App installation token for release mutation
         id: app-token
@@ -293,23 +316,46 @@ jobs:
           set -euo pipefail
           change_id="${{ needs.identify.outputs.change_id }}"
           requested_pr="${{ needs.identify.outputs.promotion_pr_number }}"
-          integration_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/${{ inputs.integration_branch }}" --jq .object.sha)
-          production_sha=$(gh api "repos/${{ github.repository }}/git/ref/heads/${{ inputs.production_branch }}" --jq .object.sha)
-          if [ "$integration_sha" = "$production_sha" ]; then
-            gh issue close "$RELEASE_ISSUE" --comment "Already promoted and synchronized at exact SHA $production_sha."
-            echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "sync_needed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          integration_ref="refs/heads/${{ inputs.integration_branch }}"
+          if ! integration_refs=$(gh api \
+            "repos/${{ github.repository }}/git/matching-refs/heads/${{ inputs.integration_branch }}" \
+            2>/dev/null); then
+            echo "Integration ref lookup failed; refusing recovery." >&2
+            exit 1
           fi
-          compare=$(gh api "repos/${{ github.repository }}/compare/${{ inputs.production_branch }}...${{ inputs.integration_branch }}")
-          if [ "$(jq -r .ahead_by <<<"$compare")" = "0" ]; then
-            if [ "$(jq -r .merge_base_commit.sha <<<"$compare")" != "$integration_sha" ]; then
-              echo "Production and integration diverged without an open promotion; refusing." >&2
-              exit 1
-            fi
-            # A prior attempt merged the promotion but stopped before advancing
-            # integration. Bind recovery to the one merged PR carrying this
-            # release issue/change identity; do not guess from branch ancestry.
+          if ! integration_matches=$(jq --arg ref "$integration_ref" \
+            '[.[] | select(.ref == $ref and .object.type == "commit")]' \
+            <<<"$integration_refs" 2>/dev/null); then
+            echo "Integration ref lookup returned malformed data; refusing recovery." >&2
+            exit 1
+          fi
+          if [ "$(jq length <<<"$integration_matches")" -gt 1 ]; then
+            echo "Integration ref lookup was ambiguous; refusing recovery." >&2
+            exit 1
+          fi
+          if ! integration_sha=$(jq -r \
+            'if length == 1 then .[0].object.sha else "" end' \
+            <<<"$integration_matches" 2>/dev/null); then
+            echo "Integration ref lookup returned malformed identity; refusing recovery." >&2
+            exit 1
+          fi
+          if [ -n "$integration_sha" ] && ! [[ "$integration_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Integration ref lookup returned malformed identity; refusing recovery." >&2
+            exit 1
+          fi
+          if ! production_sha=$(gh api \
+            "repos/${{ github.repository }}/git/ref/heads/${{ inputs.production_branch }}" \
+            --jq .object.sha 2>/dev/null); then
+            echo "Production ref lookup failed; refusing recovery." >&2
+            exit 1
+          fi
+          if ! [[ "$production_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Production ref lookup returned malformed identity; refusing recovery." >&2
+            exit 1
+          fi
+
+          recover_merged_promotion() {
+            local expected_integration_sha="$1"
             gh api --paginate --slurp \
               "repos/${{ github.repository }}/pulls?state=closed&base=${{ inputs.production_branch }}&per_page=100" \
               > /tmp/closed-promotion-pages.json
@@ -325,9 +371,13 @@ jobs:
               exit 1
             fi
             recovered=$(jq '.[0]' /tmp/matching-merged-promotions.json)
-            if [ "$(jq -r .merge_commit_sha <<<"$recovered")" != "$production_sha" ] || \
-               [ "$(jq -r .head.sha <<<"$recovered")" != "$integration_sha" ]; then
-              echo "Merged promotion recovery no longer matches live refs; refusing." >&2
+            if [ "$(jq -r .merge_commit_sha <<<"$recovered")" != "$production_sha" ]; then
+              echo "Merged promotion recovery no longer matches production; refusing." >&2
+              exit 1
+            fi
+            if [ -n "$expected_integration_sha" ] && \
+               [ "$(jq -r .head.sha <<<"$recovered")" != "$expected_integration_sha" ]; then
+              echo "Merged promotion recovery no longer matches integration; refusing." >&2
               exit 1
             fi
             echo "needed=false" >> "$GITHUB_OUTPUT"
@@ -335,6 +385,32 @@ jobs:
             echo "pr_number=$(jq -r .number <<<"$recovered")" >> "$GITHUB_OUTPUT"
             echo "head_sha=$(jq -r .head.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
             echo "base_sha=$(jq -r .base.sha <<<"$recovered")" >> "$GITHUB_OUTPUT"
+          }
+
+          if [ -z "$integration_sha" ]; then
+            # The promotion merge may have succeeded while GitHub (or an
+            # operator) deleted the integration ref before convergence. Recover
+            # only the one audit-bound merged promotion at the live production
+            # tip; branch-sync-runner will recreate integration at that merge.
+            recover_merged_promotion ""
+            exit 0
+          fi
+          if [ "$integration_sha" = "$production_sha" ]; then
+            gh issue close "$RELEASE_ISSUE" --comment "Already promoted and synchronized at exact SHA $production_sha."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "sync_needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          compare=$(gh api "repos/${{ github.repository }}/compare/${{ inputs.production_branch }}...${{ inputs.integration_branch }}")
+          if [ "$(jq -r .ahead_by <<<"$compare")" = "0" ]; then
+            if [ "$(jq -r .merge_base_commit.sha <<<"$compare")" != "$integration_sha" ]; then
+              echo "Production and integration diverged without an open promotion; refusing." >&2
+              exit 1
+            fi
+            # A prior attempt merged the promotion but stopped before advancing
+            # integration. Bind recovery to the one merged PR carrying this
+            # release issue/change identity; do not guess from branch ancestry.
+            recover_merged_promotion "$integration_sha"
             exit 0
           fi
           existing=$(gh pr list --base "${{ inputs.production_branch }}" --head "${{ inputs.integration_branch }}" \

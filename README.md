@@ -550,8 +550,12 @@ All packages and retries share one production/integration-pair concurrency group
 different completed packages from racing between merge and convergence. If an attempt is interrupted
 after the PR merge, `reconcile-release` identifies exactly one merged promotion PR from the audit
 issue and change ID, then repeats the same validation and lease-protected synchronization. An exact
-retry is a no-op. A terminal check completion wakes only the cheap evaluator; it does not rerun
-unchanged-SHA CI or the reviewer.
+retry is a no-op. If integration was deleted after the merge, recovery resolves the absent ref
+without treating the API 404 as terminal, binds the unique audit-carrier merge at the live production
+tip, checks out caller release state from that production tree, and lets the same lease-protected
+runner recreate integration at that exact merge SHA. Normal evaluation still checks out integration;
+ambiguous, malformed, or unreadable ref state remains a sanitized fail-closed error. A terminal check
+completion wakes only the cheap evaluator; it does not rerun unchanged-SHA CI or the reviewer.
 
 The caller template also provides an explicit reconciliation path for the exceptional package that
 is intentionally implemented against production. On the App-authored task-completion wake, it
