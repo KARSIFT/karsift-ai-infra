@@ -57,6 +57,19 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertNotIn("statusCheckRollup", self.release)
         self.assertIn("gh pr checks \"$PR_NUMBER\" --required", self.release)
 
+    def test_production_base_is_atomically_guarded_by_server_rules(self):
+        merge = self.release.index("Perform the single exact-head merge decision")
+        sync = self.release.index("Synchronize integration to the exact promotion merge")
+        guarded_merge = self.release[merge:sync]
+        self.assertIn(
+            'rules/branches/${{ inputs.production_branch }}', guarded_merge
+        )
+        self.assertIn("production-merge-guard-runner.py", guarded_merge)
+        self.assertLess(
+            guarded_merge.index("production-merge-guard-runner.py"),
+            guarded_merge.index("gh pr merge"),
+        )
+
     def test_ruleset_attestation_is_narrow_and_precedes_merge(self):
         self.assertIn("statuses: write", self.release)
         self.assertIn("promotion-status-attestation-runner.py", self.release)

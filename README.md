@@ -76,6 +76,11 @@ through its own governance documents and through inputs to `merge-gate.yml`:
   merges the integration branch into the production branch. It then advances integration to the
   exact resulting merge SHA under an exact ref lease; callers must grant the App a bypass only on
   the integration branch for that bounded convergence while leaving production without a bypass.
+  Production must also have an active, repository-owned pull-request ruleset with strict required
+  status checks (GitHub's **Require branches to be up to date before merging**) and no bypass actors.
+  `release.yml` validates that effective rule immediately before merge, so GitHub atomically refuses
+  a promotion if production moved after its exact base was checked; the workflow then verifies the
+  resulting ordered merge parents before synchronizing integration.
   Release PRs declare the conservative R4 risk class because promotion updates production.
 - **Independent review**: `review.yml` runs the reviewer role with **read-only** tools only. It can
   read the diff and the package and post one comment - nothing else. Findings are Critical / High /
