@@ -164,6 +164,7 @@ class GovernedMainOnlySyncTests(unittest.TestCase):
             },
             {"marker": {**self.marker, "merge_commit_sha": "d" * 40}},
             {"merge_commit": merge_commit(base="d" * 40)},
+            {"integration_sha": None, "comparison": None},
             {"production_sha": "d" * 40},
             {"comparison": comparison(integration=HEAD)},
         )

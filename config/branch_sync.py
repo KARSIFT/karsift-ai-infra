@@ -121,6 +121,8 @@ def governed_main_only_sync_plan(
     comparison: dict[str, Any] | None,
 ) -> BranchSyncPlan:
     """Authorize a reviewed, completed production-target task back to integration."""
+    if integration_sha is None:
+        raise BranchSyncError("production_task_integration_ref_missing")
     head = pull_request.get("head") or {}
     base = pull_request.get("base") or {}
     if (
