@@ -97,6 +97,11 @@ elif [ "$validation_mode" != "local" ]; then
 fi
 
 export VOC112_CAPTURE_PROVENANCE_MODE="$validation_mode"
+if [ "$promotion_pr" = true ]; then
+  export VOC112_PROMOTION_PR=true
+else
+  unset VOC112_PROMOTION_PR
+fi
 if [ -n "$validation_base_sha" ]; then
   export PR_BASE_SHA="$validation_base_sha"
   export PR_HEAD_SHA="$validation_head_sha"
