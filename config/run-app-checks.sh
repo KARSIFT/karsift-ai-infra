@@ -74,6 +74,12 @@ if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
     echo "exact PR validation commits are unavailable or unrelated" >&2
     exit 2
   fi
+  if [ "$promotion_pr" = true ] &&
+     ! git merge-base --is-ancestor \
+       "$validation_base_sha" "$validation_head_sha"; then
+    echo "promotion PR base must be an ancestor of its head" >&2
+    exit 2
+  fi
 
   validation_mode="pr-validation"
   if [ "$promotion_pr" != true ]; then
