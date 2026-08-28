@@ -81,6 +81,13 @@ def verify_promotion_required_run_semantics(
     if path != EXPECTED_WORKFLOWS.get(context):
         raise AttestationError("untrusted_ci_recovery_workflow")
     if (
+        context == "ci / ci"
+        and event == "workflow_dispatch"
+        and run_payload.get("display_title")
+        != f"promotion-pr-validation PR #{pr_number}"
+    ):
+        raise AttestationError("untrusted_ci_recovery_semantics")
+    if (
         run_payload.get("id") != run_id
         or run_payload.get("status") != "completed"
         or run_payload.get("conclusion") != "success"

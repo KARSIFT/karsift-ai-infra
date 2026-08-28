@@ -33,7 +33,7 @@ def run_payload(
         "id": RUN_ID,
         "event": event,
         "path": path,
-        "display_title": "pipeline",
+        "display_title": f"promotion-pr-validation PR #{PR_NUMBER}",
         "status": "completed",
         "conclusion": "success",
         "head_sha": HEAD_SHA,
@@ -76,9 +76,8 @@ class Voc138PromotionPrProvenanceTests(unittest.TestCase):
         verify(run_payload(event="pull_request"))
 
     def test_recover_promotion_pr_checks_dispatch_is_attestable(self):
-        # GitHub exposes the workflow name, not the dispatch action, as this
-        # title. Binding comes from immutable run/PR metadata and the exact
-        # caller workflow that produced the successful ci / ci check.
+        # The caller's run-name binds this dispatch to the exact recovery
+        # action and PR number; the run payload supplies the immutable SHAs.
         verify(run_payload())
 
     def test_every_pr_bound_required_workflow_dispatch_is_attestable(self):
@@ -93,10 +92,13 @@ class Voc138PromotionPrProvenanceTests(unittest.TestCase):
 
     def test_squash_safe_dispatch_is_rejected(self):
         with self.assertRaisesRegex(
-            AttestationError, "untrusted_ci_recovery_pr_binding"
+            AttestationError, "untrusted_ci_recovery_semantics"
         ):
             payload = run_payload()
-            payload["pull_requests"] = []
+            # Real incident run 33122158425 had this generic title and still
+            # carried a matching open-PR association, so PR binding alone is
+            # deliberately insufficient.
+            payload["display_title"] = "pipeline"
             verify(payload)
 
     def test_every_run_and_pr_identity_mismatch_is_rejected(self):
@@ -108,6 +110,7 @@ class Voc138PromotionPrProvenanceTests(unittest.TestCase):
             "status": ("status", "in_progress"),
             "conclusion": ("conclusion", "failure"),
             "workflow": ("path", ".github/workflows/other.yml"),
+            "dispatch semantics": ("display_title", "pipeline"),
         }
         for label, (field, value) in cases.items():
             with self.subTest(label=label):

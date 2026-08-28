@@ -391,6 +391,10 @@ class AppCheckContextTests(unittest.TestCase):
 
     def test_recovery_ci_requires_successful_exact_pr_metadata(self):
         self.assertIn(
+            "format('promotion-pr-validation PR #{0}', inputs.promotion_pr_number)",
+            self.pipeline,
+        )
+        self.assertIn(
             "inputs.action == 'recover-promotion-pr-checks' && "
             "needs.promotion-pr-metadata.result == 'success'",
             self.pipeline,

@@ -117,12 +117,17 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                 event = "pull_request"
                 if run_id == 3:
                     event = "workflow_dispatch"
+                display_title = (
+                    "promotion-pr-validation PR #947"
+                    if event == "workflow_dispatch"
+                    else "pipeline"
+                )
                 result.stdout = json.dumps(
                     {
                         "id": run_id,
                         "event": event,
                         "path": workflow,
-                        "display_title": "pipeline",
+                        "display_title": display_title,
                         "status": "completed",
                         "conclusion": "success",
                         "head_sha": head_sha,
