@@ -18,12 +18,13 @@
 set -uo pipefail
 
 usage() {
-  echo "usage: $0 [--pr-base-sha SHA --pr-head-sha SHA | --squash-safe-push]" >&2
+  echo "usage: $0 [--pr-base-sha SHA --pr-head-sha SHA [--promotion-pr] | --squash-safe-push]" >&2
 }
 
 validation_mode="local"
 validation_base_sha=""
 validation_head_sha=""
+promotion_pr=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -37,6 +38,10 @@ while [ "$#" -gt 0 ]; do
       validation_head_sha="$2"
       shift 2
       ;;
+    --promotion-pr)
+      promotion_pr=true
+      shift
+      ;;
     --squash-safe-push)
       validation_mode="squash-safe-push"
       shift
@@ -47,6 +52,14 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$promotion_pr" = true ] &&
+   { [ -z "$validation_base_sha" ] ||
+     [ -z "$validation_head_sha" ] ||
+     [ "$validation_mode" != "local" ]; }; then
+  echo "promotion PR validation requires one non-conflicting exact base/head pair" >&2
+  exit 2
+fi
 
 if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
   if [ "$validation_mode" != "local" ] ||
@@ -63,17 +76,19 @@ if [ -n "$validation_base_sha" ] || [ -n "$validation_head_sha" ]; then
   fi
 
   validation_mode="pr-validation"
-  capture_fixture="scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
-  git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"
-  fixture_diff_status=$?
-  case "$fixture_diff_status" in
-    0) ;;
-    1) validation_mode="pr-ancestry" ;;
-    *)
-      echo "capture fixture comparison failed" >&2
-      exit 2
-      ;;
-  esac
+  if [ "$promotion_pr" != true ]; then
+    capture_fixture="scripts/foundation/fixtures/voc112-navigation-benchmark-traces.json"
+    git diff --quiet "$validation_base_sha" "$validation_head_sha" -- "$capture_fixture"
+    fixture_diff_status=$?
+    case "$fixture_diff_status" in
+      0) ;;
+      1) validation_mode="pr-ancestry" ;;
+      *)
+        echo "capture fixture comparison failed" >&2
+        exit 2
+        ;;
+    esac
+  fi
 elif [ "$validation_mode" = "squash-safe-push" ]; then
   :
 elif [ "$validation_mode" != "local" ]; then

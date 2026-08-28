@@ -453,6 +453,39 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
         dispatch.assert_called_once()
         rerun.assert_not_called()
 
+    def test_failed_ci_ci_dispatches_recovery_instead_of_rerunning_doomed_pr_job(self):
+        failed_ci_view = [
+            {
+                "name": "ci / ci",
+                "state": "FAILURE",
+                "event": "pull_request",
+                "workflow": "pipeline",
+                "link": f"https://github.com/{REPOSITORY}/actions/runs/33122154521",
+            },
+            {"name": "governance-policy", "state": "SUCCESS"},
+            {"name": "validate", "state": "SUCCESS"},
+        ]
+        gate_summary = success_gate_summary()
+        with mock.patch.object(sys, "argv", promotion_argv()), mock.patch.object(
+            runner,
+            "run_metadata_phase",
+            side_effect=lambda **kwargs: metadata_result(
+                failed_ci_view, gate_summary=gate_summary
+            ),
+        ), mock.patch.object(
+            runner, "rerun_selected_workflow"
+        ) as rerun, mock.patch.object(
+            runner, "dispatch_workflow"
+        ) as dispatch, mock.patch.object(
+            runner.time, "sleep"
+        ), mock.patch.object(
+            runner.time, "time", side_effect=[0.0, 0.0, 0.5, 1.1]
+        ):
+            self.assertEqual(runner.main(), 1)
+        rerun.assert_not_called()
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[2], "pipeline.yml")
+
     def test_timeout_poll_interval_and_integration_push_planning_remain(self):
         self.assertEqual(DEFAULT_TIMEOUT_SECONDS, 1800)
         self.assertEqual(POLL_INTERVAL_SECONDS, 30)

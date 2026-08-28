@@ -46,6 +46,7 @@ REQUIRED_WORKFLOW_PATHS = {
     "validate": ".github/workflows/repository-governance.yml",
     "ci / ci": ".github/workflows/pipeline.yml",
 }
+CI_CI_CONTEXT = "ci / ci"
 
 
 class RunnerError(RuntimeError):
@@ -365,6 +366,14 @@ def collect_missing(
     return missing
 
 
+def promotion_ci_selected_run_is_rerun_proof(
+    plan: SelectedRequiredCheckRun,
+) -> bool:
+    """PR-bound ci / ci failures need dispatch recovery, not doomed reruns."""
+
+    return plan.context == CI_CI_CONTEXT
+
+
 def apply_promotion_pr_recovery_plan(
     *,
     token: str,
@@ -384,6 +393,14 @@ def apply_promotion_pr_recovery_plan(
         required_contexts("promotion_pr"),
         repository=repository,
     )
+    filtered_reruns: list[SelectedRequiredCheckRun] = []
+    for plan in rerun_plans:
+        if promotion_ci_selected_run_is_rerun_proof(plan):
+            if CI_CI_CONTEXT not in dispatch_contexts:
+                dispatch_contexts.append(CI_CI_CONTEXT)
+            continue
+        filtered_reruns.append(plan)
+    rerun_plans = filtered_reruns
     for rerun_plan in rerun_plans:
         if rerun_plan.run_id in rerun_ids:
             continue

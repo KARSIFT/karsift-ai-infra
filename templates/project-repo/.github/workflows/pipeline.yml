@@ -1,4 +1,6 @@
 name: pipeline
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks' && format('promotion-pr-validation PR #{0}', inputs.promotion_pr_number) || github.event.pull_request.title || github.workflow }}
 
 # Thin file. All real logic lives in KARSIFT/karsift-ai-infra's reusable
 # workflows - this just wires triggers to them. Runs alongside (not instead
@@ -306,13 +308,39 @@ jobs:
       event_action: ${{ github.event_name == 'pull_request' && github.event.action || 'recovery' }}
       current_run_id: ${{ github.run_id }}
 
+  promotion-pr-metadata:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks'
+    runs-on: ubuntu-latest
+    outputs:
+      pr_base_sha: ${{ steps.metadata.outputs.pr_base_sha }}
+      pr_head_sha: ${{ steps.metadata.outputs.pr_head_sha }}
+    steps:
+      - name: Resolve immutable promotion PR metadata
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_PR_NUMBER: ${{ inputs.promotion_pr_number }}
+        run: |
+          set -euo pipefail
+          payload=$(gh pr view "$PROMOTION_PR_NUMBER" --json baseRefOid,headRefOid,baseRefName,headRefName,headRepository)
+          base_ref=$(jq -r .baseRefName <<<"$payload")
+          head_ref=$(jq -r .headRefName <<<"$payload")
+          head_repo=$(jq -r .headRepository.nameWithOwner <<<"$payload")
+          if [ "$base_ref" != "main" ] || [ "$head_ref" != "develop" ] ||
+             [ "$head_repo" != "${{ github.repository }}" ]; then
+            echo "promotion pair mismatch" >&2
+            exit 1
+          fi
+          echo "pr_base_sha=$(jq -r .baseRefOid <<<"$payload")" >> "$GITHUB_OUTPUT"
+          echo "pr_head_sha=$(jq -r .headRefOid <<<"$payload")" >> "$GITHUB_OUTPUT"
+
   ci:
-    needs: [ready-for-review-reuse]
+    needs: [ready-for-review-reuse, promotion-pr-metadata]
     if: |
       always() &&
       (
         (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-        (github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks')
+        (github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks' && needs.promotion-pr-metadata.result == 'success')
       )
     uses: KARSIFT/karsift-ai-infra/.github/workflows/ci.yml@main
     with:
@@ -320,6 +348,9 @@ jobs:
       # that context successful on the optimized path without rerunning the
       # application checks; merge-gate still revalidates the prior run.
       reuse_evidence: ${{ needs.ready-for-review-reuse.outputs.outcome == 'reuse-evidence' }}
+      pr_base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.promotion-pr-metadata.outputs.pr_base_sha }}
+      pr_head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.promotion-pr-metadata.outputs.pr_head_sha }}
+      promotion_pr: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'recover-promotion-pr-checks' || (github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'develop' && github.event.pull_request.head.repo.full_name == github.repository) }}
 
   plan-review:
     needs: [ready-for-review-reuse, ci]

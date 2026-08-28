@@ -18,6 +18,21 @@ on:
         required: false
         type: boolean
         default: false
+      pr_base_sha:
+        description: "Immutable PR base SHA when the caller supplies promotion recovery metadata."
+        required: false
+        type: string
+        default: ""
+      pr_head_sha:
+        description: "Immutable PR head SHA when the caller supplies promotion recovery metadata."
+        required: false
+        type: string
+        default: ""
+      promotion_pr:
+        description: "Authenticated same-repository production <- integration promotion pair."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   ci:
@@ -45,15 +60,42 @@ jobs:
         if: ${{ !inputs.reuse_evidence }}
         shell: bash
         env:
+          INPUT_PR_BASE_SHA: ${{ inputs.pr_base_sha }}
+          INPUT_PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
+          INPUT_PROMOTION_PR: ${{ inputs.promotion_pr }}
           WORKFLOW_EVENT: ${{ github.event_name }}
           EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EVENT_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
-          if [ "$WORKFLOW_EVENT" = "pull_request" ]; then
-            bash karsift-ai-infra/config/run-app-checks.sh \
-              --pr-base-sha "$EVENT_BASE_SHA" \
+          if [ "$INPUT_PROMOTION_PR" = "true" ] &&
+             { [ -z "$INPUT_PR_BASE_SHA" ] || [ -z "$INPUT_PR_HEAD_SHA" ]; }; then
+            echo "promotion PR validation requires immutable base/head metadata" >&2
+            exit 2
+          fi
+          if [ -n "$INPUT_PR_BASE_SHA" ] && [ -n "$INPUT_PR_HEAD_SHA" ]; then
+            app_check_args=(
+              --pr-base-sha "$INPUT_PR_BASE_SHA"
+              --pr-head-sha "$INPUT_PR_HEAD_SHA"
+            )
+            if [ "$INPUT_PROMOTION_PR" = "true" ]; then
+              app_check_args+=(--promotion-pr)
+            fi
+            bash karsift-ai-infra/config/run-app-checks.sh "${app_check_args[@]}"
+          elif [ "$WORKFLOW_EVENT" = "pull_request" ]; then
+            app_check_args=(
+              --pr-base-sha "$EVENT_BASE_SHA"
               --pr-head-sha "$EVENT_HEAD_SHA"
+            )
+            if [ "$EVENT_BASE_REF" = "main" ] &&
+               [ "$EVENT_HEAD_REF" = "develop" ] &&
+               [ "$EVENT_HEAD_REPO" = "${{ github.repository }}" ]; then
+              app_check_args+=(--promotion-pr)
+            fi
+            bash karsift-ai-infra/config/run-app-checks.sh "${app_check_args[@]}"
           else
             bash karsift-ai-infra/config/run-app-checks.sh --squash-safe-push
           fi
