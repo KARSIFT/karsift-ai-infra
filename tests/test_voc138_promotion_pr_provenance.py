@@ -23,12 +23,16 @@ RUN_ID = 321
 PR_NUMBER = 947
 
 
-def run_payload(*, event: str = "workflow_dispatch") -> dict:
+def run_payload(
+    *,
+    event: str = "workflow_dispatch",
+    path: str = ".github/workflows/pipeline.yml",
+) -> dict:
     repository = {"full_name": REPOSITORY}
     return {
         "id": RUN_ID,
         "event": event,
-        "path": ".github/workflows/pipeline.yml",
+        "path": path,
         "display_title": "pipeline",
         "status": "completed",
         "conclusion": "success",
@@ -53,10 +57,10 @@ def run_payload(*, event: str = "workflow_dispatch") -> dict:
     }
 
 
-def verify(payload: dict) -> None:
+def verify(payload: dict, *, context: str = "ci / ci") -> None:
     verify_promotion_required_run_semantics(
         payload,
-        context="ci / ci",
+        context=context,
         run_id=RUN_ID,
         repository=REPOSITORY,
         pr_number=PR_NUMBER,
@@ -76,6 +80,16 @@ class Voc138PromotionPrProvenanceTests(unittest.TestCase):
         # title. Binding comes from immutable run/PR metadata and the exact
         # caller workflow that produced the successful ci / ci check.
         verify(run_payload())
+
+    def test_every_pr_bound_required_workflow_dispatch_is_attestable(self):
+        workflows = {
+            "governance-policy": ".github/workflows/governance-policy.yml",
+            "validate": ".github/workflows/repository-governance.yml",
+            "ci / ci": ".github/workflows/pipeline.yml",
+        }
+        for context, path in workflows.items():
+            with self.subTest(context=context):
+                verify(run_payload(path=path), context=context)
 
     def test_squash_safe_dispatch_is_rejected(self):
         with self.assertRaisesRegex(
