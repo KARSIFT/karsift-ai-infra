@@ -415,6 +415,21 @@ class AppCheckContextTests(unittest.TestCase):
             self.pipeline,
         )
 
+    def test_promotion_exports_hash_anchor_signal(self):
+        self.assertIn('export VOC112_PROMOTION_PR=true', self.runner)
+        self.assertIn('unset VOC112_PROMOTION_PR', self.runner)
+        self.assertIn('if [ "$promotion_pr" = true ]; then', self.runner)
+
+    def test_promotion_metadata_uses_repository_explicit_api(self):
+        self.assertIn(
+            'gh api "repos/$GITHUB_REPOSITORY/pulls/$PROMOTION_PR_NUMBER"',
+            self.pipeline,
+        )
+        self.assertNotIn("headRepository.nameWithOwner", self.pipeline)
+        self.assertIn(".base.repo.full_name", self.pipeline)
+        self.assertIn(".head.repo.full_name", self.pipeline)
+        self.assertNotIn("actions/checkout", self.pipeline.split("promotion-pr-metadata:")[1].split("ci:")[0])
+
     def test_implementer_uses_integration_anchor_and_live_committed_head(self):
         self.assertGreaterEqual(
             self.implement.count(

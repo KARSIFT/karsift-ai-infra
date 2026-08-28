@@ -322,17 +322,31 @@ jobs:
           PROMOTION_PR_NUMBER: ${{ inputs.promotion_pr_number }}
         run: |
           set -euo pipefail
-          payload=$(gh pr view "$PROMOTION_PR_NUMBER" --json baseRefOid,headRefOid,baseRefName,headRefName,headRepository)
-          base_ref=$(jq -r .baseRefName <<<"$payload")
-          head_ref=$(jq -r .headRefName <<<"$payload")
-          head_repo=$(jq -r .headRepository.nameWithOwner <<<"$payload")
+          payload=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PROMOTION_PR_NUMBER")
+          base_ref=$(jq -r .base.ref <<<"$payload")
+          head_ref=$(jq -r .head.ref <<<"$payload")
+          base_repo=$(jq -r .base.repo.full_name <<<"$payload")
+          head_repo=$(jq -r .head.repo.full_name <<<"$payload")
+          state=$(jq -r .state <<<"$payload")
+          base_sha=$(jq -r .base.sha <<<"$payload")
+          head_sha=$(jq -r .head.sha <<<"$payload")
+          if [ "$state" != "open" ]; then
+            echo "promotion PR is not open" >&2
+            exit 1
+          fi
           if [ "$base_ref" != "main" ] || [ "$head_ref" != "develop" ] ||
-             [ "$head_repo" != "${{ github.repository }}" ]; then
+             [ "$base_repo" != "$GITHUB_REPOSITORY" ] ||
+             [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
             echo "promotion pair mismatch" >&2
             exit 1
           fi
-          echo "pr_base_sha=$(jq -r .baseRefOid <<<"$payload")" >> "$GITHUB_OUTPUT"
-          echo "pr_head_sha=$(jq -r .headRefOid <<<"$payload")" >> "$GITHUB_OUTPUT"
+          if ! [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]] ||
+             ! [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "promotion PR metadata missing immutable SHAs" >&2
+            exit 1
+          fi
+          echo "pr_base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "pr_head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
   ci:
     needs: [ready-for-review-reuse, promotion-pr-metadata]
