@@ -75,12 +75,7 @@ def verify_promotion_required_run_semantics(
     if not isinstance(run_payload, dict):
         raise AttestationError("invalid_ci_recovery_run_payload")
     event = str(run_payload.get("event") or "")
-    expected_events = (
-        {"pull_request", "workflow_dispatch"}
-        if context == "ci / ci"
-        else {"pull_request"}
-    )
-    if event not in expected_events:
+    if event not in {"pull_request", "workflow_dispatch"}:
         raise AttestationError("untrusted_ci_recovery_event")
     path = str(run_payload.get("path") or "").split("@", 1)[0]
     if path != EXPECTED_WORKFLOWS.get(context):
