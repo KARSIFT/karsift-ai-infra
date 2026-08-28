@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,6 +17,7 @@ class AppCheckContextTests(unittest.TestCase):
         cls.runner = (ROOT / "config/run-app-checks.sh").read_text()
         cls.ci = (ROOT / ".github/workflows/ci.yml").read_text()
         cls.implement = (ROOT / ".github/workflows/implement.yml").read_text()
+        cls.self_ci = (ROOT / ".github/workflows/self-ci.yml").read_text()
         cls.pipeline = (
             ROOT / "templates/project-repo/.github/workflows/pipeline.yml"
         ).read_text()
@@ -390,9 +393,21 @@ class AppCheckContextTests(unittest.TestCase):
         self.assertIn('run-app-checks.sh --squash-safe-push', self.ci)
 
     def test_recovery_ci_requires_successful_exact_pr_metadata(self):
+        parsed_pipeline = yaml.safe_load(self.pipeline)
+        self.assertEqual(
+            parsed_pipeline["run-name"],
+            "${{ github.event_name == 'workflow_dispatch' && "
+            "inputs.action == 'recover-promotion-pr-checks' && "
+            "format('promotion-pr-validation PR #{0}', "
+            "inputs.promotion_pr_number) || github.event.pull_request.title || "
+            "github.workflow }}",
+        )
         self.assertIn(
             "format('promotion-pr-validation PR #{0}', inputs.promotion_pr_number)",
             self.pipeline,
+        )
+        self.assertIn(
+            "templates/project-repo/.github/workflows/*.yml", self.self_ci
         )
         self.assertIn(
             "inputs.action == 'recover-promotion-pr-checks' && "

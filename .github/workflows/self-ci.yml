@@ -73,7 +73,9 @@ jobs:
             -ignore 'property "workflow_repository" is not defined in object type' \
             -ignore 'property "workflow_sha" is not defined in object type' \
             -ignore 'constant expression "false" in condition' \
-            -ignore 'shellcheck reported issue.*:(info|style):'
+            -ignore 'shellcheck reported issue.*:(info|style):' \
+            .github/workflows/*.yml \
+            templates/project-repo/.github/workflows/*.yml
 
   shellcheck:
     runs-on: ubuntu-latest
