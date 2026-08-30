@@ -37,6 +37,19 @@ HEAD_SHA = "a" * 40
 REPOSITORY = "KARSIFT/example"
 BRANCH = "release/voc-122"
 PR_NUMBER = 1000
+CI_RUN_ID = 33000000001
+
+
+def attestable_ci_workflow_run() -> dict:
+    return {
+        "id": CI_RUN_ID,
+        "path": ".github/workflows/pipeline.yml",
+        "event": "workflow_dispatch",
+        "display_title": f"promotion-pr-validation PR #{PR_NUMBER}",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": HEAD_SHA,
+    }
 
 
 def gate_summary_from_check_runs(check_runs: list[dict]) -> dict:
@@ -45,7 +58,7 @@ def gate_summary_from_check_runs(check_runs: list[dict]) -> dict:
 
 
 def success_gate_summary() -> dict:
-    return gate_summary_from_check_runs(
+    summary = gate_summary_from_check_runs(
         [
             {
                 "head_sha": HEAD_SHA,
@@ -61,6 +74,10 @@ def success_gate_summary() -> dict:
             )
         ]
     )
+    for item in summary["checks"]:
+        if item.get("name") == "ci / ci":
+            item["run_id"] = CI_RUN_ID
+    return summary
 
 
 def promotion_argv(*, timeout_seconds: str = "1") -> list[str]:
@@ -103,7 +120,12 @@ def metadata_result(
     *,
     gate_summary: dict | None = None,
 ) -> tuple[bool, dict, list[dict], list[dict]]:
-    return (True, gate_summary or success_gate_summary(), [], pr_view)
+    return (
+        True,
+        gate_summary or success_gate_summary(),
+        [attestable_ci_workflow_run()],
+        pr_view,
+    )
 
 
 class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
@@ -350,13 +372,18 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
                 },
             ]
         )
+        for item in gate_summary["checks"]:
+            if item.get("name") == "ci / ci":
+                item["run_id"] = CI_RUN_ID
+        attestable_runs = [attestable_ci_workflow_run()]
         self.assertFalse(
             recovery_complete(
                 mode="promotion_pr",
                 gate_summary=gate_summary,
-                workflow_runs=[],
+                workflow_runs=attestable_runs,
                 head_sha=HEAD_SHA,
                 pr_required_checks=cancelled_view,
+                pr_number=PR_NUMBER,
             )
         )
         with mock.patch.object(sys, "argv", promotion_argv()), mock.patch.object(
@@ -365,6 +392,7 @@ class Voc122ActionsCheckRecoveryTests(unittest.TestCase):
             side_effect=[
                 metadata_result(absent_view, gate_summary=gate_summary),
                 metadata_result(cancelled_view, gate_summary=gate_summary),
+                metadata_result(successful_view, gate_summary=gate_summary),
                 metadata_result(successful_view, gate_summary=gate_summary),
             ],
         ), mock.patch.object(

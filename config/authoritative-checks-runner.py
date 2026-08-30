@@ -17,14 +17,16 @@ from authoritative_checks import (
     select_authoritative,
     validate_pull_request_binding,
 )
+from promotion_ci_attestation import parent_run_is_attestable
 
 
 def _read(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _workflow_runs(check_runs, repository: str, required_events: set[str]):
+def _workflow_runs(check_runs, repository: str, required_events: set[str], *, pr_number: int | None = None):
     cache = {}
+    jobs_cache = {}
     selected = []
     pattern = re.compile(
         rf"^https://github\.com/{re.escape(repository)}/actions/runs/([1-9][0-9]*)/job/[1-9][0-9]*$",
@@ -59,6 +61,37 @@ def _workflow_runs(check_runs, repository: str, required_events: set[str]):
             or not run["path"].startswith(".github/workflows/")
         ):
             raise ValueError("workflow run is not bound to expected repository and head")
+        jobs = None
+        if str(run["path"]).split("@", 1)[0] == ".github/workflows/pipeline.yml":
+            if run_id not in jobs_cache:
+                result = subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        "--paginate",
+                        "--slurp",
+                        f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                if result.returncode:
+                    raise ValueError("could not validate workflow run jobs")
+                pages = json.loads(result.stdout)
+                if not isinstance(pages, list) or any(
+                    not isinstance(page, dict)
+                    or not isinstance(page.get("jobs"), list)
+                    or any(not isinstance(job, dict) for job in page["jobs"])
+                    for page in pages
+                ):
+                    raise ValueError("invalid workflow run jobs payload")
+                jobs_cache[run_id] = [
+                    job for page in pages for job in page["jobs"]
+                ]
+            jobs = jobs_cache[run_id]
+        if not parent_run_is_attestable(run, jobs, pr_number=pr_number):
+            continue
         item["workflow"] = run["path"]
         item["run_id"] = run_id
         selected.append(item)
@@ -87,7 +120,12 @@ def main() -> int:
         item for item in statuses if item.get("context") not in excluded_status_contexts
     ]
     if args.workflow_event:
-        check_runs = _workflow_runs(check_runs, args.repository, set(args.workflow_event))
+        check_runs = _workflow_runs(
+            check_runs,
+            args.repository,
+            set(args.workflow_event),
+            pr_number=args.pr_number,
+        )
     identity = {
         "repository": args.repository,
         "head_sha": args.head_sha,

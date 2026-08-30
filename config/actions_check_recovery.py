@@ -13,6 +13,11 @@ from authoritative_checks import (
     flatten_statuses,
     select_authoritative,
 )
+from promotion_ci_attestation import (
+    dedicated_recovery_run_covers_dispatch,
+    parent_run_is_attestable,
+    workflow_path,
+)
 from required_check_satisfaction import missing_required_pr_contexts
 
 PROMOTION_REQUIRED_CONTEXTS: tuple[str, ...] = (
@@ -274,22 +279,25 @@ def suppress_active_or_successful_dispatches(
     head_sha: str,
     gate_summary: dict[str, Any] | None = None,
     pr_required_checks: Sequence[Mapping[str, Any]] | None = None,
+    pr_number: int | None = None,
 ) -> list[DispatchPlan]:
     """Avoid duplicate dispatches bound to the evidence each plan produces."""
 
     validated_sha = validate_sha(head_sha, "head_sha")
-    already_running = {
-        run.get("path", "").replace(".github/workflows/", "")
-        for run in workflow_runs
-        if run.get("head_sha") == validated_sha
-        and (
-            run.get("status") in {"queued", "in_progress", "pending"}
-            or (
-                run.get("status") == "completed"
-                and run.get("conclusion") == "success"
-            )
-        )
-    }
+    already_running = set()
+    for run in workflow_runs:
+        if run.get("head_sha") != validated_sha:
+            continue
+        workflow_file = run.get("path", "").replace(".github/workflows/", "")
+        if workflow_file == "pipeline.yml" and pr_number is not None:
+            if dedicated_recovery_run_covers_dispatch(run, pr_number=pr_number):
+                already_running.add(workflow_file)
+            continue
+        if run.get("status") in {"queued", "in_progress", "pending"} or (
+            run.get("status") == "completed"
+            and run.get("conclusion") == "success"
+        ):
+            already_running.add(workflow_file)
     context_states = {
         item.get("name"): item.get("state")
         for item in (gate_summary or {}).get("checks", [])
@@ -305,12 +313,51 @@ def suppress_active_or_successful_dispatches(
     remaining: list[DispatchPlan] = []
     for plan in plans:
         context = PROMOTION_WORKFLOW_CONTEXTS.get(plan.workflow_file)
+        if plan.workflow_file in already_running:
+            continue
         if promotion_dispatch and context is not None:
             if context in pr_missing or context_states.get(context) not in {"SUCCESS", "PENDING"}:
                 remaining.append(plan)
         elif plan.workflow_file not in already_running:
             remaining.append(plan)
     return remaining
+
+
+def promotion_ci_context_is_attestable(
+    gate_summary: dict[str, Any],
+    workflow_runs: Iterable[dict[str, Any]],
+    *,
+    pr_number: int | None = None,
+) -> bool:
+    """Require completed non-carrier backing evidence for ci / ci."""
+
+    ci_checks = [
+        item
+        for item in gate_summary.get("checks", [])
+        if item.get("name") == "ci / ci"
+    ]
+    # The ruleset-selected PR view may still show SUCCESS after the runner has
+    # correctly removed an untrusted release-carrier check from this composed
+    # attestable summary.  Absence (or ambiguity) here must therefore fail
+    # closed rather than succeeding vacuously.
+    if len(ci_checks) != 1:
+        return False
+
+    for item in ci_checks:
+        if item.get("state") != "SUCCESS":
+            return False
+        run_id = item.get("run_id")
+        if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+            return False
+        parent = next(
+            (run for run in workflow_runs if run.get("id") == run_id),
+            None,
+        )
+        if parent is None:
+            return False
+        if not parent_run_is_attestable(parent, pr_number=pr_number):
+            return False
+    return True
 
 
 def recovery_complete(
@@ -321,6 +368,7 @@ def recovery_complete(
     head_sha: str,
     integration_deploy_required: bool = True,
     pr_required_checks: Sequence[Mapping[str, Any]] | None = None,
+    pr_number: int | None = None,
 ) -> bool:
     validate_mode(mode)
     contexts = required_contexts(mode)
@@ -328,6 +376,12 @@ def recovery_complete(
         gate_summary,
         contexts,
         pr_required_checks=pr_required_checks,
+    ):
+        return False
+    if mode == "promotion_pr" and not promotion_ci_context_is_attestable(
+        gate_summary,
+        workflow_runs,
+        pr_number=pr_number,
     ):
         return False
     push_workflows = required_push_workflows(

@@ -37,6 +37,7 @@ def load_runner():
 runner = load_runner()
 
 HEAD_SHA = "a" * 40
+CI_RUN_ID = 33000000002
 
 
 def gate_summary_from_check_runs(check_runs: list[dict]) -> dict:
@@ -62,6 +63,18 @@ class Voc121ActionsCheckRecoveryTests(unittest.TestCase):
                 )
             ]
         )
+        for item in gate_summary["checks"]:
+            if item.get("name") == "ci / ci":
+                item["run_id"] = CI_RUN_ID
+        attestable_ci_run = {
+            "id": CI_RUN_ID,
+            "path": ".github/workflows/pipeline.yml",
+            "event": "workflow_dispatch",
+            "display_title": "promotion-pr-validation PR #993",
+            "status": "completed",
+            "conclusion": "success",
+            "head_sha": HEAD_SHA,
+        }
         failed_view = [
             {
                 "name": "governance-policy",
@@ -110,8 +123,8 @@ class Voc121ActionsCheckRecoveryTests(unittest.TestCase):
             runner,
             "run_metadata_phase",
             side_effect=[
-                (True, gate_summary, [], failed_view),
-                (True, gate_summary, [], successful_view),
+                (True, gate_summary, [attestable_ci_run], failed_view),
+                (True, gate_summary, [attestable_ci_run], successful_view),
             ],
         ), mock.patch.object(
             runner, "load_selected_workflow_run", return_value=selected_run

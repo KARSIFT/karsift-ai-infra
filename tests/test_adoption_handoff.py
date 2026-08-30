@@ -32,7 +32,7 @@ class AdoptionHandoffPolicyTests(unittest.TestCase):
         merge_block = self.merge_gate[merge:].split(
             "- name: Publish task completion marker", 1
         )[0]
-        self.assertIn("GH_TOKEN: ${{ steps.app-token.outputs.token }}", merge_block)
+        self.assertIn("MUTATION_TOKEN: ${{ steps.app-token.outputs.token }}", merge_block)
         self.assertNotIn("GH_TOKEN: ${{ github.token }}", merge_block)
 
     def test_adoption_is_exact_revision_verified_and_idempotent(self):

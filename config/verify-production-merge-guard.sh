@@ -49,7 +49,18 @@ for ruleset_id in "${ruleset_ids[@]}"; do
   mv "$guard_tmp/rulesets.next.json" "$guard_tmp/rulesets.json"
 done
 
-python3 "$policy_root/production-merge-guard-runner.py" \
+guard_output=$(mktemp)
+if ! python3 "$policy_root/production-merge-guard-runner.py" \
   --repository "$repository" \
   --effective-rules-file "$guard_tmp/effective.json" \
-  --rulesets-file "$guard_tmp/rulesets.json"
+  --rulesets-file "$guard_tmp/rulesets.json" \
+  >"$guard_output" 2>&1; then
+  cat "$guard_output" >&2
+  if grep -q 'production_merge_guard_payload_incomplete' "$guard_output"; then
+    echo "production-merge-guard: operator_action=configure karsift-ai-infra-bot Administration Read and write, approve KARSIFT installation 148001476, retain caller-repository guard scope, do not rotate secrets, rerun" >&2
+  fi
+  rm -f "$guard_output"
+  exit 1
+fi
+cat "$guard_output"
+rm -f "$guard_output"

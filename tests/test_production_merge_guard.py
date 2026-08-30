@@ -118,6 +118,18 @@ class ProductionMergeGuardTests(unittest.TestCase):
                 ],
             )
 
+    def test_rejects_omitted_bypass_actors(self):
+        payload = ruleset()
+        del payload["bypass_actors"]
+        with self.assertRaisesRegex(
+            ProductionMergeGuardError, "production_merge_guard_payload_incomplete"
+        ):
+            validate_production_merge_guard(
+                repository=REPOSITORY,
+                effective_rules=effective(),
+                rulesets=[payload],
+            )
+
     def test_rejects_inactive_mismatched_or_incomplete_rulesets(self):
         variants = [
             ruleset(enforcement="evaluate"),

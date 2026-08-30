@@ -535,12 +535,24 @@ jobs:
             exit 1
           fi
 
+      - name: Mint App installation token for production merge guard
+        id: guard-token
+        if: github.event.pull_request.base.ref == inputs.production_branch
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write
+
       # The App token is essential: a merge made with github.token does not
       # emit the pull_request:closed event that starts adopt.yml.
       - name: Merge automatically
         id: merge
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MUTATION_TOKEN: ${{ steps.app-token.outputs.token }}
+          GUARD_TOKEN: ${{ steps.guard-token.outputs.token }}
           REVIEWED_HEAD_SHA: ${{ needs.report-status.outputs.head_sha }}
           REVIEWED_BASE_SHA: ${{ needs.report-status.outputs.base_sha }}
           REVIEWED_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -550,7 +562,7 @@ jobs:
           # Same ruleset-propagation retry as approve-and-merge's "Merge"
           # step above - see that step's comment (karsift-ai-infra#22).
           for attempt in 1 2 3; do
-            live_pair=$(gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,baseRefName,state,isDraft)
+            live_pair=$(GH_TOKEN="$MUTATION_TOKEN" gh pr view "$PR_NUMBER" --json headRefOid,baseRefOid,baseRefName,state,isDraft)
             if [ "$(jq -r .state <<<"$live_pair")" != "OPEN" ] ||
                ! jq -e '(.isDraft | type) == "boolean" and .isDraft == false' \
                  >/dev/null <<<"$live_pair" ||
@@ -561,11 +573,11 @@ jobs:
               exit 1
             fi
             if [ "$REVIEWED_BASE_REF" = "${{ inputs.production_branch }}" ]; then
-              bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+              GH_TOKEN="$GUARD_TOKEN" bash karsift-ai-infra/config/verify-production-merge-guard.sh \
                 "${{ github.repository }}" "${{ inputs.production_branch }}" \
                 karsift-ai-infra/config
             fi
-            if gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
+            if GH_TOKEN="$MUTATION_TOKEN" gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$REVIEWED_HEAD_SHA"; then
               exit 0
             fi
             echo "Merge attempt $attempt/3 failed - retrying in 5s (possible ruleset-propagation lag)." >&2
