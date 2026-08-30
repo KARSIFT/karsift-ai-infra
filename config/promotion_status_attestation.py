@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from actions_check_recovery import PROMOTION_REQUIRED_CONTEXTS
+from promotion_ci_attestation import is_release_carrier_run
 from required_check_satisfaction import missing_required_pr_contexts
 
 
@@ -69,6 +70,7 @@ def verify_promotion_required_run_semantics(
     head_sha: str,
     base_ref: str,
     head_ref: str,
+    jobs: list[dict[str, Any]] | None = None,
 ) -> None:
     """Bind promotion CI to the exact PR and code-enforced validation path."""
 
@@ -95,6 +97,8 @@ def verify_promotion_required_run_semantics(
         or run_payload.get("head_branch") != head_ref
         or not _repository_matches(run_payload.get("repository"), repository)
     ):
+        raise AttestationError("untrusted_ci_recovery_identity")
+    if context == "ci / ci" and is_release_carrier_run(run_payload, jobs):
         raise AttestationError("untrusted_ci_recovery_identity")
     pull_requests = run_payload.get("pull_requests")
     if not isinstance(pull_requests, list) or not any(

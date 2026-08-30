@@ -17,13 +17,14 @@ from authoritative_checks import (
     select_authoritative,
     validate_pull_request_binding,
 )
+from promotion_ci_attestation import parent_run_is_attestable
 
 
 def _read(path: str):
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _workflow_runs(check_runs, repository: str, required_events: set[str]):
+def _workflow_runs(check_runs, repository: str, required_events: set[str], *, pr_number: int | None = None):
     cache = {}
     selected = []
     pattern = re.compile(
@@ -59,6 +60,8 @@ def _workflow_runs(check_runs, repository: str, required_events: set[str]):
             or not run["path"].startswith(".github/workflows/")
         ):
             raise ValueError("workflow run is not bound to expected repository and head")
+        if not parent_run_is_attestable(run, pr_number=pr_number):
+            continue
         item["workflow"] = run["path"]
         item["run_id"] = run_id
         selected.append(item)
@@ -87,7 +90,12 @@ def main() -> int:
         item for item in statuses if item.get("context") not in excluded_status_contexts
     ]
     if args.workflow_event:
-        check_runs = _workflow_runs(check_runs, args.repository, set(args.workflow_event))
+        check_runs = _workflow_runs(
+            check_runs,
+            args.repository,
+            set(args.workflow_event),
+            pr_number=args.pr_number,
+        )
     identity = {
         "repository": args.repository,
         "head_sha": args.head_sha,

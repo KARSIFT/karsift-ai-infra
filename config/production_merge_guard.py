@@ -10,6 +10,15 @@ class ProductionMergeGuardError(ValueError):
     """Production is not protected by a non-bypassable strict status rule."""
 
 
+OPERATOR_PAYLOAD_INCOMPLETE_ACTION = (
+    "configure karsift-ai-infra-bot Repository permissions Administration: "
+    "Read and write, obtain installation-owner approval on KARSIFT organization "
+    "installation 148001476, retain the workflow explicit single-repository guard "
+    "token scope for the current caller repository, do not rotate secrets, and "
+    "rerun the failed guard or reconcile-release"
+)
+
+
 def _has_required_checks(parameters: dict[str, Any]) -> bool:
     checks = parameters.get("required_status_checks")
     return (
@@ -61,12 +70,15 @@ def validate_production_merge_guard(
         if not isinstance(ruleset, dict) or ruleset.get("id") not in effective_ids:
             continue
         rules = ruleset.get("rules")
+        bypass_actors = ruleset.get("bypass_actors")
+        if bypass_actors is None or not isinstance(bypass_actors, list):
+            raise ProductionMergeGuardError("production_merge_guard_payload_incomplete")
         if (
             ruleset.get("enforcement") != "active"
             or ruleset.get("target") != "branch"
             or ruleset.get("source_type") != "Repository"
             or ruleset.get("source") != repository
-            or ruleset.get("bypass_actors") != []
+            or bypass_actors != []
             or not isinstance(rules, list)
         ):
             continue

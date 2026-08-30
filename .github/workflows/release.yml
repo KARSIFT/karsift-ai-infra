@@ -267,6 +267,16 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
+      - name: Mint App installation token for production merge guard
+        id: guard-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write
+
       - name: Validate the full roster from caller-merge markers
         id: roster
         env:
@@ -558,14 +568,15 @@ jobs:
         id: merge
         if: steps.gates.outputs.merge == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          MUTATION_TOKEN: ${{ steps.app-token.outputs.token }}
+          GUARD_TOKEN: ${{ steps.guard-token.outputs.token }}
           PR_NUMBER: ${{ steps.promotion.outputs.pr_number }}
           CHECKED_HEAD_SHA: ${{ steps.promotion.outputs.head_sha }}
           CHECKED_BASE_SHA: ${{ steps.promotion.outputs.base_sha }}
           RELEASE_ISSUE: ${{ steps.audit.outputs.issue_number }}
         run: |
           set -euo pipefail
-          live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
+          live=$(GH_TOKEN="$MUTATION_TOKEN" gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
           state=$(jq -r .state <<<"$live")
           if [ "$state" != "OPEN" ] && [ "$state" != "MERGED" ]; then
             echo "Promotion PR is terminal without a merge; refusing." >&2
@@ -580,7 +591,7 @@ jobs:
           fi
           if [ "$state" = "OPEN" ]; then
             for attempt in 1 2 3; do
-              live=$(gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
+              live=$(GH_TOKEN="$MUTATION_TOKEN" gh pr view "$PR_NUMBER" --json state,isDraft,headRefOid,baseRefOid,baseRefName,headRefName)
               if [ "$(jq -r .state <<<"$live")" != "OPEN" ] || \
                  [ "$(jq -r .isDraft <<<"$live")" != "false" ] || \
                  [ "$(jq -r .headRefOid <<<"$live")" != "$CHECKED_HEAD_SHA" ] || \
@@ -590,10 +601,10 @@ jobs:
                 echo "Promotion PR changed before merge attempt; refusing stale merge." >&2
                 exit 1
               fi
-              bash karsift-ai-infra/config/verify-production-merge-guard.sh \
+              GH_TOKEN="$GUARD_TOKEN" bash karsift-ai-infra/config/verify-production-merge-guard.sh \
                 "${{ github.repository }}" "${{ inputs.production_branch }}" \
                 karsift-ai-infra/config
-              if gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
+              if GH_TOKEN="$MUTATION_TOKEN" gh pr merge "$PR_NUMBER" --merge --match-head-commit "$CHECKED_HEAD_SHA"; then
                 break
               fi
               if [ "$attempt" = "3" ]; then
@@ -603,7 +614,7 @@ jobs:
               sleep 5
             done
           fi
-          merged=$(gh pr view "$PR_NUMBER" \
+          merged=$(GH_TOKEN="$MUTATION_TOKEN" gh pr view "$PR_NUMBER" \
             --json state,mergedAt,mergeCommit,headRefOid,baseRefOid,baseRefName,headRefName)
           if [ "$(jq -r .state <<<"$merged")" != "MERGED" ] || \
              [ "$(jq -r .headRefOid <<<"$merged")" != "$CHECKED_HEAD_SHA" ] || \

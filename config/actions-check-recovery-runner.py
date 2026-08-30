@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -110,7 +111,13 @@ def gh_api_paginate(
     return items
 
 
-def load_gate_summary(token: str, repository: str, head_sha: str) -> dict:
+def load_gate_summary(
+    token: str,
+    repository: str,
+    head_sha: str,
+    *,
+    pr_number: int | None = None,
+) -> dict:
     check_runs = gh_api_paginate(
         token,
         repository,
@@ -125,11 +132,58 @@ def load_gate_summary(token: str, repository: str, head_sha: str) -> dict:
             read_failure=CHECK_RUNS_READ_FAILED,
         )
     )
+    if pr_number is not None:
+        check_runs = _attestable_check_runs(
+            check_runs,
+            token,
+            repository,
+            pr_number=pr_number,
+        )
     return select_gate_evidence(
         [{"check_runs": check_runs, "total_count": len(check_runs)}],
         statuses_pages,
         head_sha=head_sha,
     )
+
+
+def _attestable_check_runs(
+    check_runs: list[dict[str, Any]],
+    token: str,
+    repository: str,
+    *,
+    pr_number: int,
+) -> list[dict[str, Any]]:
+    from promotion_ci_attestation import parent_run_is_attestable
+
+    pattern = re.compile(
+        rf"^https://github\.com/{re.escape(repository)}/actions/runs/([1-9][0-9]*)/job/[1-9][0-9]*$",
+        re.IGNORECASE,
+    )
+    cache: dict[int, dict[str, Any]] = {}
+    filtered: list[dict[str, Any]] = []
+    for item in check_runs:
+        if (item.get("app") or {}).get("slug") != "github-actions":
+            filtered.append(item)
+            continue
+        match = pattern.fullmatch(str(item.get("details_url") or ""))
+        if not match:
+            filtered.append(item)
+            continue
+        run_id = int(match.group(1))
+        if run_id not in cache:
+            cache[run_id] = gh_api(
+                token,
+                repository,
+                f"repos/{repository}/actions/runs/{run_id}",
+                read_failure=WORKFLOW_RUNS_READ_FAILED,
+            )
+        parent = cache[run_id]
+        if not parent_run_is_attestable(parent, pr_number=pr_number):
+            continue
+        enriched = dict(item)
+        enriched["run_id"] = run_id
+        filtered.append(enriched)
+    return filtered
 
 
 def load_workflow_runs(token: str, repository: str, head_sha: str) -> list[dict]:
@@ -522,7 +576,12 @@ def run_metadata_phase(
             branch_ref=branch_ref,
         )
         pr_required_checks = load_required_pr_checks(token, repository, pr_number)
-    gate_summary = load_gate_summary(token, repository, target_sha)
+    gate_summary = load_gate_summary(
+        token,
+        repository,
+        target_sha,
+        pr_number=pr_number if mode == "promotion_pr" else None,
+    )
     workflow_runs = load_workflow_runs(token, repository, target_sha)
     return integration_deploy_required, gate_summary, workflow_runs, pr_required_checks
 
@@ -575,6 +634,7 @@ def main() -> int:
             head_sha=target_sha,
             integration_deploy_required=integration_deploy_required,
             pr_required_checks=pr_required_checks,
+            pr_number=pr_number,
         ):
             if mode == "promotion_pr":
                 if pr_number is None or pr_required_checks is None:
@@ -630,6 +690,7 @@ def main() -> int:
             head_sha=target_sha,
             integration_deploy_required=integration_deploy_required,
             pr_required_checks=pr_required_checks,
+            pr_number=pr_number,
         ):
             print(
                 "actions-check-recovery: complete "

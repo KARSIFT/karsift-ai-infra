@@ -146,6 +146,7 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
             current_reconcile_run,
             head_sha=HEAD_SHA,
             gate_summary=gate_summary,
+            pr_number=947,
         )
         self.assertEqual(
             [plan.workflow_file for plan in remaining],
@@ -165,7 +166,13 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
         ]
         gate_summary = {
             "checks": [
-                *required,
+                *[
+                    {
+                        **item,
+                        "run_id": 33000000001 if item["name"] == "ci / ci" else item.get("run_id", 1),
+                    }
+                    for item in required
+                ],
                 {
                     "name": "release / converge",
                     "state": "PENDING",
@@ -189,7 +196,17 @@ class Voc114RecoveryMetadataTests(unittest.TestCase):
             runner.recovery_complete(
                 mode="promotion_pr",
                 gate_summary=gate_summary,
-                workflow_runs=[],
+                workflow_runs=[
+                    {
+                        "id": 33000000001,
+                        "path": ".github/workflows/pipeline.yml",
+                        "event": "workflow_dispatch",
+                        "display_title": "promotion-pr-validation PR #947",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": HEAD_SHA,
+                    }
+                ],
                 head_sha=HEAD_SHA,
             )
         )
