@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import sys
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
@@ -130,7 +131,87 @@ def dedicated_recovery_run(*, status: str = "completed", conclusion: str = "succ
     }
 
 
+def ordinary_pull_request(
+    *, head_ref: str = "agent/voc-140-voc-140-t00", base_ref: str = "develop"
+) -> dict:
+    repository = {"full_name": REPOSITORY}
+    return {
+        "number": PR_NUMBER,
+        "head": {"sha": HEAD_SHA, "ref": head_ref, "repo": repository},
+        "base": {"sha": BASE_SHA, "ref": base_ref, "repo": repository},
+    }
+
+
+def ordinary_pipeline_run(
+    *,
+    status: str = "in_progress",
+    conclusion: str | None = None,
+    head_ref: str = "agent/voc-140-voc-140-t00",
+    base_ref: str = "develop",
+) -> dict:
+    pr = ordinary_pull_request(head_ref=head_ref, base_ref=base_ref)
+    return {
+        "id": RUN_ID,
+        "path": ".github/workflows/pipeline.yml",
+        "event": "pull_request",
+        "display_title": "VOC-140: VOC-140-T00",
+        "status": status,
+        "conclusion": conclusion,
+        "head_sha": HEAD_SHA,
+        "head_branch": head_ref,
+        "repository": {"full_name": REPOSITORY},
+        "pull_requests": [pr],
+    }
+
+
+def select_authoritative_workflow_checks(
+    check_runs: list[dict],
+    run: dict,
+    jobs: list[dict],
+    *,
+    ordinary_pr_gate: bool,
+    pull_request: dict,
+) -> list[dict]:
+    def completed(command, **_kwargs):
+        result = mock.Mock(returncode=0, stderr="")
+        endpoint = command[-1]
+        if endpoint.endswith(f"/actions/runs/{RUN_ID}"):
+            result.stdout = __import__("json").dumps(run)
+        elif f"/actions/runs/{RUN_ID}/jobs" in endpoint:
+            result.stdout = __import__("json").dumps([{"jobs": jobs}])
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+        return result
+
+    with mock.patch.object(
+        authoritative_runner.subprocess, "run", side_effect=completed
+    ):
+        return authoritative_runner._workflow_runs(
+            check_runs,
+            REPOSITORY,
+            {"pull_request"},
+            pr_number=PR_NUMBER,
+            ordinary_pr_gate=ordinary_pr_gate,
+            pull_request=pull_request,
+            production_branch="main",
+        )
+
+
 class Voc140ReleaseCarrierAttestationTests(unittest.TestCase):
+    def test_merge_gate_enables_only_the_bounded_ordinary_pr_policy(self):
+        merge_gate = (ROOT / ".github/workflows/merge-gate.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(merge_gate.count("--ordinary-pr-gate"), 1)
+        self.assertIn(
+            '--production-branch "${{ inputs.production_branch }}"', merge_gate
+        )
+        for workflow in ("adopt.yml", "release.yml"):
+            source = (ROOT / ".github/workflows" / workflow).read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("--ordinary-pr-gate", source)
+
     def test_in_progress_release_carrier_is_not_attestable(self):
         run = release_carrier_run()
         jobs = [{"name": "release / converge", "conclusion": None}]
@@ -320,6 +401,253 @@ class Voc140ReleaseCarrierAttestationTests(unittest.TestCase):
                 [check_run], REPOSITORY, {"workflow_dispatch"}, pr_number=PR_NUMBER
             )
         self.assertEqual(selected, [])
+
+    def test_authoritative_runner_accepts_completed_dedicated_validation(self):
+        check_run = {
+            "app": {"slug": "github-actions"},
+            "details_url": (
+                f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}/job/99"
+            ),
+            "head_sha": HEAD_SHA,
+        }
+        run = dedicated_recovery_run()
+        run["id"] = RUN_ID
+        run["repository"] = {"full_name": REPOSITORY}
+
+        def completed(command, **_kwargs):
+            result = mock.Mock(returncode=0, stderr="")
+            endpoint = command[-1]
+            if endpoint.endswith(f"/actions/runs/{RUN_ID}"):
+                result.stdout = __import__("json").dumps(run)
+            elif f"/actions/runs/{RUN_ID}/jobs" in endpoint:
+                result.stdout = __import__("json").dumps(
+                    [{"jobs": [{"name": "release / converge", "conclusion": "skipped"}]}]
+                )
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+            return result
+
+        with mock.patch.object(
+            authoritative_runner.subprocess, "run", side_effect=completed
+        ):
+            selected = authoritative_runner._workflow_runs(
+                [check_run],
+                REPOSITORY,
+                {"workflow_dispatch"},
+                pr_number=PR_NUMBER,
+            )
+        self.assertEqual(selected[0]["run_id"], RUN_ID)
+
+    def test_ordinary_pr_terminal_checks_survive_in_progress_parent(self):
+        checks = [
+            {
+                "id": index,
+                "name": name,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+                "details_url": (
+                    f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}/job/{index}"
+                ),
+                "head_sha": HEAD_SHA,
+            }
+            for index, name in enumerate(
+                ("ci / ci", "review / publish-review"), start=91
+            )
+        ]
+        run = ordinary_pipeline_run()
+        jobs = [
+            {"name": "ci / ci", "conclusion": "success"},
+            {"name": "review / publish-review", "conclusion": "success"},
+            {"name": "release / converge", "conclusion": "skipped"},
+        ]
+        selected = select_authoritative_workflow_checks(
+            checks,
+            run,
+            jobs,
+            ordinary_pr_gate=True,
+            pull_request=ordinary_pull_request(),
+        )
+        self.assertEqual(
+            [item["name"] for item in selected],
+            ["ci / ci", "review / publish-review"],
+        )
+        self.assertTrue(all(item["run_id"] == RUN_ID for item in selected))
+
+        strict = select_authoritative_workflow_checks(
+            [dict(item) for item in checks],
+            run,
+            jobs,
+            ordinary_pr_gate=False,
+            pull_request=ordinary_pull_request(),
+        )
+        self.assertEqual(strict, [])
+
+        wrong_association = ordinary_pipeline_run()
+        wrong_association["pull_requests"][0]["number"] = PR_NUMBER + 1
+        self.assertEqual(
+            select_authoritative_workflow_checks(
+                [dict(item) for item in checks],
+                wrong_association,
+                jobs,
+                ordinary_pr_gate=True,
+                pull_request=ordinary_pull_request(),
+            ),
+            [],
+        )
+
+    def test_ordinary_pr_association_shapes_fail_closed(self):
+        valid = ordinary_pull_request()
+        unrelated = deepcopy(valid)
+        unrelated["number"] = PR_NUMBER + 1
+        missing_head = {"number": PR_NUMBER, "base": deepcopy(valid["base"])}
+        missing_base = {"number": PR_NUMBER, "head": deepcopy(valid["head"])}
+        invalid_head_sha = deepcopy(valid)
+        invalid_head_sha["head"]["sha"] = "not-a-sha"
+        invalid_head_sha_type = deepcopy(valid)
+        invalid_head_sha_type["head"]["sha"] = 7
+        invalid_base_ref = deepcopy(valid)
+        invalid_base_ref["base"]["ref"] = ""
+        invalid_base_ref_type = deepcopy(valid)
+        invalid_base_ref_type["base"]["ref"] = 7
+        invalid_number_type = deepcopy(valid)
+        invalid_number_type["number"] = str(PR_NUMBER)
+        invalid_repository = deepcopy(valid)
+        invalid_repository["head"]["repo"] = "invalid"
+        contradictory_repository_name = deepcopy(valid)
+        contradictory_repository_name["head"]["repo"] = {
+            "full_name": REPOSITORY,
+            "name": "wrong",
+        }
+        contradictory_repository_url = deepcopy(valid)
+        contradictory_repository_url["base"]["repo"] = {
+            "full_name": REPOSITORY,
+            "url": f"https://api.github.com/repos/{REPOSITORY}-wrong",
+        }
+        invalid_payloads = {
+            "absent": ...,
+            "null": None,
+            "non-list-object": valid,
+            "non-list-scalar": "invalid",
+            "empty": [],
+            "valid-plus-null": [valid, None],
+            "valid-plus-scalar": [valid, "invalid"],
+            "valid-plus-empty-object": [valid, {}],
+            "missing-head": [missing_head],
+            "missing-base": [missing_base],
+            "invalid-head-sha": [invalid_head_sha],
+            "invalid-head-sha-type": [invalid_head_sha_type],
+            "invalid-base-ref": [invalid_base_ref],
+            "invalid-base-ref-type": [invalid_base_ref_type],
+            "invalid-number-type": [invalid_number_type],
+            "invalid-repository": [invalid_repository],
+            "contradictory-repository-name": [contradictory_repository_name],
+            "contradictory-repository-url": [contradictory_repository_url],
+            "duplicate-exact": [valid, deepcopy(valid)],
+            "extra-unrelated": [valid, unrelated],
+        }
+        jobs = [{"name": "release / converge", "conclusion": "skipped"}]
+        clean = ordinary_pipeline_run()
+        self.assertTrue(
+            authoritative_runner._ordinary_pr_pipeline_parent(
+                clean,
+                jobs,
+                pull_request=ordinary_pull_request(),
+                repository=REPOSITORY,
+                pr_number=PR_NUMBER,
+                production_branch="main",
+            )
+        )
+        compact_repository = {
+            "name": "example",
+            "url": "https://api.github.com/repos/KARSIFT/example",
+        }
+        compact = ordinary_pipeline_run()
+        compact["pull_requests"][0]["head"]["repo"] = compact_repository
+        compact["pull_requests"][0]["base"]["repo"] = compact_repository
+        self.assertTrue(
+            authoritative_runner._ordinary_pr_pipeline_parent(
+                compact,
+                jobs,
+                pull_request=ordinary_pull_request(),
+                repository=REPOSITORY,
+                pr_number=PR_NUMBER,
+                production_branch="main",
+            )
+        )
+        for label, associations in invalid_payloads.items():
+            with self.subTest(label=label):
+                run = ordinary_pipeline_run()
+                if associations is ...:
+                    run.pop("pull_requests")
+                else:
+                    run["pull_requests"] = deepcopy(associations)
+                self.assertFalse(
+                    authoritative_runner._ordinary_pr_pipeline_parent(
+                        run,
+                        jobs,
+                        pull_request=ordinary_pull_request(),
+                        repository=REPOSITORY,
+                        pr_number=PR_NUMBER,
+                        production_branch="main",
+                    )
+                )
+
+    def test_ordinary_pr_mode_never_admits_production_or_release_carrier_parent(self):
+        check = {
+            "id": 99,
+            "name": "ci / ci",
+            "status": "completed",
+            "conclusion": "success",
+            "app": {"slug": "github-actions"},
+            "details_url": (
+                f"https://github.com/{REPOSITORY}/actions/runs/{RUN_ID}/job/99"
+            ),
+            "head_sha": HEAD_SHA,
+        }
+        production_pr = ordinary_pull_request(head_ref="develop", base_ref="main")
+        production_run = ordinary_pipeline_run(head_ref="develop", base_ref="main")
+        self.assertEqual(
+            select_authoritative_workflow_checks(
+                [dict(check)],
+                production_run,
+                [{"name": "release / converge", "conclusion": "skipped"}],
+                ordinary_pr_gate=True,
+                pull_request=production_pr,
+            ),
+            [],
+        )
+
+        for status, conclusion in (
+            ("queued", None),
+            ("completed", "failure"),
+            ("completed", "cancelled"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.assertEqual(
+                    select_authoritative_workflow_checks(
+                        [dict(check)],
+                        ordinary_pipeline_run(
+                            status=status,
+                            conclusion=conclusion,
+                        ),
+                        [{"name": "release / converge", "conclusion": "skipped"}],
+                        ordinary_pr_gate=True,
+                        pull_request=ordinary_pull_request(),
+                    ),
+                    [],
+                )
+
+        self.assertEqual(
+            select_authoritative_workflow_checks(
+                [dict(check)],
+                ordinary_pipeline_run(),
+                [{"name": "release / converge", "conclusion": None}],
+                ordinary_pr_gate=True,
+                pull_request=ordinary_pull_request(),
+            ),
+            [],
+        )
 
     def test_in_progress_release_carrier_does_not_suppress_recovery_dispatch(self):
         plans = plan_recovery_dispatches(

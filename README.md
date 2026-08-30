@@ -376,6 +376,16 @@ eligibility helper, CI, task review, plan review, and merge gate all resolved to
 shared-infrastructure commit in both runs. A mutable `@main` policy change therefore forces the
 full path even when the application base/head did not change. Merge-gate repeats this revision
 comparison independently before it can authorize merge.
+Pipeline identity comes from the immutable workflow path, pull-request event, exact repository,
+base/head/branch association, policy revision, and required job set. The mutable run display name
+may be the pull-request title and is never used as workflow identity.
+The run must expose exactly one well-formed PR association. Null, scalar, partial, duplicate, or
+unrelated extra entries reject the run even when another entry matches: a commit shared by multiple
+PRs is not unambiguous evidence for any one of them. GitHub may omit the compact association's
+nested repository object or represent it with the repository name and canonical API URL instead
+of `full_name`; eligibility, merge-gate, and the post-merge verifier apply the same singleton rule,
+and every supplied `full_name`, name, owner, API URL, or web URL field must agree with the
+authenticated owner/repository.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
 from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
 the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while
@@ -388,6 +398,13 @@ App-authored transition attestation binding repository, PR number, branch, base/
 selected prior run, and shared-policy SHA; the post-merge verifier requires that unique record.
 The verifier also recomputes the latest eligible prior run strictly before the ready run and
 requires it to equal the declared prior run ID, so proof cannot substitute a different valid run.
+
+For ordinary `agent/` and `plan/` PRs that do not target production, merge-gate may consume an
+already-terminal check from the exact associated pipeline while that parent run is still waiting
+on merge-gate itself. The check's own state remains authoritative, and the exception requires the
+authenticated PR association and rejects any non-skipped release job. Promotion PRs, dedicated
+promotion validation, and release carriers retain the stricter completed-success parent-run
+attestation, so the ordinary self-deadlock exception cannot authorize production CI.
 
 Callers must pass those exact base/head inputs to plan review, task review,
 remediation, and merge-gate. Every reusable-workflow schema keeps them optional

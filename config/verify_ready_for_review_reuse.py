@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
+from authoritative_checks import exact_single_pr_association
 from ready_for_review_reuse import (
     AGENT_PUBLISHER_JOB,
     PLAN_PUBLISHER_JOB,
@@ -140,6 +141,48 @@ def verify_source_pr(
         return VerificationResult(False, "source_pr_head_ref_mismatch")
     if str(base.get("sha") or "").lower() != expected_base_sha.lower():
         return VerificationResult(False, "source_pr_base_mismatch")
+    base_ref = base.get("ref")
+    if (
+        not isinstance(base_ref, str)
+        or not base_ref
+        or any(character.isspace() for character in base_ref)
+    ):
+        return VerificationResult(False, "source_pr_base_ref_invalid")
+    return VerificationResult(True)
+
+
+def _verify_run_association(
+    *,
+    run: dict,
+    source_pr: dict,
+    repository: str,
+    pr_number: int,
+    expected_head_sha: str,
+    expected_base_sha: str,
+    expected_head_ref: str,
+    association_attested: bool,
+    missing_reason: str,
+    invalid_reason: str,
+) -> VerificationResult:
+    pull_requests = run.get("pull_requests")
+    if pull_requests == []:
+        return (
+            VerificationResult(True)
+            if association_attested
+            else VerificationResult(False, missing_reason)
+        )
+    base_ref = str(((source_pr.get("base") or {}).get("ref") or ""))
+    association = exact_single_pr_association(
+        pull_requests,
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=expected_head_sha,
+        head_ref=expected_head_ref,
+        base_sha=expected_base_sha,
+        base_ref=base_ref,
+    )
+    if association is None:
+        return VerificationResult(False, invalid_reason)
     return VerificationResult(True)
 
 
@@ -166,7 +209,7 @@ def verify_ready_run(
         return source_binding
     if run.get("repository", {}).get("full_name") != repository:
         return VerificationResult(False, "wrong_repository")
-    if run.get("name") != "pipeline" or run.get("path") != ".github/workflows/pipeline.yml":
+    if run.get("path") != ".github/workflows/pipeline.yml":
         return VerificationResult(False, "wrong_workflow")
     if run.get("event") != "pull_request":
         return VerificationResult(False, "wrong_event")
@@ -176,22 +219,18 @@ def verify_ready_run(
         return VerificationResult(False, "head_branch_mismatch")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         return VerificationResult(False, "ready_run_not_successful")
-    pull_requests = run.get("pull_requests") or []
-    if pull_requests:
-        matches = [
-            pr
-            for pr in pull_requests
-            if pr.get("number") == pr_number
-            and str((pr.get("base") or {}).get("sha") or "").lower()
-            == expected_base_sha.lower()
-            and str((pr.get("head") or {}).get("sha") or "").lower()
-            == expected_head_sha.lower()
-        ]
-        if len(matches) != 1:
-            return VerificationResult(False, "wrong_pull_request")
-    elif not association_attested:
-        return VerificationResult(False, "ready_run_pr_binding_missing")
-    return VerificationResult(True)
+    return _verify_run_association(
+        run=run,
+        source_pr=source_pr,
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha,
+        expected_head_ref=expected_head_ref,
+        association_attested=association_attested,
+        missing_reason="ready_run_pr_binding_missing",
+        invalid_reason="wrong_pull_request",
+    )
 
 
 def verify_ready_jobs(
@@ -312,7 +351,7 @@ def verify_prior_run(
         return VerificationResult(False, "prior_not_before_ready_run")
     if run.get("repository", {}).get("full_name") != repository:
         return VerificationResult(False, "prior_wrong_repository")
-    if run.get("name") != "pipeline" or run.get("path") != ".github/workflows/pipeline.yml":
+    if run.get("path") != ".github/workflows/pipeline.yml":
         return VerificationResult(False, "prior_wrong_workflow")
     if run.get("event") != "pull_request":
         return VerificationResult(False, "prior_wrong_event")
@@ -322,22 +361,18 @@ def verify_prior_run(
         return VerificationResult(False, "prior_head_branch_mismatch")
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         return VerificationResult(False, "prior_run_not_successful")
-    pull_requests = run.get("pull_requests") or []
-    if pull_requests:
-        matches = [
-            pr
-            for pr in pull_requests
-            if pr.get("number") == pr_number
-            and str((pr.get("base") or {}).get("sha") or "").lower()
-            == expected_base_sha.lower()
-            and str((pr.get("head") or {}).get("sha") or "").lower()
-            == expected_head_sha.lower()
-        ]
-        if len(matches) != 1:
-            return VerificationResult(False, "prior_wrong_pull_request")
-    elif not association_attested:
-        return VerificationResult(False, "prior_run_pr_binding_missing")
-    return VerificationResult(True)
+    return _verify_run_association(
+        run=run,
+        source_pr=source_pr,
+        repository=repository,
+        pr_number=pr_number,
+        expected_head_sha=expected_head_sha,
+        expected_base_sha=expected_base_sha,
+        expected_head_ref=expected_head_ref,
+        association_attested=association_attested,
+        missing_reason="prior_run_pr_binding_missing",
+        invalid_reason="prior_wrong_pull_request",
+    )
 
 
 def verify_prior_jobs(

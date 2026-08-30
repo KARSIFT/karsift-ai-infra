@@ -4,15 +4,138 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Iterable
 
 
 PASSING_CHECK_CONCLUSIONS = {"success", "neutral"}
 PASSING_STATUS_STATES = {"success"}
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class EvidenceError(ValueError):
     """The supplied gate history is incomplete, ambiguous, or mis-bound."""
+
+
+def _repository_identity_matches(payload: Any, repository: str) -> bool:
+    """Validate every supplied repository identity field without short-circuiting."""
+
+    if payload is None:
+        return True
+    if not isinstance(payload, dict) or repository.count("/") != 1:
+        return False
+    owner, name = repository.split("/", 1)
+    if not owner or not name:
+        return False
+    expected_fields = {
+        "full_name": repository,
+        "name": name,
+        "url": f"https://api.github.com/repos/{repository}",
+        "html_url": f"https://github.com/{repository}",
+        "clone_url": f"https://github.com/{repository}.git",
+        "git_url": f"git://github.com/{repository}.git",
+        "ssh_url": f"git@github.com:{repository}.git",
+        "svn_url": f"https://github.com/{repository}",
+    }
+    if any(
+        field in payload and payload.get(field) != expected
+        for field, expected in expected_fields.items()
+    ):
+        return False
+    nested_owner = payload.get("owner")
+    if "owner" in payload:
+        if not isinstance(nested_owner, dict) or "login" not in nested_owner:
+            return False
+        expected_owner_fields = {
+            "login": owner,
+            "url": f"https://api.github.com/users/{owner}",
+            "html_url": f"https://github.com/{owner}",
+        }
+        if any(
+            field in nested_owner and nested_owner.get(field) != expected
+            for field, expected in expected_owner_fields.items()
+        ):
+            return False
+    # GitHub returns either a full repository object or a compact association
+    # containing only name + REST API URL.  Do not infer identity from a
+    # partial compact object or from an unrelated URL field alone.
+    return "full_name" in payload or ("name" in payload and "url" in payload)
+
+
+def exact_single_pr_association(
+    payload: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    head_ref: str,
+    base_sha: str,
+    base_ref: str,
+) -> dict[str, Any] | None:
+    """Return one fully formed exact PR association, otherwise fail closed.
+
+    A workflow run can list more than one PR for a shared commit.  None of
+    those entries is authoritative without an additional disambiguator, so
+    mixed, duplicate, and unrelated extra associations are all rejected.
+    GitHub currently omits or nulls the nested repository in this compact
+    payload; when present, it must still match the authenticated repository.
+    """
+
+    expected_values = (repository, head_ref, base_ref)
+    if (
+        not all(isinstance(value, str) and value for value in expected_values)
+        or any(
+            any(character.isspace() for character in ref)
+            for ref in (head_ref, base_ref)
+        )
+        or not SHA_RE.fullmatch(head_sha)
+        or not SHA_RE.fullmatch(base_sha)
+        or not isinstance(pr_number, int)
+        or isinstance(pr_number, bool)
+        or pr_number <= 0
+        or not isinstance(payload, list)
+        or len(payload) != 1
+    ):
+        return None
+    association = payload[0]
+    if not isinstance(association, dict):
+        return None
+    head = association.get("head")
+    base = association.get("base")
+    number = association.get("number")
+    if (
+        not isinstance(head, dict)
+        or not isinstance(base, dict)
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number <= 0
+    ):
+        return None
+    actual_head_sha = head.get("sha")
+    actual_base_sha = base.get("sha")
+    actual_head_ref = head.get("ref")
+    actual_base_ref = base.get("ref")
+    if (
+        not isinstance(actual_head_sha, str)
+        or not SHA_RE.fullmatch(actual_head_sha)
+        or not isinstance(actual_base_sha, str)
+        or not SHA_RE.fullmatch(actual_base_sha)
+        or not isinstance(actual_head_ref, str)
+        or not actual_head_ref
+        or not isinstance(actual_base_ref, str)
+        or not actual_base_ref
+        or number != pr_number
+        or actual_head_sha != head_sha
+        or actual_base_sha != base_sha
+        or actual_head_ref != head_ref
+        or actual_base_ref != base_ref
+    ):
+        return None
+    for side in (head, base):
+        nested_repository = side.get("repo")
+        if not _repository_identity_matches(nested_repository, repository):
+            return None
+    return association
 
 
 def validate_pull_request_binding(
