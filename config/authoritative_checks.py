@@ -4,15 +4,106 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Iterable
 
 
 PASSING_CHECK_CONCLUSIONS = {"success", "neutral"}
 PASSING_STATUS_STATES = {"success"}
+SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class EvidenceError(ValueError):
     """The supplied gate history is incomplete, ambiguous, or mis-bound."""
+
+
+def exact_single_pr_association(
+    payload: Any,
+    *,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    head_ref: str,
+    base_sha: str,
+    base_ref: str,
+) -> dict[str, Any] | None:
+    """Return one fully formed exact PR association, otherwise fail closed.
+
+    A workflow run can list more than one PR for a shared commit.  None of
+    those entries is authoritative without an additional disambiguator, so
+    mixed, duplicate, and unrelated extra associations are all rejected.
+    GitHub currently omits or nulls the nested repository in this compact
+    payload; when present, it must still match the authenticated repository.
+    """
+
+    expected_values = (repository, head_ref, base_ref)
+    if (
+        not all(isinstance(value, str) and value for value in expected_values)
+        or any(
+            any(character.isspace() for character in ref)
+            for ref in (head_ref, base_ref)
+        )
+        or not SHA_RE.fullmatch(head_sha)
+        or not SHA_RE.fullmatch(base_sha)
+        or not isinstance(pr_number, int)
+        or isinstance(pr_number, bool)
+        or pr_number <= 0
+        or not isinstance(payload, list)
+        or len(payload) != 1
+    ):
+        return None
+    association = payload[0]
+    if not isinstance(association, dict):
+        return None
+    head = association.get("head")
+    base = association.get("base")
+    number = association.get("number")
+    if (
+        not isinstance(head, dict)
+        or not isinstance(base, dict)
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number <= 0
+    ):
+        return None
+    actual_head_sha = head.get("sha")
+    actual_base_sha = base.get("sha")
+    actual_head_ref = head.get("ref")
+    actual_base_ref = base.get("ref")
+    if (
+        not isinstance(actual_head_sha, str)
+        or not SHA_RE.fullmatch(actual_head_sha)
+        or not isinstance(actual_base_sha, str)
+        or not SHA_RE.fullmatch(actual_base_sha)
+        or not isinstance(actual_head_ref, str)
+        or not actual_head_ref
+        or not isinstance(actual_base_ref, str)
+        or not actual_base_ref
+        or number != pr_number
+        or actual_head_sha != head_sha
+        or actual_base_sha != base_sha
+        or actual_head_ref != head_ref
+        or actual_base_ref != base_ref
+    ):
+        return None
+    for side in (head, base):
+        nested_repository = side.get("repo")
+        if nested_repository is None:
+            continue
+        if not isinstance(nested_repository, dict):
+            return None
+        if "full_name" in nested_repository:
+            if nested_repository.get("full_name") != repository:
+                return None
+            continue
+        repository_name = repository.rsplit("/", 1)[-1]
+        if (
+            nested_repository.get("name") != repository_name
+            or nested_repository.get("url")
+            != f"https://api.github.com/repos/{repository}"
+        ):
+            return None
+    return association
 
 
 def validate_pull_request_binding(

@@ -379,6 +379,11 @@ comparison independently before it can authorize merge.
 Pipeline identity comes from the immutable workflow path, pull-request event, exact repository,
 base/head/branch association, policy revision, and required job set. The mutable run display name
 may be the pull-request title and is never used as workflow identity.
+The run must expose exactly one well-formed PR association. Null, scalar, partial, duplicate, or
+unrelated extra entries reject the run even when another entry matches: a commit shared by multiple
+PRs is not unambiguous evidence for any one of them. GitHub may omit the compact association's
+nested repository object or represent it with the repository name and canonical API URL instead
+of `full_name`; every supplied repository field must still bind that owner/repository exactly.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
 from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
 the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import sys
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
@@ -494,6 +495,91 @@ class Voc140ReleaseCarrierAttestationTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_ordinary_pr_association_shapes_fail_closed(self):
+        valid = ordinary_pull_request()
+        unrelated = deepcopy(valid)
+        unrelated["number"] = PR_NUMBER + 1
+        missing_head = {"number": PR_NUMBER, "base": deepcopy(valid["base"])}
+        missing_base = {"number": PR_NUMBER, "head": deepcopy(valid["head"])}
+        invalid_head_sha = deepcopy(valid)
+        invalid_head_sha["head"]["sha"] = "not-a-sha"
+        invalid_head_sha_type = deepcopy(valid)
+        invalid_head_sha_type["head"]["sha"] = 7
+        invalid_base_ref = deepcopy(valid)
+        invalid_base_ref["base"]["ref"] = ""
+        invalid_base_ref_type = deepcopy(valid)
+        invalid_base_ref_type["base"]["ref"] = 7
+        invalid_number_type = deepcopy(valid)
+        invalid_number_type["number"] = str(PR_NUMBER)
+        invalid_repository = deepcopy(valid)
+        invalid_repository["head"]["repo"] = "invalid"
+        invalid_payloads = {
+            "absent": ...,
+            "null": None,
+            "non-list-object": valid,
+            "non-list-scalar": "invalid",
+            "empty": [],
+            "valid-plus-null": [valid, None],
+            "valid-plus-scalar": [valid, "invalid"],
+            "valid-plus-empty-object": [valid, {}],
+            "missing-head": [missing_head],
+            "missing-base": [missing_base],
+            "invalid-head-sha": [invalid_head_sha],
+            "invalid-head-sha-type": [invalid_head_sha_type],
+            "invalid-base-ref": [invalid_base_ref],
+            "invalid-base-ref-type": [invalid_base_ref_type],
+            "invalid-number-type": [invalid_number_type],
+            "invalid-repository": [invalid_repository],
+            "duplicate-exact": [valid, deepcopy(valid)],
+            "extra-unrelated": [valid, unrelated],
+        }
+        jobs = [{"name": "release / converge", "conclusion": "skipped"}]
+        clean = ordinary_pipeline_run()
+        self.assertTrue(
+            authoritative_runner._ordinary_pr_pipeline_parent(
+                clean,
+                jobs,
+                pull_request=ordinary_pull_request(),
+                repository=REPOSITORY,
+                pr_number=PR_NUMBER,
+                production_branch="main",
+            )
+        )
+        compact_repository = {
+            "name": "example",
+            "url": "https://api.github.com/repos/KARSIFT/example",
+        }
+        compact = ordinary_pipeline_run()
+        compact["pull_requests"][0]["head"]["repo"] = compact_repository
+        compact["pull_requests"][0]["base"]["repo"] = compact_repository
+        self.assertTrue(
+            authoritative_runner._ordinary_pr_pipeline_parent(
+                compact,
+                jobs,
+                pull_request=ordinary_pull_request(),
+                repository=REPOSITORY,
+                pr_number=PR_NUMBER,
+                production_branch="main",
+            )
+        )
+        for label, associations in invalid_payloads.items():
+            with self.subTest(label=label):
+                run = ordinary_pipeline_run()
+                if associations is ...:
+                    run.pop("pull_requests")
+                else:
+                    run["pull_requests"] = deepcopy(associations)
+                self.assertFalse(
+                    authoritative_runner._ordinary_pr_pipeline_parent(
+                        run,
+                        jobs,
+                        pull_request=ordinary_pull_request(),
+                        repository=REPOSITORY,
+                        pr_number=PR_NUMBER,
+                        production_branch="main",
+                    )
+                )
 
     def test_ordinary_pr_mode_never_admits_production_or_release_carrier_parent(self):
         check = {

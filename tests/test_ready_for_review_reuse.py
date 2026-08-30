@@ -1,4 +1,5 @@
 from pathlib import Path
+from copy import deepcopy
 from contextlib import redirect_stdout
 from importlib.util import module_from_spec, spec_from_file_location
 from io import StringIO
@@ -500,6 +501,7 @@ class MetadataAdapterFailureTests(unittest.TestCase):
             head_sha=HEAD,
             head_branch=AGENT_REF,
             base_sha=BASE,
+            base_ref="develop",
             policy_sha=POLICY,
         ):
             return {
@@ -514,8 +516,22 @@ class MetadataAdapterFailureTests(unittest.TestCase):
                 "pull_requests": [
                     {
                         "number": 9,
-                        "base": {"sha": base_sha},
-                        "head": {"sha": head_sha},
+                        "base": {
+                            "sha": base_sha,
+                            "ref": base_ref,
+                            "repo": {
+                                "name": "example",
+                                "url": "https://api.github.com/repos/KARSIFT/example",
+                            },
+                        },
+                        "head": {
+                            "sha": head_sha,
+                            "ref": head_branch,
+                            "repo": {
+                                "name": "example",
+                                "url": "https://api.github.com/repos/KARSIFT/example",
+                            },
+                        },
                     }
                 ],
                 "referenced_workflows": policy_refs(policy_sha),
@@ -538,13 +554,16 @@ class MetadataAdapterFailureTests(unittest.TestCase):
         class FakeApi:
             repository = "KARSIFT/example"
 
+            def __init__(self, runs):
+                self.runs = runs
+
             def gh(self, args):
                 endpoint = args[-1]
                 if "actions/runs?event=pull_request" in endpoint:
                     return json.dumps(
                         {
-                            "total_count": len(candidates),
-                            "workflow_runs": candidates,
+                            "total_count": len(self.runs),
+                            "workflow_runs": self.runs,
                         }
                     )
                 run_id = int(re.search(r"actions/runs/([0-9]+)/jobs", endpoint).group(1))
@@ -559,11 +578,12 @@ class MetadataAdapterFailureTests(unittest.TestCase):
                 )
 
         summaries = runner.load_pipeline_runs(
-            FakeApi(),
+            FakeApi(candidates),
             9,
             HEAD,
             BASE,
             AGENT_REF,
+            "develop",
         )
         self.assertEqual([summary.run_id for summary in summaries], [100, 106])
         selected = policy.select_prior_run(
@@ -576,6 +596,68 @@ class MetadataAdapterFailureTests(unittest.TestCase):
         )
         self.assertIsNotNone(selected)
         self.assertEqual(selected.run_id, 100)
+
+        valid_association = deepcopy(valid["pull_requests"][0])
+        unrelated = deepcopy(valid_association)
+        unrelated["number"] = 10
+        missing_head = {
+            "number": 9,
+            "base": deepcopy(valid_association["base"]),
+        }
+        missing_base = {
+            "number": 9,
+            "head": deepcopy(valid_association["head"]),
+        }
+        invalid_head_sha = deepcopy(valid_association)
+        invalid_head_sha["head"]["sha"] = "not-a-sha"
+        invalid_head_sha_type = deepcopy(valid_association)
+        invalid_head_sha_type["head"]["sha"] = 7
+        invalid_base_ref = deepcopy(valid_association)
+        invalid_base_ref["base"]["ref"] = ""
+        invalid_base_ref_type = deepcopy(valid_association)
+        invalid_base_ref_type["base"]["ref"] = 7
+        invalid_number_type = deepcopy(valid_association)
+        invalid_number_type["number"] = "9"
+        invalid_repository = deepcopy(valid_association)
+        invalid_repository["head"]["repo"] = "invalid"
+        invalid_payloads = {
+            "absent": ...,
+            "null": None,
+            "non-list-object": valid_association,
+            "non-list-scalar": "invalid",
+            "empty": [],
+            "valid-plus-null": [valid_association, None],
+            "valid-plus-scalar": [valid_association, "invalid"],
+            "valid-plus-empty-object": [valid_association, {}],
+            "missing-head": [missing_head],
+            "missing-base": [missing_base],
+            "invalid-head-sha": [invalid_head_sha],
+            "invalid-head-sha-type": [invalid_head_sha_type],
+            "invalid-base-ref": [invalid_base_ref],
+            "invalid-base-ref-type": [invalid_base_ref_type],
+            "invalid-number-type": [invalid_number_type],
+            "invalid-repository": [invalid_repository],
+            "duplicate-exact": [valid_association, deepcopy(valid_association)],
+            "extra-unrelated": [valid_association, unrelated],
+        }
+        for label, associations in invalid_payloads.items():
+            with self.subTest(label=label):
+                candidate = metadata(200)
+                if associations is ...:
+                    candidate.pop("pull_requests")
+                else:
+                    candidate["pull_requests"] = deepcopy(associations)
+                self.assertEqual(
+                    runner.load_pipeline_runs(
+                        FakeApi([candidate]),
+                        9,
+                        HEAD,
+                        BASE,
+                        AGENT_REF,
+                        "develop",
+                    ),
+                    [],
+                )
 
 
 class MergeGateReuseTests(unittest.TestCase):
@@ -1235,6 +1317,129 @@ class ProofVerifierTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_prior_run_jq_requires_one_clean_exact_pr_association(self):
+        merge = (ROOT / ".github/workflows/merge-gate.yml").read_text()
+        block = merge.split("prior_run_valid=$(jq -r", 1)[1].split(
+            "/tmp/prior-run.json", 1
+        )[0]
+        jq_filter = block.split("'", 1)[1].rsplit("'", 1)[0]
+        valid_association = {
+            "number": 9,
+            "base": {
+                "sha": BASE,
+                "ref": "develop",
+                "repo": {
+                    "name": "example",
+                    "url": "https://api.github.com/repos/KARSIFT/example",
+                },
+            },
+            "head": {
+                "sha": HEAD,
+                "ref": AGENT_REF,
+                "repo": {
+                    "name": "example",
+                    "url": "https://api.github.com/repos/KARSIFT/example",
+                },
+            },
+        }
+        prior_run = {
+            "id": 100,
+            "path": ".github/workflows/pipeline.yml",
+            "event": "pull_request",
+            "head_sha": HEAD,
+            "head_branch": AGENT_REF,
+            "status": "completed",
+            "conclusion": "success",
+            "pull_requests": [valid_association],
+        }
+
+        def accepted(associations=...):
+            payload = deepcopy(prior_run)
+            if associations is ...:
+                payload.pop("pull_requests")
+            else:
+                payload["pull_requests"] = deepcopy(associations)
+            completed = subprocess.run(
+                [
+                    "jq",
+                    "--argjson",
+                    "run_id",
+                    "100",
+                    "--arg",
+                    "head_sha",
+                    HEAD,
+                    "--arg",
+                    "base_sha",
+                    BASE,
+                    "--arg",
+                    "head_ref",
+                    AGENT_REF,
+                    "--arg",
+                    "base_ref",
+                    "develop",
+                    "--arg",
+                    "repository",
+                    "KARSIFT/example",
+                    "--argjson",
+                    "pr_number",
+                    "9",
+                    jq_filter,
+                ],
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed.stdout.strip() == "true"
+
+        self.assertTrue(accepted([valid_association]))
+        unrelated = deepcopy(valid_association)
+        unrelated["number"] = 10
+        missing_head = {
+            "number": 9,
+            "base": deepcopy(valid_association["base"]),
+        }
+        missing_base = {
+            "number": 9,
+            "head": deepcopy(valid_association["head"]),
+        }
+        invalid_head_sha = deepcopy(valid_association)
+        invalid_head_sha["head"]["sha"] = "not-a-sha"
+        invalid_head_sha_type = deepcopy(valid_association)
+        invalid_head_sha_type["head"]["sha"] = 7
+        invalid_base_ref = deepcopy(valid_association)
+        invalid_base_ref["base"]["ref"] = ""
+        invalid_base_ref_type = deepcopy(valid_association)
+        invalid_base_ref_type["base"]["ref"] = 7
+        invalid_number_type = deepcopy(valid_association)
+        invalid_number_type["number"] = "9"
+        invalid_repository = deepcopy(valid_association)
+        invalid_repository["head"]["repo"] = "invalid"
+        invalid_payloads = (
+            ...,
+            None,
+            valid_association,
+            "invalid",
+            [],
+            [valid_association, None],
+            [valid_association, "invalid"],
+            [valid_association, {}],
+            [missing_head],
+            [missing_base],
+            [invalid_head_sha],
+            [invalid_head_sha_type],
+            [invalid_base_ref],
+            [invalid_base_ref_type],
+            [invalid_number_type],
+            [invalid_repository],
+            [valid_association, deepcopy(valid_association)],
+            [valid_association, unrelated],
+        )
+        for associations in invalid_payloads:
+            with self.subTest(associations=associations):
+                self.assertFalse(accepted(associations))
+
     def test_reuse_workflows_are_read_only_and_merge_gate_revalidates_prior_run(self):
         reuse = (ROOT / ".github/workflows/ready-for-review-reuse.yml").read_text()
         verify = (

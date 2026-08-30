@@ -11,6 +11,7 @@ import subprocess
 
 from authoritative_checks import (
     EvidenceError,
+    exact_single_pr_association,
     evaluate,
     flatten_check_runs,
     flatten_statuses,
@@ -59,32 +60,16 @@ def _ordinary_pr_pipeline_parent(
         or run.get("conclusion") is not None
     ):
         return False
-    associations = run.get("pull_requests")
-    if not isinstance(associations, list):
-        return False
-    matches = [
-        association
-        for association in associations
-        if isinstance(association, dict)
-        and int(association.get("number") or 0) == pr_number
-        and str((association.get("head") or {}).get("sha") or "").lower()
-        == str(head.get("sha") or "").lower()
-        and str((association.get("head") or {}).get("ref") or "") == head_ref
-        and str(
-            ((association.get("head") or {}).get("repo") or {}).get("full_name")
-            or repository
-        )
-        == repository
-        and str((association.get("base") or {}).get("sha") or "").lower()
-        == str(base.get("sha") or "").lower()
-        and str((association.get("base") or {}).get("ref") or "") == base_ref
-        and str(
-            ((association.get("base") or {}).get("repo") or {}).get("full_name")
-            or repository
-        )
-        == repository
-    ]
-    return len(matches) == 1 and not is_release_carrier_run(run, jobs)
+    association = exact_single_pr_association(
+        run.get("pull_requests"),
+        repository=repository,
+        pr_number=pr_number,
+        head_sha=str(head.get("sha") or ""),
+        head_ref=head_ref,
+        base_sha=str(base.get("sha") or ""),
+        base_ref=base_ref,
+    )
+    return association is not None and not is_release_carrier_run(run, jobs)
 
 
 def _workflow_runs(
