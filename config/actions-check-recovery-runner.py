@@ -153,13 +153,14 @@ def _attestable_check_runs(
     *,
     pr_number: int,
 ) -> list[dict[str, Any]]:
-    from promotion_ci_attestation import parent_run_is_attestable
+    from promotion_ci_attestation import parent_run_is_attestable, workflow_path
 
     pattern = re.compile(
         rf"^https://github\.com/{re.escape(repository)}/actions/runs/([1-9][0-9]*)/job/[1-9][0-9]*$",
         re.IGNORECASE,
     )
     cache: dict[int, dict[str, Any]] = {}
+    jobs_cache: dict[int, list[dict[str, Any]]] = {}
     filtered: list[dict[str, Any]] = []
     for item in check_runs:
         if (item.get("app") or {}).get("slug") != "github-actions":
@@ -178,12 +179,48 @@ def _attestable_check_runs(
                 read_failure=WORKFLOW_RUNS_READ_FAILED,
             )
         parent = cache[run_id]
-        if not parent_run_is_attestable(parent, pr_number=pr_number):
+        jobs = None
+        if workflow_path(parent) == ".github/workflows/pipeline.yml":
+            if run_id not in jobs_cache:
+                jobs_cache[run_id] = load_workflow_jobs(token, repository, run_id)
+            jobs = jobs_cache[run_id]
+        if not parent_run_is_attestable(parent, jobs, pr_number=pr_number):
             continue
         enriched = dict(item)
         enriched["run_id"] = run_id
         filtered.append(enriched)
     return filtered
+
+
+def load_workflow_jobs(
+    token: str, repository: str, run_id: int
+) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(
+            gh(
+                [
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
+                ],
+                token=token,
+                repository=repository,
+                read_failure=WORKFLOW_RUNS_READ_FAILED,
+            )
+        )
+    except json.JSONDecodeError as exc:
+        raise RunnerError("invalid_workflow_jobs_payload") from exc
+    if not isinstance(payload, list):
+        raise RunnerError("invalid_workflow_jobs_payload")
+    jobs: list[dict[str, Any]] = []
+    for page in payload:
+        if not isinstance(page, dict) or not isinstance(page.get("jobs"), list):
+            raise RunnerError("invalid_workflow_jobs_payload")
+        if any(not isinstance(job, dict) for job in page["jobs"]):
+            raise RunnerError("invalid_workflow_jobs_payload")
+        jobs.extend(page["jobs"])
+    return jobs
 
 
 def load_workflow_runs(token: str, repository: str, head_sha: str) -> list[dict]:

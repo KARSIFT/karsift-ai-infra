@@ -57,6 +57,39 @@ def gh_api(
     return json.loads(completed.stdout or "{}")
 
 
+def gh_api_paginated_jobs(
+    token: str, repository: str, run_id: int
+) -> list[dict]:
+    command = [
+        "gh",
+        "api",
+        "--paginate",
+        "--slurp",
+        f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100",
+    ]
+    env = os.environ.copy()
+    env["GH_TOKEN"] = token
+    env["GH_REPO"] = repository
+    completed = subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    if completed.returncode:
+        raise RunnerError("github_api_failed")
+    pages = json.loads(completed.stdout or "null")
+    if not isinstance(pages, list) or any(
+        not isinstance(page, dict)
+        or not isinstance(page.get("jobs"), list)
+        or any(not isinstance(job, dict) for job in page["jobs"])
+        for page in pages
+    ):
+        raise RunnerError("invalid_workflow_jobs_payload")
+    return [job for page in pages for job in page["jobs"]]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--authoritative-file", required=True)
@@ -133,6 +166,13 @@ def main() -> int:
                 args.repository,
                 f"repos/{args.repository}/actions/runs/{run_id}",
             )
+            jobs = (
+                gh_api_paginated_jobs(
+                    args.github_token, args.repository, run_id
+                )
+                if context == "ci / ci"
+                else None
+            )
             verify_promotion_required_run_semantics(
                 run_payload,
                 context=context,
@@ -143,6 +183,7 @@ def main() -> int:
                 head_sha=head_sha,
                 base_ref="main",
                 head_ref="develop",
+                jobs=jobs,
             )
             gh_api(
                 args.github_token,

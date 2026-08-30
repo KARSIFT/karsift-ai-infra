@@ -267,16 +267,6 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Mint App installation token for production merge guard
-        id: guard-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-administration: write
-
       - name: Validate the full roster from caller-merge markers
         id: roster
         env:
@@ -563,6 +553,17 @@ jobs:
             --branch-ref "${{ inputs.integration_branch }}" \
             --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --github-token "$GH_TOKEN"
+
+      - name: Mint App installation token for production merge guard
+        id: guard-token
+        if: steps.gates.outputs.merge == 'true'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write
 
       - name: Perform the single exact-head merge decision
         id: merge

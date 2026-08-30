@@ -467,17 +467,6 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Mint App installation token for production merge guard
-        id: guard-token
-        if: github.event.pull_request.base.ref == inputs.production_branch
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
-        with:
-          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
-          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-administration: write
-
       - name: Publish immutable reuse transition attestation
         if: inputs.reuse_outcome == 'reuse-evidence'
         env:
@@ -545,6 +534,17 @@ jobs:
             echo "Reuse transition attestation is conflicting or ambiguous; refusing to merge." >&2
             exit 1
           fi
+
+      - name: Mint App installation token for production merge guard
+        id: guard-token
+        if: github.event.pull_request.base.ref == inputs.production_branch
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KARSIFT_BOT_APP_ID }}
+          private-key: ${{ secrets.KARSIFT_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write
 
       # The App token is essential: a merge made with github.token does not
       # emit the pull_request:closed event that starts adopt.yml.

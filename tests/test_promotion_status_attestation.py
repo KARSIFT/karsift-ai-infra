@@ -111,6 +111,19 @@ class PromotionStatusAttestationTests(unittest.TestCase):
                         {"name": "ci / ci", "state": "SUCCESS"},
                     ]
                 )
+            elif "/actions/runs/3/jobs?per_page=100" in joined:
+                result.stdout = json.dumps(
+                    [
+                        {
+                            "jobs": [
+                                {
+                                    "name": "release / converge",
+                                    "conclusion": "skipped",
+                                }
+                            ]
+                        }
+                    ]
+                )
             elif "/actions/runs/" in joined:
                 run_id = int(command[-1].rsplit("/", 1)[-1])
                 workflow = list(EXPECTED_WORKFLOWS.values())[run_id - 1]
@@ -194,6 +207,14 @@ class PromotionStatusAttestationTests(unittest.TestCase):
         self.assertTrue(
             all(call.kwargs["env"]["GH_TOKEN"] == "job-token" for call in posts)
         )
+        job_reads = [
+            call
+            for call in run_mock.call_args_list
+            if "/actions/runs/3/jobs?per_page=100" in " ".join(call.args[0])
+        ]
+        self.assertEqual(len(job_reads), 1)
+        self.assertIn("--paginate", job_reads[0].args[0])
+        self.assertIn("--slurp", job_reads[0].args[0])
 
     def test_runner_fails_closed_when_required_pr_view_cannot_be_read(self):
         head_sha = "a" * 40
@@ -234,6 +255,83 @@ class PromotionStatusAttestationTests(unittest.TestCase):
         self.assertFalse(
             any("--method" in call.args[0] for call in run_mock.call_args_list)
         )
+
+    def test_runner_passes_fetched_jobs_to_ci_semantics_verification(self):
+        head_sha = "a" * 40
+        repository = "KARSIFT/example"
+        jobs = [{"name": "release / converge", "conclusion": "skipped"}]
+        pull_request = {
+            "number": 947,
+            "state": "open",
+            "base": {
+                "sha": "b" * 40,
+                "ref": "main",
+                "repo": {"full_name": repository},
+            },
+            "head": {
+                "sha": head_sha,
+                "ref": "develop",
+                "repo": {"full_name": repository},
+            },
+        }
+
+        def api(_token, _repository, endpoint, **kwargs):
+            if endpoint.endswith("/pulls/947"):
+                return pull_request
+            if "/actions/runs/" in endpoint:
+                return {}
+            if "/statuses/" in endpoint and kwargs.get("method") == "POST":
+                return {}
+            raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+        checks_result = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                [
+                    {"name": "governance-policy", "state": "SUCCESS"},
+                    {"name": "validate", "state": "SUCCESS"},
+                    {"name": "ci / ci", "state": "SUCCESS"},
+                ]
+            ),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = Path(directory) / "authoritative.json"
+            evidence.write_text(json.dumps(summary()), encoding="utf-8")
+            argv = [
+                "promotion-status-attestation-runner.py",
+                "--authoritative-file",
+                str(evidence),
+                "--repository",
+                repository,
+                "--pr-number",
+                "947",
+                "--head-sha",
+                head_sha,
+                "--branch-ref",
+                "develop",
+                "--target-url",
+                f"https://github.com/{repository}/actions/runs/123",
+                "--github-token",
+                "job-token",
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                runner.subprocess, "run", return_value=checks_result
+            ), mock.patch.object(runner, "gh_api", side_effect=api), mock.patch.object(
+                runner, "gh_api_paginated_jobs", return_value=jobs
+            ) as jobs_mock, mock.patch.object(
+                runner, "verify_promotion_required_run_semantics"
+            ) as verify_mock:
+                self.assertEqual(runner.main(), 0)
+
+        jobs_mock.assert_called_once_with("job-token", repository, 3)
+        ci_calls = [
+            call
+            for call in verify_mock.call_args_list
+            if call.kwargs["context"] == "ci / ci"
+        ]
+        self.assertEqual(len(ci_calls), 1)
+        self.assertEqual(ci_calls[0].kwargs["jobs"], jobs)
 
     def test_runner_parses_nonzero_failed_check_payload_but_never_attests_it(self):
         head_sha = "a" * 40

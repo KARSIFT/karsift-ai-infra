@@ -44,14 +44,17 @@ def is_release_carrier_run(
 ) -> bool:
     """True when a pipeline run is a reconcile-release / release-converge carrier."""
 
-    if is_dedicated_promotion_validation_run(run):
-        return False
     if workflow_path(run) != PIPELINE_WORKFLOW_PATH:
         return False
 
-    if jobs:
-        if any(_release_job_is_non_skipped(job) for job in jobs):
-            return True
+    # Executed job metadata is stronger than a caller-controlled display
+    # title.  A run named like dedicated recovery is still a release carrier
+    # when it actually ran release/converge; a skipped shared job is harmless.
+    if jobs and any(_release_job_is_non_skipped(job) for job in jobs):
+        return True
+
+    if is_dedicated_promotion_validation_run(run):
+        return False
 
     event = str(run.get("event") or "")
     title = str(run.get("display_title") or "")
@@ -74,6 +77,8 @@ def parent_run_is_attestable(
 ) -> bool:
     """True when a workflow run may back attestable promotion CI evidence."""
 
+    if is_release_carrier_run(run, jobs):
+        return False
     if is_dedicated_promotion_validation_run(run, pr_number=pr_number):
         return (
             run.get("status") in TERMINAL_RUN_STATUSES
@@ -83,7 +88,7 @@ def parent_run_is_attestable(
         return False
     if run.get("conclusion") not in TERMINAL_SUCCESS_CONCLUSIONS:
         return False
-    return not is_release_carrier_run(run, jobs)
+    return True
 
 
 def dedicated_recovery_run_covers_dispatch(

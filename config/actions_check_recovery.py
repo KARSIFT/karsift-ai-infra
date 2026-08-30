@@ -331,9 +331,19 @@ def promotion_ci_context_is_attestable(
 ) -> bool:
     """Require completed non-carrier backing evidence for ci / ci."""
 
-    for item in gate_summary.get("checks", []):
-        if item.get("name") != "ci / ci":
-            continue
+    ci_checks = [
+        item
+        for item in gate_summary.get("checks", [])
+        if item.get("name") == "ci / ci"
+    ]
+    # The ruleset-selected PR view may still show SUCCESS after the runner has
+    # correctly removed an untrusted release-carrier check from this composed
+    # attestable summary.  Absence (or ambiguity) here must therefore fail
+    # closed rather than succeeding vacuously.
+    if len(ci_checks) != 1:
+        return False
+
+    for item in ci_checks:
         if item.get("state") != "SUCCESS":
             return False
         run_id = item.get("run_id")
