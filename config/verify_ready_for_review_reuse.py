@@ -166,7 +166,7 @@ def verify_ready_run(
         return source_binding
     if run.get("repository", {}).get("full_name") != repository:
         return VerificationResult(False, "wrong_repository")
-    if run.get("name") != "pipeline" or run.get("path") != ".github/workflows/pipeline.yml":
+    if run.get("path") != ".github/workflows/pipeline.yml":
         return VerificationResult(False, "wrong_workflow")
     if run.get("event") != "pull_request":
         return VerificationResult(False, "wrong_event")
@@ -312,7 +312,7 @@ def verify_prior_run(
         return VerificationResult(False, "prior_not_before_ready_run")
     if run.get("repository", {}).get("full_name") != repository:
         return VerificationResult(False, "prior_wrong_repository")
-    if run.get("name") != "pipeline" or run.get("path") != ".github/workflows/pipeline.yml":
+    if run.get("path") != ".github/workflows/pipeline.yml":
         return VerificationResult(False, "prior_wrong_workflow")
     if run.get("event") != "pull_request":
         return VerificationResult(False, "prior_wrong_event")

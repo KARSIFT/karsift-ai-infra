@@ -219,6 +219,8 @@ jobs:
                --head-sha "$head_sha" \
                --pull-request-file /tmp/merge-pr.json \
                --workflow-event "pull_request" \
+               --ordinary-pr-gate \
+               --production-branch "${{ inputs.production_branch }}" \
                --output /tmp/merge-authoritative.json; then
             echo "checks_ok=false" >> "$GITHUB_OUTPUT"
             echo "verdict=PENDING" >> "$GITHUB_OUTPUT"
@@ -239,7 +241,7 @@ jobs:
               --arg base_sha "$base_sha" \
               --arg head_ref "$head_ref" \
               --argjson pr_number "$pr_number" \
-              '.id == $run_id and .name == "pipeline" and
+              '.id == $run_id and
                .path == ".github/workflows/pipeline.yml" and
                .event == "pull_request" and .head_sha == $head_sha and
                .head_branch == $head_ref and .status == "completed" and

@@ -491,6 +491,92 @@ class MetadataAdapterFailureTests(unittest.TestCase):
             "evaluation_internal_error",
         )
 
+    def test_pipeline_adapter_uses_immutable_identity_not_custom_run_name(self):
+        def metadata(
+            run_id,
+            *,
+            path=".github/workflows/pipeline.yml",
+            event="pull_request",
+            head_sha=HEAD,
+            head_branch=AGENT_REF,
+            base_sha=BASE,
+            policy_sha=POLICY,
+        ):
+            return {
+                "id": run_id,
+                "name": "VOC-140: VOC-140-T00",
+                "path": path,
+                "event": event,
+                "head_sha": head_sha,
+                "head_branch": head_branch,
+                "status": "completed",
+                "conclusion": "success",
+                "pull_requests": [
+                    {
+                        "number": 9,
+                        "base": {"sha": base_sha},
+                        "head": {"sha": head_sha},
+                    }
+                ],
+                "referenced_workflows": policy_refs(policy_sha),
+            }
+
+        valid = metadata(100)
+        ambiguous = metadata(107)
+        ambiguous["pull_requests"].append(dict(ambiguous["pull_requests"][0]))
+        candidates = [
+            valid,
+            metadata(101, path=".github/workflows/not-pipeline.yml"),
+            metadata(102, event="workflow_dispatch"),
+            metadata(103, head_sha="c" * 40),
+            metadata(104, head_branch="agent/another-task"),
+            metadata(105, base_sha="c" * 40),
+            metadata(106, policy_sha="e" * 40),
+            ambiguous,
+        ]
+
+        class FakeApi:
+            repository = "KARSIFT/example"
+
+            def gh(self, args):
+                endpoint = args[-1]
+                if "actions/runs?event=pull_request" in endpoint:
+                    return json.dumps(
+                        {
+                            "total_count": len(candidates),
+                            "workflow_runs": candidates,
+                        }
+                    )
+                run_id = int(re.search(r"actions/runs/([0-9]+)/jobs", endpoint).group(1))
+                return json.dumps(
+                    {
+                        "total_count": 2,
+                        "jobs": [
+                            {"name": policy.REQUIRED_CI_JOB, "conclusion": "success"},
+                            {"name": policy.AGENT_PUBLISHER_JOB, "conclusion": "success"},
+                        ],
+                    }
+                )
+
+        summaries = runner.load_pipeline_runs(
+            FakeApi(),
+            9,
+            HEAD,
+            BASE,
+            AGENT_REF,
+        )
+        self.assertEqual([summary.run_id for summary in summaries], [100, 106])
+        selected = policy.select_prior_run(
+            runs=summaries,
+            head_ref=AGENT_REF,
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            current_run_id=200,
+            expected_policy_sha=POLICY,
+        )
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.run_id, 100)
+
 
 class MergeGateReuseTests(unittest.TestCase):
     def setUp(self):
@@ -659,7 +745,7 @@ class ProofVerifierTests(unittest.TestCase):
         return {
             "id": run_id,
             "repository": {"full_name": "KARSIFT/example"},
-            "name": "pipeline",
+            "name": "VOC-140: VOC-140-T00",
             "path": path or ".github/workflows/pipeline.yml",
             "event": event,
             "head_sha": HEAD,
@@ -1163,6 +1249,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertNotIn("actions/upload-artifact", workflow.lower())
             self.assertNotIn("actions/download-artifact", workflow.lower())
         self.assertIn('.path == ".github/workflows/pipeline.yml"', merge)
+        self.assertNotIn('.name == "pipeline"', merge)
         self.assertIn(".head_branch == $head_ref", merge)
         self.assertIn('[ "$reuse_prior_run_id" -lt "$current_run_id" ]', merge)
         self.assertIn("prior_jobs_available=true", merge)

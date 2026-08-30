@@ -86,6 +86,7 @@ def load_pipeline_runs(
     pr_number: int,
     head_sha: str,
     base_sha: str,
+    head_ref: str,
 ) -> list[PipelineRunSummary]:
     payload = json.loads(
         api.gh(
@@ -106,12 +107,27 @@ def load_pipeline_runs(
         raise MetadataError("invalid_run_payload")
     summaries: list[PipelineRunSummary] = []
     for run in runs:
-        if str(run.get("name") or "") != "pipeline":
+        if not isinstance(run, dict):
+            raise MetadataError("invalid_run_payload")
+        if (
+            str(run.get("path") or "") != ".github/workflows/pipeline.yml"
+            or str(run.get("event") or "") != "pull_request"
+            or str(run.get("head_sha") or "").lower() != head_sha.lower()
+            or str(run.get("head_branch") or "") != head_ref
+        ):
             continue
+        pull_requests = run.get("pull_requests")
+        if not isinstance(pull_requests, list):
+            raise MetadataError("invalid_run_association_payload")
         associations = [
             pr
-            for pr in run.get("pull_requests") or []
-            if pr.get("number") == pr_number
+            for pr in pull_requests
+            if isinstance(pr, dict)
+            and pr.get("number") == pr_number
+            and str((pr.get("base") or {}).get("sha") or "").lower()
+            == base_sha.lower()
+            and str((pr.get("head") or {}).get("sha") or "").lower()
+            == head_sha.lower()
         ]
         if len(associations) != 1:
             continue
@@ -228,15 +244,16 @@ def main() -> int:
         comments = load_comments(api, args.pr_number)
         live_head = str(pr.get("headRefOid") or "").lower()
         live_base = str(pr.get("baseRefOid") or "").lower()
+        head_ref = str(pr.get("headRefName") or "")
         pipeline_runs = load_pipeline_runs(
             api,
             args.pr_number,
             live_head,
             live_base,
+            head_ref,
         )
         current_policy_sha = load_current_policy_sha(api, args.current_run_id)
         pr_checks = load_pr_checks(api, args.pr_number)
-        head_ref = str(pr.get("headRefName") or "")
         body = str(pr.get("body") or "")
         task_match = __import__("re").findall(r"(?<=Implements task `)[^`]+", body)
         package_match = __import__("re").findall(r"(?<=Package path: `)[^`]+", body)
