@@ -620,6 +620,16 @@ class MetadataAdapterFailureTests(unittest.TestCase):
         invalid_number_type["number"] = "9"
         invalid_repository = deepcopy(valid_association)
         invalid_repository["head"]["repo"] = "invalid"
+        contradictory_repository_name = deepcopy(valid_association)
+        contradictory_repository_name["head"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "name": "wrong",
+        }
+        contradictory_repository_url = deepcopy(valid_association)
+        contradictory_repository_url["base"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "url": "https://api.github.com/repos/KARSIFT/wrong",
+        }
         invalid_payloads = {
             "absent": ...,
             "null": None,
@@ -637,6 +647,8 @@ class MetadataAdapterFailureTests(unittest.TestCase):
             "invalid-base-ref-type": [invalid_base_ref_type],
             "invalid-number-type": [invalid_number_type],
             "invalid-repository": [invalid_repository],
+            "contradictory-repository-name": [contradictory_repository_name],
+            "contradictory-repository-url": [contradictory_repository_url],
             "duplicate-exact": [valid_association, deepcopy(valid_association)],
             "extra-unrelated": [valid_association, unrelated],
         }
@@ -810,7 +822,26 @@ class ProofVerifierTests(unittest.TestCase):
                 "ref": branch,
                 "repo": repository,
             },
-            "base": {"sha": base_sha, "repo": repository},
+            "base": {"sha": base_sha, "ref": "develop", "repo": repository},
+        }
+
+    def association(self):
+        compact_repository = {
+            "name": "example",
+            "url": "https://api.github.com/repos/KARSIFT/example",
+        }
+        return {
+            "number": 9,
+            "base": {
+                "sha": BASE,
+                "ref": "develop",
+                "repo": compact_repository,
+            },
+            "head": {
+                "sha": HEAD,
+                "ref": AGENT_REF,
+                "repo": compact_repository,
+            },
         }
 
     def run_metadata(
@@ -882,6 +913,93 @@ class ProofVerifierTests(unittest.TestCase):
             ).ok
         )
         self.assertNotEqual(proof_head, HEAD)
+
+    def test_ready_and_prior_runs_share_strict_nonempty_association_validation(self):
+        valid = self.association()
+        ready = verifier.verify_ready_run(
+            run=self.run_metadata(prs=[valid]),
+            repository="KARSIFT/example",
+            pr_number=9,
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            expected_head_ref=AGENT_REF,
+            source_pr=self.source_pr(),
+        )
+        prior = verifier.verify_prior_run(
+            run=self.run_metadata(run_id=100, prs=[valid]),
+            repository="KARSIFT/example",
+            pr_number=9,
+            expected_head_sha=HEAD,
+            expected_base_sha=BASE,
+            expected_head_ref=AGENT_REF,
+            prior_run_id=100,
+            ready_run_id=300,
+            source_pr=self.source_pr(),
+        )
+        self.assertTrue(ready.ok)
+        self.assertTrue(prior.ok)
+
+        unrelated = deepcopy(valid)
+        unrelated["number"] = 10
+        partial = deepcopy(valid)
+        partial["head"] = {"sha": HEAD}
+        contradictory_name = deepcopy(valid)
+        contradictory_name["head"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "name": "wrong",
+        }
+        contradictory_url = deepcopy(valid)
+        contradictory_url["base"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "url": "https://api.github.com/repos/KARSIFT/wrong",
+        }
+        invalid_payloads = {
+            "absent": ...,
+            "null": None,
+            "non-list": valid,
+            "valid-plus-null": [valid, None],
+            "valid-plus-scalar": [valid, "invalid"],
+            "valid-plus-empty-object": [valid, {}],
+            "partial": [partial],
+            "contradictory-name": [contradictory_name],
+            "contradictory-url": [contradictory_url],
+            "duplicate": [valid, deepcopy(valid)],
+            "unrelated-extra": [valid, unrelated],
+        }
+        for label, associations in invalid_payloads.items():
+            with self.subTest(label=label):
+                ready_run = self.run_metadata(prs=associations)
+                prior_run = self.run_metadata(run_id=100, prs=associations)
+                if associations is ...:
+                    ready_run.pop("pull_requests")
+                    prior_run.pop("pull_requests")
+                elif associations is None:
+                    ready_run["pull_requests"] = None
+                    prior_run["pull_requests"] = None
+                ready = verifier.verify_ready_run(
+                    run=ready_run,
+                    repository="KARSIFT/example",
+                    pr_number=9,
+                    expected_head_sha=HEAD,
+                    expected_base_sha=BASE,
+                    expected_head_ref=AGENT_REF,
+                    source_pr=self.source_pr(),
+                    association_attested=True,
+                )
+                prior = verifier.verify_prior_run(
+                    run=prior_run,
+                    repository="KARSIFT/example",
+                    pr_number=9,
+                    expected_head_sha=HEAD,
+                    expected_base_sha=BASE,
+                    expected_head_ref=AGENT_REF,
+                    prior_run_id=100,
+                    ready_run_id=300,
+                    source_pr=self.source_pr(),
+                    association_attested=True,
+                )
+                self.assertFalse(ready.ok)
+                self.assertFalse(prior.ok)
 
     def test_transition_attestation_binds_every_identity_field_and_is_unique(self):
         kwargs = {
@@ -1188,6 +1306,7 @@ class ProofVerifierTests(unittest.TestCase):
             head_sha=HEAD,
             base_sha=BASE,
             head_ref=AGENT_REF,
+            base_ref="develop",
             ready_run_id=300,
             ready_policy_sha=POLICY,
             comments=[
@@ -1236,6 +1355,7 @@ class ProofVerifierTests(unittest.TestCase):
             head_sha=HEAD,
             base_sha=BASE,
             head_ref=AGENT_REF,
+            base_ref="develop",
             ready_run_id=300,
             ready_policy_sha=POLICY,
             comments=[review_comment()],
@@ -1245,6 +1365,95 @@ class ProofVerifierTests(unittest.TestCase):
         )
         self.assertIsNotNone(chosen)
         self.assertEqual(chosen.run_id, 100)
+
+    def test_prior_recomputation_uses_shared_strict_nonempty_association(self):
+        valid = self.association()
+        unrelated = deepcopy(valid)
+        unrelated["number"] = 10
+        partial = deepcopy(valid)
+        partial["base"].pop("ref")
+        contradictory_name = deepcopy(valid)
+        contradictory_name["head"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "name": "wrong",
+        }
+        contradictory_url = deepcopy(valid)
+        contradictory_url["base"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "url": "https://api.github.com/repos/KARSIFT/wrong",
+        }
+
+        class FakeApi:
+            repository = "KARSIFT/example"
+
+            def __init__(self, run):
+                self.run = run
+
+            def gh(self, args):
+                endpoint = args[-1]
+                if "actions/runs?event=pull_request" in endpoint:
+                    return json.dumps(
+                        {"total_count": 1, "workflow_runs": [self.run]}
+                    )
+                if "actions/runs/100/jobs" in endpoint:
+                    return json.dumps(
+                        {
+                            "total_count": 2,
+                            "jobs": [
+                                {
+                                    "name": policy.REQUIRED_CI_JOB,
+                                    "conclusion": "success",
+                                },
+                                {
+                                    "name": policy.AGENT_PUBLISHER_JOB,
+                                    "conclusion": "success",
+                                },
+                            ],
+                        }
+                    )
+                raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+        def selected(associations=...):
+            candidate = self.run_metadata(run_id=100, prs=associations)
+            if associations is ...:
+                candidate.pop("pull_requests")
+            elif associations is None:
+                candidate["pull_requests"] = None
+            return verify_runner.selected_prior_run(
+                FakeApi(candidate),
+                pr_number=9,
+                head_sha=HEAD,
+                base_sha=BASE,
+                head_ref=AGENT_REF,
+                base_ref="develop",
+                ready_run_id=300,
+                ready_policy_sha=POLICY,
+                comments=[review_comment()],
+                task_id="VOC-104-T00",
+                package_path=PACKAGE,
+                authority_issue="875",
+            )
+
+        clean = selected([valid])
+        self.assertIsNotNone(clean)
+        self.assertEqual(clean.run_id, 100)
+        invalid_payloads = (
+            ...,
+            None,
+            valid,
+            "invalid",
+            [valid, None],
+            [valid, "invalid"],
+            [valid, {}],
+            [partial],
+            [contradictory_name],
+            [contradictory_url],
+            [valid, deepcopy(valid)],
+            [valid, unrelated],
+        )
+        for associations in invalid_payloads:
+            with self.subTest(associations=associations):
+                self.assertIsNone(selected(associations))
 
     def test_ready_job_requires_workflow_controlled_action_marker(self):
         jobs = [
@@ -1416,6 +1625,16 @@ class WorkflowContractTests(unittest.TestCase):
         invalid_number_type["number"] = "9"
         invalid_repository = deepcopy(valid_association)
         invalid_repository["head"]["repo"] = "invalid"
+        contradictory_repository_name = deepcopy(valid_association)
+        contradictory_repository_name["head"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "name": "wrong",
+        }
+        contradictory_repository_url = deepcopy(valid_association)
+        contradictory_repository_url["base"]["repo"] = {
+            "full_name": "KARSIFT/example",
+            "url": "https://api.github.com/repos/KARSIFT/wrong",
+        }
         invalid_payloads = (
             ...,
             None,
@@ -1433,6 +1652,8 @@ class WorkflowContractTests(unittest.TestCase):
             [invalid_base_ref_type],
             [invalid_number_type],
             [invalid_repository],
+            [contradictory_repository_name],
+            [contradictory_repository_url],
             [valid_association, deepcopy(valid_association)],
             [valid_association, unrelated],
         )

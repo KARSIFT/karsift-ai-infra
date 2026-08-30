@@ -383,7 +383,9 @@ The run must expose exactly one well-formed PR association. Null, scalar, partia
 unrelated extra entries reject the run even when another entry matches: a commit shared by multiple
 PRs is not unambiguous evidence for any one of them. GitHub may omit the compact association's
 nested repository object or represent it with the repository name and canonical API URL instead
-of `full_name`; every supplied repository field must still bind that owner/repository exactly.
+of `full_name`; eligibility, merge-gate, and the post-merge verifier apply the same singleton rule,
+and every supplied `full_name`, name, owner, API URL, or web URL field must agree with the
+authenticated owner/repository.
 A separate read-only `verify-ready-for-review-reuse.yml` workflow validates controlled live proof
 from allowlisted Actions metadata only. Its evidence-carrier head is intentionally distinct from
 the earlier observed ready-transition head: explicit dispatch inputs bind the carrier SHA, while

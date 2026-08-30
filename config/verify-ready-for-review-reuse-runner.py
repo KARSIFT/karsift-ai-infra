@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 
+from authoritative_checks import exact_single_pr_association
 from verify_ready_for_review_reuse import (
     VerificationResult,
     verify_current_ref,
@@ -105,6 +106,7 @@ def selected_prior_run(
     head_sha: str,
     base_sha: str,
     head_ref: str,
+    base_ref: str,
     ready_run_id: int,
     ready_policy_sha: str,
     comments: list[dict],
@@ -131,29 +133,27 @@ def selected_prior_run(
     for run in runs:
         if not isinstance(run, dict):
             raise VerificationError("run_set_invalid")
-        associations = run.get("pull_requests") or []
-        if not isinstance(associations, list):
-            raise VerificationError("run_associations_invalid")
-        candidate_base_sha = ""
-        if associations:
-            matches = [
-                pr
-                for pr in associations
-                if pr.get("number") == pr_number
-                and str((pr.get("base") or {}).get("sha") or "").lower()
-                == base_sha.lower()
-                and str((pr.get("head") or {}).get("sha") or "").lower()
-                == head_sha.lower()
-            ]
-            if len(matches) != 1:
-                continue
-            candidate_base_sha = str(
-                (matches[0].get("base") or {}).get("sha") or ""
-            ).lower()
+        associations = run.get("pull_requests")
         run_id = int(run.get("id") or 0)
         if run_id <= 0:
             continue
-        if not associations:
+        candidate_base_sha = ""
+        if associations != []:
+            association = exact_single_pr_association(
+                associations,
+                repository=api.repository,
+                pr_number=pr_number,
+                head_sha=head_sha,
+                head_ref=head_ref,
+                base_sha=base_sha,
+                base_ref=base_ref,
+            )
+            if association is None:
+                continue
+            candidate_base_sha = str(
+                (association.get("base") or {}).get("sha") or ""
+            ).lower()
+        else:
             verdict = trusted_review_comment(
                 comments=comments,
                 head_sha=head_sha,
@@ -233,6 +233,7 @@ def main() -> int:
             )
         )
         head_ref = str((source_pr.get("head") or {}).get("ref") or "")
+        base_ref = str((source_pr.get("base") or {}).get("ref") or "")
         source_head = str((source_pr.get("head") or {}).get("sha") or "").lower()
         source_base = str((source_pr.get("base") or {}).get("sha") or "").lower()
         if source_head != args.expected_source_head_sha.lower():
@@ -343,6 +344,7 @@ def main() -> int:
             head_sha=source_head,
             base_sha=source_base,
             head_ref=head_ref,
+            base_ref=base_ref,
             ready_run_id=args.ready_run_id,
             ready_policy_sha=ready_policy_sha,
             comments=comments,

@@ -17,6 +17,51 @@ class EvidenceError(ValueError):
     """The supplied gate history is incomplete, ambiguous, or mis-bound."""
 
 
+def _repository_identity_matches(payload: Any, repository: str) -> bool:
+    """Validate every supplied repository identity field without short-circuiting."""
+
+    if payload is None:
+        return True
+    if not isinstance(payload, dict) or repository.count("/") != 1:
+        return False
+    owner, name = repository.split("/", 1)
+    if not owner or not name:
+        return False
+    expected_fields = {
+        "full_name": repository,
+        "name": name,
+        "url": f"https://api.github.com/repos/{repository}",
+        "html_url": f"https://github.com/{repository}",
+        "clone_url": f"https://github.com/{repository}.git",
+        "git_url": f"git://github.com/{repository}.git",
+        "ssh_url": f"git@github.com:{repository}.git",
+        "svn_url": f"https://github.com/{repository}",
+    }
+    if any(
+        field in payload and payload.get(field) != expected
+        for field, expected in expected_fields.items()
+    ):
+        return False
+    nested_owner = payload.get("owner")
+    if "owner" in payload:
+        if not isinstance(nested_owner, dict) or "login" not in nested_owner:
+            return False
+        expected_owner_fields = {
+            "login": owner,
+            "url": f"https://api.github.com/users/{owner}",
+            "html_url": f"https://github.com/{owner}",
+        }
+        if any(
+            field in nested_owner and nested_owner.get(field) != expected
+            for field, expected in expected_owner_fields.items()
+        ):
+            return False
+    # GitHub returns either a full repository object or a compact association
+    # containing only name + REST API URL.  Do not infer identity from a
+    # partial compact object or from an unrelated URL field alone.
+    return "full_name" in payload or ("name" in payload and "url" in payload)
+
+
 def exact_single_pr_association(
     payload: Any,
     *,
@@ -88,20 +133,7 @@ def exact_single_pr_association(
         return None
     for side in (head, base):
         nested_repository = side.get("repo")
-        if nested_repository is None:
-            continue
-        if not isinstance(nested_repository, dict):
-            return None
-        if "full_name" in nested_repository:
-            if nested_repository.get("full_name") != repository:
-                return None
-            continue
-        repository_name = repository.rsplit("/", 1)[-1]
-        if (
-            nested_repository.get("name") != repository_name
-            or nested_repository.get("url")
-            != f"https://api.github.com/repos/{repository}"
-        ):
+        if not _repository_identity_matches(nested_repository, repository):
             return None
     return association
 

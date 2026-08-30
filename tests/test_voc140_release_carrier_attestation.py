@@ -514,6 +514,16 @@ class Voc140ReleaseCarrierAttestationTests(unittest.TestCase):
         invalid_number_type["number"] = str(PR_NUMBER)
         invalid_repository = deepcopy(valid)
         invalid_repository["head"]["repo"] = "invalid"
+        contradictory_repository_name = deepcopy(valid)
+        contradictory_repository_name["head"]["repo"] = {
+            "full_name": REPOSITORY,
+            "name": "wrong",
+        }
+        contradictory_repository_url = deepcopy(valid)
+        contradictory_repository_url["base"]["repo"] = {
+            "full_name": REPOSITORY,
+            "url": f"https://api.github.com/repos/{REPOSITORY}-wrong",
+        }
         invalid_payloads = {
             "absent": ...,
             "null": None,
@@ -531,6 +541,8 @@ class Voc140ReleaseCarrierAttestationTests(unittest.TestCase):
             "invalid-base-ref-type": [invalid_base_ref_type],
             "invalid-number-type": [invalid_number_type],
             "invalid-repository": [invalid_repository],
+            "contradictory-repository-name": [contradictory_repository_name],
+            "contradictory-repository-url": [contradictory_repository_url],
             "duplicate-exact": [valid, deepcopy(valid)],
             "extra-unrelated": [valid, unrelated],
         }

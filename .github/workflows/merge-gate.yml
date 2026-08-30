@@ -244,7 +244,28 @@ jobs:
               --arg base_ref "$base_ref" \
               --arg repository "${{ github.repository }}" \
               --argjson pr_number "$pr_number" \
-              '.id == $run_id and
+              'def supplied_equals($value; $field; $expected):
+                 ((($value | has($field)) | not) or $value[$field] == $expected);
+               def repository_matches($value):
+                 ($value == null) or
+                 (((($value | type) == "object") and
+                   (($value | has("full_name")) or
+                    (($value | has("name")) and ($value | has("url")))) and
+                   supplied_equals($value; "full_name"; $repository) and
+                   supplied_equals($value; "name"; ($repository | split("/") | last)) and
+                   supplied_equals($value; "url"; ("https://api.github.com/repos/" + $repository)) and
+                   supplied_equals($value; "html_url"; ("https://github.com/" + $repository)) and
+                   supplied_equals($value; "clone_url"; ("https://github.com/" + $repository + ".git")) and
+                   supplied_equals($value; "git_url"; ("git://github.com/" + $repository + ".git")) and
+                   supplied_equals($value; "ssh_url"; ("git@github.com:" + $repository + ".git")) and
+                   supplied_equals($value; "svn_url"; ("https://github.com/" + $repository)) and
+                   (((($value | has("owner")) | not)) or
+                    (((($value.owner | type) == "object") and
+                      ($value.owner | has("login")) and
+                      supplied_equals($value.owner; "login"; ($repository | split("/") | first)) and
+                      supplied_equals($value.owner; "url"; ("https://api.github.com/users/" + ($repository | split("/") | first))) and
+                      supplied_equals($value.owner; "html_url"; ("https://github.com/" + ($repository | split("/") | first))))))));
+               .id == $run_id and
                .path == ".github/workflows/pipeline.yml" and
                .event == "pull_request" and .head_sha == $head_sha and
                .head_branch == $head_ref and .status == "completed" and
@@ -256,20 +277,8 @@ jobs:
                .pull_requests[0].number == $pr_number and
                (.pull_requests[0].base | type) == "object" and
                (.pull_requests[0].head | type) == "object" and
-               ((.pull_requests[0].base.repo == null) or
-                 (((.pull_requests[0].base.repo | type) == "object") and
-                  (((.pull_requests[0].base.repo | has("full_name")) and
-                    .pull_requests[0].base.repo.full_name == $repository) or
-                   (((.pull_requests[0].base.repo | has("full_name")) | not) and
-                    .pull_requests[0].base.repo.name == ($repository | split("/") | last) and
-                    .pull_requests[0].base.repo.url == ("https://api.github.com/repos/" + $repository))))) and
-               ((.pull_requests[0].head.repo == null) or
-                 (((.pull_requests[0].head.repo | type) == "object") and
-                  (((.pull_requests[0].head.repo | has("full_name")) and
-                    .pull_requests[0].head.repo.full_name == $repository) or
-                   (((.pull_requests[0].head.repo | has("full_name")) | not) and
-                    .pull_requests[0].head.repo.name == ($repository | split("/") | last) and
-                    .pull_requests[0].head.repo.url == ("https://api.github.com/repos/" + $repository))))) and
+               repository_matches(.pull_requests[0].base.repo) and
+               repository_matches(.pull_requests[0].head.repo) and
                (.pull_requests[0].base.sha | type) == "string" and
                (.pull_requests[0].base.sha | test("^[0-9a-fA-F]{40}$")) and
                .pull_requests[0].base.sha == $base_sha and
