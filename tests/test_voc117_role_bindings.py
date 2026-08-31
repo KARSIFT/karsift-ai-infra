@@ -25,9 +25,9 @@ VOC117_BINDINGS = {
     "implementer": "cursor/composer-2.5",
     "implementer_escalation": "cursor/composer-2.5",
     "planner": "cursor/grok-4.6[effort=high,fast=false]",
-    "reviewer": "cursor/grok-4.6[effort=high,fast=false]",
-    "reviewer_fast_retry": "cursor/grok-4.6[effort=high,fast=false]",
-    "plan_reviewer": "cursor/grok-4.6[effort=high,fast=false]",
+    "reviewer": "cursor/grok-4.6[effort=xhigh,fast=false]",
+    "reviewer_fast_retry": "cursor/grok-4.6[effort=xhigh,fast=true]",
+    "plan_reviewer": "cursor/grok-4.6[effort=xhigh,fast=false]",
 }
 
 
