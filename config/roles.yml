@@ -17,5 +17,5 @@ implementer: cursor/composer-2.5
 implementer_escalation: cursor/composer-2.5
 planner: cursor/grok-4.6[effort=high,fast=true]
 reviewer: cursor/grok-4.6[effort=high,fast=true]
-reviewer_fast_retry: cursor/grok-4.6[effort=extra high,fast=true]
-plan_reviewer: cursor/grok-4.6[effort=extra high,fast=true]
+reviewer_fast_retry: cursor/grok-4.6[effort=xhigh,fast=true]
+plan_reviewer: cursor/grok-4.6[effort=xhigh,fast=true]
