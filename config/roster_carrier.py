@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fail-closed roster PR carrier resolution for adopt.yml (VOC-142)."""
+"""Fail-closed roster PR carrier resolution for adopt.yml (VOC-142).
+
+Pure resolution is exact-SHA identity only. Post-push open-PR head.sha lag is
+handled by roster-carrier-runner.py via bounded metadata-convergence polling.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,8 @@ from typing import Any, Mapping, Sequence
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 ROSTER_HEAD_RE = re.compile(r"^karsift/roster-[a-z0-9-]+$")
+ROSTER_CARRIER_METADATA_CONVERGENCE_TIMEOUT_SECONDS = 60
+ROSTER_CARRIER_METADATA_POLL_INTERVAL_SECONDS = 2
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,37 @@ def _carrier_identity_matches(
         and str(head.get("sha") or "") == head_sha
         and str(base.get("ref") or "") == base_ref
     )
+
+
+def open_carrier_metadata_lag_is_transient(
+    *,
+    repository: str,
+    head_ref: str,
+    head_sha: str,
+    base_ref: str,
+    open_pulls: Sequence[Mapping[str, Any]] | None,
+) -> bool:
+    """Return True when exactly one open carrier matches repo/ref/base but not head.sha."""
+
+    stale_matches = 0
+    for pr in open_pulls or []:
+        if not isinstance(pr, Mapping):
+            continue
+        if str(pr.get("state") or "").lower() != "open":
+            continue
+        head = pr.get("head") or {}
+        base = pr.get("base") or {}
+        head_repo = (head.get("repo") or {}).get("full_name")
+        base_repo = (base.get("repo") or {}).get("full_name")
+        if (
+            head_repo == repository
+            and base_repo == repository
+            and str(head.get("ref") or "") == head_ref
+            and str(base.get("ref") or "") == base_ref
+            and str(head.get("sha") or "") != head_sha
+        ):
+            stale_matches += 1
+    return stale_matches == 1
 
 
 def _filter_matching_carriers(

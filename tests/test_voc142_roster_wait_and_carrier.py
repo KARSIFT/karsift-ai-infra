@@ -15,8 +15,10 @@ sys.path.insert(0, str(ROOT / "config"))
 
 from authoritative_checks import evaluate, select_authoritative  # noqa: E402
 from roster_carrier import (  # noqa: E402
+    ROSTER_CARRIER_METADATA_CONVERGENCE_TIMEOUT_SECONDS,
     RosterCarrierFailure,
     RosterCarrierResult,
+    open_carrier_metadata_lag_is_transient,
     resolve_roster_carrier,
 )
 from roster_pr_wait import (  # noqa: E402
@@ -28,6 +30,7 @@ from roster_pr_wait import (  # noqa: E402
 
 
 HEAD_SHA = "98dd0936a73b64a6b548da6cf2000a6d000917ac"
+STALE_HEAD_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 BASE_SHA = "bb4ffdf5d53d27baf4c25c28caf3acfeda9e07a2"
 REPOSITORY = "KARSIFT/vocanova-platform-sandbox"
 HEAD_REF = "karsift/roster-voc-141"
@@ -438,11 +441,265 @@ class Voc142RosterCarrierTests(unittest.TestCase):
         )
         self.assertEqual(result, RosterCarrierFailure("MISMATCHED_OPEN_CARRIER"))
 
+    def test_transient_metadata_lag_requires_matching_repo_ref_and_base(self):
+        stale_open = [pr_record(PR_NUMBER, head_sha=STALE_HEAD_SHA)]
+        self.assertTrue(
+            open_carrier_metadata_lag_is_transient(
+                repository=REPOSITORY,
+                head_ref=HEAD_REF,
+                head_sha=HEAD_SHA,
+                base_ref=BASE_REF,
+                open_pulls=stale_open,
+            )
+        )
+        self.assertFalse(
+            open_carrier_metadata_lag_is_transient(
+                repository=REPOSITORY,
+                head_ref=HEAD_REF,
+                head_sha=HEAD_SHA,
+                base_ref=BASE_REF,
+                open_pulls=[pr_record(PR_NUMBER, head_sha=STALE_HEAD_SHA, base_ref="main")],
+            )
+        )
+        self.assertFalse(
+            open_carrier_metadata_lag_is_transient(
+                repository=REPOSITORY,
+                head_ref=HEAD_REF,
+                head_sha=HEAD_SHA,
+                base_ref=BASE_REF,
+                open_pulls=[
+                    pr_record(
+                        PR_NUMBER,
+                        head_sha=STALE_HEAD_SHA,
+                        repository="other/repo",
+                    )
+                ],
+            )
+        )
+        self.assertFalse(
+            open_carrier_metadata_lag_is_transient(
+                repository=REPOSITORY,
+                head_ref=HEAD_REF,
+                head_sha=HEAD_SHA,
+                base_ref=BASE_REF,
+                open_pulls=[
+                    pr_record(1112, head_sha=STALE_HEAD_SHA),
+                    pr_record(1113, head_sha=STALE_HEAD_SHA),
+                ],
+            )
+        )
+
+    def test_runner_reuses_open_carrier_after_stale_head_converges(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[
+                [[pr_record(PR_NUMBER, head_sha=STALE_HEAD_SHA)]],
+                [],
+                [[pr_record(PR_NUMBER)]],
+                [],
+            ],
+        ) as gh_json, mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep"):
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 0)
+
+            self.assertEqual(
+                json.loads(paths["output"].read_text(encoding="utf-8")),
+                {"action": "reuse_open", "pr_number": str(PR_NUMBER)},
+            )
+            self.assertEqual(len(gh_json.call_args_list), 4)
+
+    def test_runner_immediate_exact_match_queries_once(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[
+                [[pr_record(PR_NUMBER)]],
+                [],
+            ],
+        ) as gh_json:
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 0)
+
+            self.assertEqual(len(gh_json.call_args_list), 2)
+
+    def test_runner_stable_head_sha_mismatch_times_out(self):
+        stale_pages = [[pr_record(PR_NUMBER, head_sha=STALE_HEAD_SHA)]]
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[
+                stale_pages,
+                [],
+                stale_pages,
+                [],
+            ],
+        ) as gh_json, mock.patch.object(
+            ROSTER_CARRIER_RUNNER.time,
+            "monotonic",
+            side_effect=[0.0, 0.0, float(ROSTER_CARRIER_METADATA_CONVERGENCE_TIMEOUT_SECONDS + 1)],
+        ), mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep"):
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 1)
+
+            self.assertGreaterEqual(len(gh_json.call_args_list), 4)
+
+    def test_runner_api_failure_fails_closed_without_retry(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=RuntimeError("gh command failed"),
+        ) as gh_json, mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep") as sleep:
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 1)
+
+            self.assertEqual(len(gh_json.call_args_list), 1)
+            sleep.assert_not_called()
+
+    def test_runner_ambiguous_stale_open_carriers_fail_without_retry(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[
+                [
+                    [
+                        pr_record(1112, head_sha=STALE_HEAD_SHA),
+                        pr_record(1113, head_sha=STALE_HEAD_SHA),
+                    ]
+                ],
+                [],
+            ],
+        ) as gh_json, mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep") as sleep:
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 1)
+
+            self.assertEqual(len(gh_json.call_args_list), 2)
+            sleep.assert_not_called()
+
+    def test_runner_ambiguous_open_carrier_fails_without_retry(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[
+                [[pr_record(1112), pr_record(1113)]],
+                [],
+            ],
+        ) as gh_json, mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep") as sleep:
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 1)
+
+            self.assertEqual(len(gh_json.call_args_list), 2)
+            sleep.assert_not_called()
+
+    def test_runner_mismatched_base_ref_fails_without_retry(self):
+        with tempfile_paths() as paths, mock.patch.object(
+            ROSTER_CARRIER_RUNNER,
+            "gh_json",
+            side_effect=[[[pr_record(PR_NUMBER, base_ref="main")]], []],
+        ) as gh_json, mock.patch.object(ROSTER_CARRIER_RUNNER.time, "sleep") as sleep:
+            argv = [
+                "roster-carrier-runner.py",
+                "--repository",
+                REPOSITORY,
+                "--head-ref",
+                HEAD_REF,
+                "--head-sha",
+                HEAD_SHA,
+                "--base-ref",
+                BASE_REF,
+                "--output",
+                str(paths["output"]),
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(ROSTER_CARRIER_RUNNER.main(), 1)
+
+            self.assertEqual(len(gh_json.call_args_list), 2)
+            sleep.assert_not_called()
+
     def test_adopt_open_step_resolves_carrier_before_create(self):
         open_step = self.adopt.split("- name: Open roster PR", 1)[1].split(
             "- name: Wait for roster PR checks", 1
         )[0]
         self.assertIn("roster-carrier-runner.py", open_step)
+        self.assertIn("metadata to converge", self.adopt)
         self.assertIn("carrier_action", open_step)
         self.assertIn("reuse_open", open_step)
         self.assertIn("reuse_merged", open_step)
