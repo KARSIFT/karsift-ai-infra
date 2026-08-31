@@ -31,6 +31,29 @@ def gh_json(command: list[str]) -> object:
     return json.loads(completed.stdout or "null")
 
 
+def flatten_pages(pages: object) -> list[dict]:
+    if not isinstance(pages, list):
+        raise ValueError("invalid pull pagination payload")
+    items: list[dict] = []
+    for page in pages:
+        if isinstance(page, list):
+            batch = page
+        elif isinstance(page, dict):
+            if isinstance(page.get("items"), list):
+                batch = page["items"]
+            elif isinstance(page.get("pulls"), list):
+                batch = page["pulls"]
+            else:
+                raise ValueError("invalid pull pagination page")
+        else:
+            raise ValueError("invalid pull pagination page")
+        for item in batch:
+            if not isinstance(item, dict):
+                raise ValueError("invalid pull record")
+            items.append(item)
+    return items
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True)
@@ -41,21 +64,6 @@ def main() -> int:
     args = parser.parse_args()
 
     owner = args.repository.split("/", 1)[0]
-    def flatten_pages(pages: object) -> list[dict]:
-        if not isinstance(pages, list):
-            return []
-        items: list[dict] = []
-        for page in pages:
-            if isinstance(page, dict) and isinstance(page.get("items"), list):
-                batch = page.get("items")
-            elif isinstance(page, dict) and isinstance(page.get("pulls"), list):
-                batch = page.get("pulls")
-            elif isinstance(page, list):
-                batch = page
-            else:
-                batch = []
-            items.extend(item for item in batch if isinstance(item, dict))
-        return items
 
     def fetch_pull_pages(state: str) -> list[dict]:
         pages = gh_json(
@@ -82,7 +90,7 @@ def main() -> int:
         try:
             open_pulls = fetch_pull_pages("open")
             merged_pulls = fetch_pull_pages("closed")
-        except (RuntimeError, json.JSONDecodeError) as exc:
+        except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
