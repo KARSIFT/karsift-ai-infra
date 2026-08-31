@@ -8,10 +8,10 @@ name: adopt (reusable)
 # independent plan-review verdict. Adoption and roster fields are written
 # together in the checked roster PR, closing the old merged-as-draft gap.
 # Re-running this workflow with the same merged PR safely reconciles it:
-# existing task issues are reused and an unchanged roster is a no-op. Callers
-# expose that recovery as workflow_dispatch action=reconcile with
-# plan_pr_number=<merged plan PR>. Reconcile also restarts the root task when
-# adoption landed but its implementation dispatch was missed.
+# existing task issues are reused, a matching open or already-merged roster PR
+# for the deterministic branch/base/exact head is reused instead of creating a
+# second carrier, and an unchanged roster is a no-op. Callers expose that
+# recovery as workflow_dispatch action=reconcile with plan_pr_number=<merged plan PR>.
 #
 # If the package's requirement_source records an originating issue (the one
 # that kicked off planning, if any - see plan.yml's source_issue_number),
@@ -570,13 +570,39 @@ jobs:
         if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
-          pr_url=$(gh pr create \
-            --base "${{ steps.target.outputs.branch }}" \
-            --head "${{ steps.commit.outputs.branch }}" \
-            --title "${{ steps.issues.outputs.change_id }}: record task-issue roster and authority_issue" \
-            --body "$(cat <<EOF
+          branch="${{ steps.commit.outputs.branch }}"
+          base_ref="${{ steps.target.outputs.branch }}"
+          head_sha=$(git rev-parse HEAD)
+          if ! [[ "$head_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Roster branch lacks an exact head SHA; refusing carrier resolution." >&2
+            exit 1
+          fi
+          python3 karsift-ai-infra/config/roster-carrier-runner.py \
+            --repository "${{ github.repository }}" \
+            --head-ref "$branch" \
+            --head-sha "$head_sha" \
+            --base-ref "$base_ref" \
+            --output /tmp/roster-carrier.json
+          action=$(jq -r .action /tmp/roster-carrier.json)
+          case "$action" in
+            reuse_open|reuse_merged)
+              pr_number=$(jq -r .pr_number /tmp/roster-carrier.json)
+              if ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+                echo "Resolved roster carrier lacks a PR number; refusing." >&2
+                exit 1
+              fi
+              echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+              echo "carrier_action=$action" >> "$GITHUB_OUTPUT"
+              ;;
+            create)
+              pr_url=$(gh pr create \
+                --base "$base_ref" \
+                --head "$branch" \
+                --title "${{ steps.issues.outputs.change_id }}: record task-issue roster and authority_issue" \
+                --body "$(cat <<EOF
           Deterministic bookkeeping, not a content change - records the task
           issue roster this adoption run just opened (\`.karsift/tasks.json\`)
           and the resulting \`implementation.authority_issue\`/
@@ -587,17 +613,25 @@ jobs:
           Risk classification: R1
           EOF
           )")
-          pr_number=$(basename "$pr_url")
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+              pr_number=$(basename "$pr_url")
+              echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+              echo "carrier_action=created" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Roster carrier resolution returned an unsupported action: $action" >&2
+              exit 1
+              ;;
+          esac
 
-      # Evaluate the roster PR through the same newest-logical-attempt
-      # selector used for the merged plan head. Stabilizing a complete green
-      # logical-name count prevents a freshly opened PR from passing while
-      # checks are still registering, while obsolete failures cannot poison a
-      # later successful retry for the same exact head.
+      # Evaluate the roster PR through the same newest-logical-attempt selector
+      # used for the merged plan head, plus a fail-closed ruleset-required set
+      # that includes ci / ci. Two stable subset snapshots are not complete.
+      # Stabilizing the complete required set prevents a freshly opened PR from
+      # passing while checks are still registering, while obsolete failures
+      # cannot poison a later successful retry for the same exact head.
       - name: Wait for roster PR checks
         id: roster-checks
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.commit.outputs.changed == 'true' && steps.roster-pr.outputs.carrier_action != 'reuse_merged'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
@@ -621,7 +655,7 @@ jobs:
             gh api --paginate --slurp -H "Accept: application/vnd.github+json" \
               "repos/${{ github.repository }}/commits/$head_sha/status?per_page=100" \
               > /tmp/roster-statuses.json
-            python3 karsift-ai-infra/config/authoritative-checks-runner.py \
+            python3 karsift-ai-infra/config/roster-pr-wait-runner.py \
               --check-runs-file /tmp/roster-check-runs.json \
               --statuses-file /tmp/roster-statuses.json \
               --repository "${{ github.repository }}" \
@@ -629,16 +663,16 @@ jobs:
               --base-sha "$base_sha" \
               --head-sha "$head_sha" \
               --pull-request-file /tmp/roster-pr.json \
-              --workflow-event "pull_request" \
               --output /tmp/roster-authoritative.json
             check_count=$(jq -r .total_count /tmp/roster-authoritative.json)
             pending_checks=$(jq -r .pending /tmp/roster-authoritative.json)
             failed_checks=$(jq -r .failed /tmp/roster-authoritative.json)
+            required_complete=$(jq -r .required_complete /tmp/roster-authoritative.json)
             if [ "$check_count" -gt 0 ] && [ "$pending_checks" -eq 0 ] && [ "$failed_checks" -gt 0 ]; then
               echo "Roster PR #$PR_NUMBER has an authoritative failed check - refusing to merge." >&2
               exit 1
             fi
-            if [ "$check_count" -gt 0 ] && [ "$pending_checks" -eq 0 ] && [ "$failed_checks" -eq 0 ]; then
+            if [ "$required_complete" = "true" ] && [ "$check_count" -gt 0 ] && [ "$pending_checks" -eq 0 ] && [ "$failed_checks" -eq 0 ]; then
               if [ "$check_count" -eq "$previous_count" ] && [ "$head_sha" = "$previous_head_sha" ]; then
                 stable_green_count=$((stable_green_count + 1))
               else
@@ -661,7 +695,7 @@ jobs:
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
       - name: Merge checked roster PR and clean its exact head
-        if: steps.commit.outputs.changed == 'true'
+        if: steps.commit.outputs.changed == 'true' && steps.roster-pr.outputs.carrier_action != 'reuse_merged'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           PR_NUMBER: ${{ steps.roster-pr.outputs.pr_number }}
@@ -721,6 +755,58 @@ jobs:
                 echo "Leased roster branch deletion failed and the ref still exists; refusing to continue." >&2
                 exit 1
               fi
+            fi
+          fi
+
+      - name: Clean reused merged roster head
+        if: steps.commit.outputs.changed == 'true' && steps.roster-pr.outputs.carrier_action == 'reuse_merged'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          PUSH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          CHECKED_HEAD_REF: ${{ steps.commit.outputs.branch }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$CHECKED_HEAD_REF" =~ ^karsift/roster-[a-z0-9-]+$ ]]; then
+            echo "Reused merged roster branch identity is malformed; refusing cleanup." >&2
+            exit 1
+          fi
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "No roster branch cleanup token is available; refusing cleanup." >&2
+            exit 1
+          fi
+          git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git"
+          remote_sha=$(git rev-parse HEAD)
+          if ! [[ "$remote_sha" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Reused merged roster branch lacks an exact head SHA; refusing cleanup." >&2
+            exit 1
+          fi
+          repository_owner="${{ github.repository_owner }}"
+          gh api --paginate --slurp -X GET "repos/${{ github.repository }}/pulls" \
+            -f state=closed \
+            -f head="$repository_owner:$CHECKED_HEAD_REF" \
+            -f base="${{ steps.target.outputs.branch }}" \
+            -f per_page=100 > /tmp/merged-roster-prs.json
+          matching_merges=$(jq --arg repository "${{ github.repository }}" \
+            --arg ref "$CHECKED_HEAD_REF" --arg sha "$remote_sha" --arg base "${{ steps.target.outputs.branch }}" \
+            '[.[][] | select(
+              .merged_at != null and
+              .head.repo.full_name == $repository and
+              .head.ref == $ref and .head.sha == $sha and
+              .base.ref == $base
+            )] | length' /tmp/merged-roster-prs.json)
+          if [ "$matching_merges" != "1" ]; then
+            echo "Reused roster ref is not uniquely proven as an already-merged exact head; refusing cleanup." >&2
+            exit 1
+          fi
+          if ! git push \
+            --force-with-lease="refs/heads/$CHECKED_HEAD_REF:$remote_sha" \
+            origin --delete "refs/heads/$CHECKED_HEAD_REF"; then
+            remaining_sha=$(git ls-remote --heads origin "refs/heads/$CHECKED_HEAD_REF" | awk '{print $1}')
+            if [ -z "$remaining_sha" ]; then
+              echo "Reused merged roster branch was deleted concurrently."
+            else
+              echo "Leased reused merged roster cleanup failed and the ref still exists; refusing to continue." >&2
+              exit 1
             fi
           fi
 
