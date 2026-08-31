@@ -10,8 +10,10 @@ name: adopt (reusable)
 # Re-running this workflow with the same merged PR safely reconciles it:
 # existing task issues are reused, a matching open or already-merged roster PR
 # for the deterministic branch/base/exact head is reused instead of creating a
-# second carrier, and an unchanged roster is a no-op. Callers expose that
-# recovery as workflow_dispatch action=reconcile with plan_pr_number=<merged plan PR>.
+# second carrier, and an unchanged roster is a no-op. After a roster push,
+# roster-carrier-runner.py waits for GitHub open-PR metadata to converge to the
+# exact pushed head.sha before failing closed on a mismatched carrier. Callers
+# expose that recovery as workflow_dispatch action=reconcile with plan_pr_number=<merged plan PR>.
 #
 # If the package's requirement_source records an originating issue (the one
 # that kicked off planning, if any - see plan.yml's source_issue_number),
@@ -565,6 +567,8 @@ jobs:
       # documents - harmless here too (nothing left to record if a
       # concurrent roster-commit already covered this exact content), just
       # not expected in practice since each package's branch name is unique.
+      # roster-carrier-runner.py polls for post-push open-PR head.sha
+      # convergence before failing closed on MISMATCHED_OPEN_CARRIER.
       - name: Open roster PR
         id: roster-pr
         if: steps.commit.outputs.changed == 'true'
