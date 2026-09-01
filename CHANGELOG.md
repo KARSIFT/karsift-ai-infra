@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-01 — Governed reconciliation of unauthorized role-binding drift (VOC-145)
+
+- Restored `config/roles.yml` to the last adopted VOC-142 / `8993e867…` bindings:
+  `implementer` and `implementer_escalation` remain `cursor/composer-2.5`; planner,
+  `reviewer`, `reviewer_fast_retry`, and `plan_reviewer` use
+  `cursor/grok-4.6[effort=high,fast=false]`. Header comments again describe explicit
+  high effort on the Standard tier (`fast=false`) for planner and review roles.
+- Restored `tests/test_voc117_role_bindings.py` current-state expectations that were
+  rewritten on ungoverned `main` to bless `effort=xhigh` and `fast=true` retry. The
+  unauthorized head `d8720829…` and self-CI run `33443684483` remain audit evidence
+  only; a green test changed in the same direct sequence does not establish governed
+  authority.
+- Exact-SHA independent review, bounded implementer retry, fail-closed
+  `prepare_cursor_model` resolution, and provider isolation are unchanged.
+
 ## 2026-08-27 — Recover an absent integration ref after promotion
 
 - `reconcile-release` now distinguishes an absent integration ref from an unreadable ref lookup,

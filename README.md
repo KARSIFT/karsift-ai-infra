@@ -28,6 +28,15 @@ reasons by themselves.
 the current invocation contract, but they do not override that file. `CHANGELOG.md` and Git history
 preserve earlier provider and CLI transitions as history rather than active fallback behavior.
 
+The current governed lineup (VOC-145 Path A restore, 2026-09-01) binds every active role through
+Cursor: `implementer` and `implementer_escalation` use `cursor/composer-2.5`; `planner`,
+`reviewer`, `reviewer_fast_retry`, and `plan_reviewer` use
+`cursor/grok-4.6[effort=high,fast=false]`. `reviewer_fast_retry` is intentionally flattened to the
+same high-effort Standard identifier as `reviewer` under VOC-117; it does not expand retry count.
+An ungoverned `main` interval at `d8720829…` that raised review roles to `effort=xhigh` and made
+`reviewer_fast_retry` `fast=true` is not current routing — see `CHANGELOG.md` and issue #1124 audit
+evidence.
+
 Independent verification requires a distinct reviewer role and exact-revision, read-only controls;
 it is not defined solely by whether role occupants use different API vendors. The current governed
 lineup deliberately uses separate model families for implementation and verification through Cursor.
