@@ -25,9 +25,9 @@ VOC117_BINDINGS = {
     "implementer": "cursor/composer-2.5",
     "implementer_escalation": "cursor/composer-2.5",
     "planner": "cursor/grok-4.6[effort=high,fast=false]",
-    "reviewer": "cursor/grok-4.6[effort=xhigh,fast=false]",
-    "reviewer_fast_retry": "cursor/grok-4.6[effort=xhigh,fast=true]",
-    "plan_reviewer": "cursor/grok-4.6[effort=xhigh,fast=false]",
+    "reviewer": "cursor/grok-4.6[effort=high,fast=false]",
+    "reviewer_fast_retry": "cursor/grok-4.6[effort=high,fast=false]",
+    "plan_reviewer": "cursor/grok-4.6[effort=high,fast=false]",
 }
 
 
@@ -76,12 +76,24 @@ class Voc117RoleBindingsTests(unittest.TestCase):
         self.assertTrue(all(value.startswith("cursor/") for value in active_values))
 
     def test_voc117_tests_01_and_02_preserve_parameterized_models(self):
-        for role, binding in VOC117_BINDINGS.items():
-            with self.subTest(role=role):
-                self.assertEqual(
-                    prepare_cursor_model(binding),
-                    binding.removeprefix("cursor/"),
-                )
+        self.assertEqual(
+            prepare_cursor_model(VOC117_BINDINGS["planner"]),
+            "grok-4.6[effort=high,fast=false]",
+        )
+        self.assertEqual(
+            prepare_cursor_model(VOC117_BINDINGS["plan_reviewer"]),
+            "grok-4.6[effort=high,fast=false]",
+        )
+        for role in ("reviewer", "reviewer_fast_retry"):
+            self.assertEqual(
+                prepare_cursor_model(VOC117_BINDINGS[role]),
+                "grok-4.6[effort=high,fast=false]",
+            )
+        for role in ("implementer", "implementer_escalation"):
+            self.assertEqual(
+                prepare_cursor_model(VOC117_BINDINGS[role]),
+                "composer-2.5",
+            )
 
     def test_voc117_tests_01_and_02_wire_every_cursor_workflow(self):
         for workflow in (self.implement, self.plan, self.review, self.plan_review):
